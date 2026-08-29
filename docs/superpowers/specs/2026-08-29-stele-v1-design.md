@@ -353,8 +353,27 @@ change a default.
 | No rules file yet | allow | allow |
 | Rules file empty | allow | allow |
 | Index stale | allow, recompile | allow, recompile |
-| Matcher failed or timed out | allow, warn | **block** |
+| A call returned an error | allow, warn | **block** |
+| Exchange did not complete after 3 blocks | allow, warn | **block** |
 | stele binary missing | allow | allow |
+
+**The last two rows are the same problem seen from two sides, and an earlier draft
+had only the first.** The hook is a fresh process on every write and can see
+nothing but the state file. So a failure it is meant to act on has to be written
+down, and `stele mcp` records every error it produces.
+
+But some failures produce no error at all. The agent reads the instruction and
+never dispatches the subagent. The subagent returns nonsense and the agent never
+calls `fetch`. Nothing failed, so nothing can be recorded — and all the hook sees
+is an exchange that stopped partway, which is exactly what an agent ignoring the
+redirect looks like. One of those must be let through and the other must be
+blocked.
+
+Hence the counter. After three blocks in a turn with no `fetch`, the failure
+policy applies regardless of cause. It does not need to know *why* the exchange is
+not completing, only that it is not. Without it, `block_on_error = false` is
+unreachable in its most common failure mode: a broken matcher would block every
+write forever, which is the exact outcome the default exists to prevent.
 
 `backstop` defaults on because it is the point of the tool. `block_on_error`
 defaults off because a governance tool that bricks an agent on a bad install is
@@ -468,6 +487,7 @@ New decisions, continuing the design doc's D-series.
 | D31 | Index is a single JSON file, regenerated freely. | M5 |
 | D32 | `init` stamps a version; the hook warns on mismatch. | M6 |
 | D37 | Hook and MCP mode are separate processes sharing state on disk, keyed per session. | M8 |
+| D39 | Failures are recorded in session state so the hook can see them, and a counter applies the failure policy after 3 blocks with no `fetch`. | G1, G2 |
 
 Already argued in the design doc's prose but never recorded in §9.1. Recorded here:
 
@@ -589,6 +609,7 @@ is the point.
 | `O-BUDGET` | Cap of 10 rules | Selection sizes in the logs |
 | `O-COST` | Assumed negligible | Measured turn latency |
 | `O-REARM` | New-directory signal | Re-arm frequency vs. whether the second selection differed |
+| D39 | Circuit breaker at 3 blocks | How often it trips, and whether real failures are caught sooner |
 | `O-CORPUS` | Full corpus | The corpus size where match quality falls off |
 | `O-LOG-VOLUME` | Nothing acts on the logs | Enough turns for the counts to mean something |
 

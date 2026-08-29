@@ -196,15 +196,40 @@ error.
 ```go
 type State struct {
     SessionID string
-    PromptID  string   // the current turn
+    PromptID  string    // the current turn
     Armed     bool
-    Touched   []string // directories written to this turn
+    Touched   []string  // directories written to this turn
+    Blocks    int       // consecutive blocks with no fetch — the circuit breaker
+    LastError string    // written by stele mcp when an exchange step fails
     UpdatedAt time.Time
 }
 ```
 
-One file per session, `state/<session-id>.json`, per D37. Written by both the hook
-process and the MCP process, so every write uses the crash-safe replace of §7.
+One file per session, `state/<session-id>.json`, per D37.
+
+**`LastError` and `Blocks` exist because the hook is a new process every time.**
+When `request` fails, `stele mcp` knows — but the hook that runs two seconds later
+started from nothing and can see only this file. With nowhere to write the failure
+down, the hook cannot tell a broken matcher from an agent ignoring the redirect,
+and `block_on_error = false` becomes unreachable.
+
+`LastError` covers failures that produce an error. `Blocks` covers the ones that do
+not — the agent that never dispatches the subagent, the subagent that returns
+nonsense. Nothing fails in those, so nothing can be recorded; all the hook ever
+sees is an exchange that did not complete.
+
+Both reset on a successful `fetch` and at the start of a new turn.
+
+| Field | Written by |
+| :-- | :-- |
+| `PromptID`, `Touched`, `Blocks` | `stele hook` |
+| `Armed` | both — the hook arms, `fetch` disarms |
+| `LastError` | `stele mcp` |
+
+Two processes updating different fields of one record makes every update
+read-modify-write, so state writes take a lock file for the duration — the same
+treatment as `journal.Append` in §7. In practice they rarely overlap, since the
+agent does one thing at a time. "Rarely" is not a concurrency design.
 
 ### `internal/enforce` — policy
 
@@ -262,12 +287,44 @@ No `offered` field — D34 makes it the whole index every time, so `IndexHash` p
 it and *offered but never selected* is derived. Excerpts are carried because a
 UUID alone is unreadable later and a deleted rule resolves to nothing (spec §7).
 
-### `internal/matcher` and `internal/backstop` — the logic
+### `internal/backstop` — the hook decision
 
-Pure, as in §2. `matcher` holds the three tool handlers' behaviour; `serve` holds
-the MCP plumbing that calls them. Splitting them is the style guide's
-"separate CLI code from library code" applied to a transport: the protocol is
-another client of the logic, not the home of it.
+Pure, as in §2. One function, and its order is the whole behaviour:
+
+```
+1. agent_type is "stele-matcher"     → allow      never block our own subagent
+2. !policy.Backstop                  → allow      the backstop is off
+3. prompt_id differs from state      → ARM, reset Touched, Blocks, LastError
+4. disarmed, dir not in Touched      → RE-ARM
+5. disarmed                          → allow, record the directory
+   ── armed from here ──
+6. LastError is set                  → failure path
+7. Blocks >= 3                       → failure path
+8. otherwise                         → BLOCK, Blocks++
+
+failure path:  policy.BlockOnError ? block, naming the error : allow, warn
+```
+
+Steps 6 and 7 are the two halves of the same problem. **6 handles failures that
+produced an error** — `stele mcp` recorded it, so the hook can act on it.
+**7 handles failures that produced nothing** — the exchange simply stopped, which
+is indistinguishable from an agent ignoring the redirect. The counter does not
+need to know which; it only needs to know the exchange is not completing.
+
+Three is a placeholder. One would fire on the normal path, where the agent is
+blocked once and complies. Two would fire on a legitimate retry. Three gives two
+real attempts, and §12 of the spec lists it as a number the logs should settle.
+
+### `internal/matcher` and `internal/serve`
+
+`matcher` holds the three tool handlers' behaviour; `serve` holds the MCP plumbing
+that calls them. Splitting them is the style guide's "separate CLI code from
+library code" applied to a transport: the protocol is another client of the logic,
+not the home of it.
+
+`matcher` is also what writes `LastError` — every failure path in `request` or
+`corpus` records itself before returning, because a failure the hook cannot see is
+a failure the policy cannot act on.
 
 ### `internal/install`
 
