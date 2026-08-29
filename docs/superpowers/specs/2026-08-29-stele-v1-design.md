@@ -316,29 +316,38 @@ Already argued in the design doc's prose but never recorded in §9.1. Recorded h
 
 ---
 
-## 9. Corrections owed to `stele-design-doc.md`
+## 9. Corrections applied to `stele-design-doc.md`
 
-The audit that produced this spec found three problems in the source document.
-They are recorded here so the fix is not lost; the document itself still needs
-editing.
+The audit that produced this spec found three contradictions in the source
+document. All three are now fixed there. Recorded here so the reasoning survives.
 
-**§9.2 lists `O-ENTRY` as gating the architecture, but §6 already resolves it.**
-`O-METADATA` states outright that "the question is no longer whether to allow
-authoring." The table contradicts the body, and it is the most misleading thing in
-§9.
+**`O-ENTRY` was listed as gating the architecture, but §6 had already resolved
+half of it.** `O-METADATA` states outright that "the question is no longer whether
+to allow authoring." The fix separates the halves: *both authored and derived
+metadata can be present* is now D36, and what remains open — whether the derived
+floor is good enough to be the default — is empirical, so it moved to §9.2's
+settle-with-data tier. It was never a gate, because the architecture carries both
+regardless of the answer.
 
-**D7 as written forbids an option the document itself lists.** "stele never calls
-a model" is recorded as a global decision but argued only for compile. The
-`O-SPAWN` shell-out candidate would violate it as stated. The principle that
-actually holds is *stele never holds model credentials and never selects a
-provider; it borrows the user's agent.* v1 does not exercise this, since D12 makes
-the parent do the dispatching — but the wording should be fixed before someone
-reopens `O-SPAWN`.
+**D7 as written forbade an option the document itself listed.** "stele never calls
+a model" was recorded as a global decision but argued only for compile, which made
+the `O-SPAWN` shell-out candidate a violation on paper. D7 now reads *stele never
+holds model credentials and never picks a provider; it borrows the agent the user
+is already running* — which covers compile on the cold path and the matcher on the
+hot path, and forbids neither candidate.
 
-**§2 and `O-CTX-RES` disagree.** "The hot path only ever selects — it never
-processes, derives, or reorganizes" is contradicted by computing extracts at call
-time, which §4.3 favours. Not v1-blocking, since situated context is deferred, but
-the principle as stated is already broken by a proposal the document likes.
+**§2 and `O-CTX-RES` disagreed.** "The hot path only ever selects — it never
+processes, derives, or reorganizes" was contradicted by computing extracts at call
+time, which §4.3 favours. §2 now states the invariant that was actually meant:
+the hot path never touches the *corpus* except to select from it, small
+deterministic work on the current task's own files is allowed, and model-assisted
+or persistent work is not.
+
+Two consequential passages were stale as a result and were also updated: §1's
+claim that the entry question is unsettled, and `O-ENTRY`'s prediction that
+"because we cannot require [a format], all six stay open" — v1 took exactly that
+route, and the six duly collapsed. They are deferred behind an authoring
+requirement, not answered in general.
 
 ---
 
