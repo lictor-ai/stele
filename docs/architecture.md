@@ -28,7 +28,8 @@ Two of these changed decisions. See §12.
 github.com/lictor-ai/stele
 
 cmd/stele/            main, subcommand dispatch, exit codes
-internal/corpus/      stele.md: parse, stamp, hash, validate
+internal/corpus/      stele.md: parse and hash. read-only.
+internal/lock/        stele.lock: identity, reconciliation
 internal/index/       index.json: load, save
 internal/session/     state/<session>.json: arm state, touched dirs
 internal/enforce/     the enforcement policy
@@ -37,7 +38,7 @@ internal/matcher/     request / corpus / fetch — pure logic
 internal/backstop/    the hook decision — pure logic
 internal/serve/       MCP wiring over the SDK
 internal/install/     init, uninstall, markers, version stamp
-assets/               embedded files init writes
+  assets/             embedded templates — must live here, see §9
 ```
 
 `internal/` throughout. stele exports no library, so nothing lives at the module
@@ -69,9 +70,14 @@ hook payload, the session state, and the policy, it returns allow or deny and wh
 That makes the most behaviour-dense part of the system a table-driven test with no
 fixtures, no temp directories, and no host agent.
 
-The same shape applies to the parser: `corpus.Parse([]byte) ([]Rule, error)` is a
-pure transformation, and stamping is `corpus.Stamp([]Rule) ([]Rule, []byte)` —
-returning the new file bytes rather than writing them.
+The same shape applies to `corpus.Parse([]byte) ([]Rule, error)` and to
+`lock.Reconcile`, which is the identity core.
+
+**Two things have to be injected for this to hold.** A `call_id` needs randomness
+and a journal entry needs a timestamp, so "pure" here means *pure given a clock
+and an id source passed in*, not *free of them*. `Reconcile` takes `newID func()
+string`; anything needing the time takes a `func() time.Time`. Real implementations
+in `cmd/`, fixed stubs in tests.
 
 This is the single most important structural choice in the document. Everything
 below is consistent with it.
@@ -80,47 +86,81 @@ below is consistent with it.
 
 ## 3. Packages
 
-### `internal/corpus` — the source of truth
+### `internal/corpus` — reading the user's file
 
-Owns `stele.md` and nothing else.
+**Read-only. This package has no write path at all** (D38). `stele.md` belongs to
+the user; stele parses it and never touches it. There is deliberately no function
+here that produces bytes.
 
 ```go
 type Rule struct {
-    ID          string   // UUID, stamped. empty before first compile
     Description string   // optional
     Tags        []string
     Scope       []string // path globs
     Body        string
+    Position    int      // ordinal in the file, for reconciliation
     Line        int      // for error messages
 }
 
 func Parse(src []byte) ([]Rule, error)
-func Stamp(rules []Rule, src []byte) (stamped []byte, added int, err error)
 func Hash(body string) string
-func Validate(rules []Rule) error
 ```
+
+`Rule` carries no `ID`. Identity is not a property of the source file — it is
+assigned by `internal/lock`.
 
 **`Parse`** splits on `---` at the start of a line, reads leading `key: value`
 lines as metadata, and takes everything after the first blank line as the body.
 
-**`Stamp`** is the delicate one, because it writes back into a file the user owns
-(D8, as narrowed). Requirements:
-
-- Idempotent. Stamping twice changes nothing.
-- Byte-preserving. Only the inserted `id:` lines differ; every other byte,
-  including whitespace and line endings, survives.
-- Never reorders, never reformats, never touches a body.
-
-It works on the original bytes with recorded offsets rather than re-rendering
-parsed rules, because a re-render cannot preserve what it did not capture.
-
 **`Hash`** normalises before hashing: lowercase, runs of whitespace collapsed,
 leading and trailing whitespace and punctuation stripped per line, lines joined
-with a single space. It is never identity — only staleness, incremental compile,
-and drift (D20).
+with a single space. It is used for reconciliation, staleness and drift — never
+as identity itself (D20).
 
-**`Validate`** returns `ErrDuplicateID` when two rules share an id, which happens
-when someone copy-pastes a rule block.
+Because nothing here writes, the byte-preservation problem disappears entirely,
+and with it the CRLF concern that was open in §13.
+
+### `internal/lock` — identity
+
+Owns `stele.lock`: committed, stele-written, never hand-edited.
+
+```go
+type Entry struct {
+    ID       string `json:"id"`
+    Hash     string `json:"hash"`
+    Position int    `json:"position"`
+}
+
+type File struct {
+    Version int     `json:"version"`
+    Rules   []Entry `json:"rules"`
+}
+
+type Report struct {
+    ByHash, ByPosition, Minted, Dropped int
+    Guessed []string // ids matched by position — reported, because they are inferences
+}
+
+func Load(root string) (File, error)
+func Save(root string, f File) error
+
+// Reconcile is pure. newID is injected so it stays testable.
+func Reconcile(rules []corpus.Rule, prev File, newID func() string) (ids []string, next File, rep Report)
+```
+
+`Reconcile` is the identity core, and it runs in three passes:
+
+1. **Exact hash match** → same rule. Survives reordering.
+2. **Remaining rules, matched by position** → same rule. Survives rewording, which
+   is the case that matters, since §7 exists to prompt rewording.
+3. **Still unmatched** → new rule, mint an id.
+
+Pass 2 is an inference, so every id it assigns lands in `Report.Guessed` and gets
+printed. A wrong guess moves a rule's log history to the wrong rule, and that must
+be visible in a diff rather than silent.
+
+`newID` is a parameter rather than a call to `uuid.NewString` so `Reconcile` stays
+a pure function — see §2's note on injected sources.
 
 ### `internal/index` — the build artifact
 
@@ -167,11 +207,28 @@ type Policy struct {
     Backstop     bool // default true
     BlockOnError bool // default false
 }
+
+func Load(root string) (Policy, error) // defaults when the file is absent
 ```
 
-An option struct rather than functional options: both fields are always present,
-both are read from a config file, and neither can fail. The Google style guide's
-test for choosing between them points here.
+**The file is `stele.json`, at the repository root, and it is optional.**
+
+```json
+{"backstop": true, "block_on_error": false}
+```
+
+Absent means defaults, which is the normal case — `init` does not write one. A
+user creates it only to change a default. That is what lets it be JSON: a file
+nobody has to read does not need explanatory comments, so it costs no TOML
+dependency.
+
+It sits beside `stele.md` rather than inside `.stele/` for the same reason
+`stele.md` does. The enforcement policy is a team decision, so it is committed and
+reviewed. `.stele/` holds only generated files.
+
+`Policy` is an option struct rather than functional options: both fields are
+always present, both come from the same file, and neither can fail. The Google
+style guide's test for choosing between them points here.
 
 ### `internal/journal` — the log
 
@@ -339,8 +396,19 @@ target.
 POSIX and on Windows via `MoveFileEx`, and the temp file is created in the same
 directory so the rename never crosses a filesystem.
 
-This matters most for `stele.md`. A crash mid-stamp must never leave a user's rule
-file truncated.
+stele never writes `stele.md`, so the user's rules cannot be damaged by a crash at
+all. What this protects is `stele.lock` — which is committed, and losing it costs
+the whole corpus its identity.
+
+**On Windows the rename is not atomic**, which the Go documentation states
+directly: *"Even within the same directory, on non-Unix platforms Rename is not an
+atomic operation."* The property that still holds everywhere is the one that
+matters — the target is never truncated, because the temp file holds the complete
+new content until the swap. What Windows adds is a failure mode: the rename can be
+refused outright when another process holds the target open, which an editor,
+antivirus, or the search indexer will do. So the rename retries a few times with a
+short backoff, and on final failure reports the likely cause rather than an
+opaque `*LinkError`.
 
 **`journal.Append` opens with `O_APPEND`** and writes one line per call. Short
 appends are atomic on POSIX. Windows offers no equivalent guarantee, so the writer
@@ -395,11 +463,17 @@ tool that crashes must not take the user's editor with it.
 Embedded with `go:embed`:
 
 ```
-assets/matcher-agent.md    → .claude/agents/stele-matcher.md
-assets/block-message.txt   → the permissionDecisionReason text
-assets/stele-header.md     → the header comment in a new stele.md
-assets/gitignore           → .stele/.gitignore, containing "*"
+internal/install/assets/
+  matcher-agent.md   → .claude/agents/stele-matcher.md
+  block-message.txt  → the permissionDecisionReason text
+  stele-header.md    → the header comment in a new stele.md
+  gitignore          → .stele/.gitignore, containing "*"
 ```
+
+**They live under `internal/install/`, not at the module root.** `go:embed`
+patterns resolve relative to the package directory and may not contain `..`, so a
+top-level `assets/` is unreachable from the package that needs it. This is a
+compiler constraint, not a preference.
 
 Embedding rather than shipping files means `stele init` works from a single
 binary. `matcher-agent.md` is written to disk by design — spec §11 records that as
@@ -417,7 +491,7 @@ string literals scattered through the code, so they can be revised and diffed.
 | Layer | Approach |
 | :-- | :-- |
 | `corpus.Parse` | Table-driven. Malformed input, no metadata, empty bodies, CRLF, unicode. |
-| `corpus.Stamp` | Golden files. Round-trip byte equality. Idempotence asserted explicitly. |
+| `lock.Reconcile` | Table-driven with a stub `newID`. Reorder, reword, insert, delete, and reword-plus-reorder — the case that mismatches. |
 | `backstop.Decide` | Table-driven over the full cross-product of state, policy and error. Pure, so no fixtures. |
 | `matcher` | Table-driven. Cap, truncation, empty selection. |
 | `index`, `session`, `journal` | Temp directories. Concurrent-write tests for the atomic replace. |
@@ -436,15 +510,18 @@ or errors and call `t.Helper()`; they do not fail tests themselves. Comparisons 
 ```
 stele init         install the five artifacts
 stele uninstall    remove exactly what init wrote
-stele compile      parse, stamp, index; prints the drift report
-stele check        parse and validate without writing (for CI)
+stele compile      parse, reconcile ids, write stele.lock and the index
+stele check        parse and reconcile in memory, write nothing (for CI)
 stele mcp          run the MCP server on stdio
 stele hook         read a PreToolUse payload on stdin, decide
 ```
 
 Standard-library `flag` and a switch on `os.Args[1]`. Six subcommands with almost
-no flags does not justify a CLI framework, and the dependency list stays at the
-MCP SDK plus `go-cmp` for tests.
+no flags does not justify a CLI framework.
+
+**Dependencies: two.** `github.com/modelcontextprotocol/go-sdk` and
+`github.com/google/uuid`, plus `go-cmp` in tests. Config is JSON rather than TOML
+specifically to avoid a third.
 
 `mcp` and `hook` are machine-facing and never print anything friendly to stdout —
 stdout is the protocol on one and the decision on the other.
@@ -480,10 +557,11 @@ block stele's own matcher subagent.
 
 ## 13. Open
 
-- **`stele check` in CI** — worth having, not yet specified. What does it exit
-  non-zero on? Duplicate ids certainly. Unstamped rules, arguably.
-- **Windows line endings in `stele.md`** — `Stamp` must preserve CRLF exactly.
-  Covered by a golden test, but worth naming as a first-class requirement given
-  the development environment.
+- **`stele check` in CI** — worth having, not yet specified. Duplicate ids should
+  certainly fail. A `stele.lock` that is out of date with `stele.md`, arguably —
+  that is the check that catches someone editing rules without recompiling.
 - **`journal` rotation** — the log grows without bound. Not a v1 problem at one
   entry per turn, but it has no answer.
+
+*Windows line endings were open here while compile wrote back to `stele.md`. D38
+removed the write path, so nothing has to preserve them.*

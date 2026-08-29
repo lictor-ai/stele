@@ -219,11 +219,11 @@ The user edits the left side. stele owns the right side. The index is a build ar
 
 ### The line we should not cross
 
-Derived artifacts regenerate freely. **The substance of a rule is never auto-edited.**
+Derived artifacts regenerate freely. **Source rules are never auto-edited.**
 
-Rules are governance artifacts. The moment an agent can rewrite its own constraints as a side effect of being constrained by them, the tool stops being worth installing. A change to what a rule *says* must be an explicit, reviewable, committed act by a human.
+Rules are governance artifacts. The moment an agent can rewrite its own constraints as a side effect of being constrained by them, the tool stops being worth installing. A change to a rule must be an explicit, reviewable, committed act by a human.
 
-**The narrow exception is bookkeeping.** stele stamps an `id:` onto a rule that has none — from the binary rather than from a model, deterministically, never touching the rule text, and always as a diff the user reviews and commits. This is not the hazard above: it is not a model, and it does not change what any rule requires. It is necessary because identity has to live in the file the user owns. Held anywhere else it dies on a fresh clone or diverges between developers, and derived from the rule's own text it resets on exactly the edit §7 exists to prompt. Argued in the v1 spec under D20.
+**stele never writes to the user's rule file at all.** It reads it. Everything stele produces goes in stele's own files. An earlier draft of the v1 spec had compile stamp rule identifiers back into the source; that is withdrawn. Identity lives in a lockfile stele owns, and how a rule is matched to its identifier across edits is argued there under D20.
 
 This also rules out **reorganizing rules mid-turn**: unreviewable, nondeterministic, and it races across concurrent sessions.
 
@@ -343,7 +343,7 @@ Known weaknesses to take up when we return:
 | D5 | The agent never pastes code into the tool call. We pass references and resolve them ourselves. | §4.3 |
 | D6 | A subagent does the matching. The parent's context only ever holds the selection. | §5 |
 | D7 | stele never holds model credentials and never picks a provider. It borrows the agent the user is already running — compile on the cold path, the matcher on the hot path. | §6, §5 |
-| D8 | stele never edits the substance of a rule. It may stamp bookkeeping metadata onto a rule that has none — deterministically, from the binary, as a reviewable diff. Derived artifacts regenerate freely. | §6 |
+| D8 | Source rules are never auto-edited. stele reads the user's rule file and never writes to it. Derived artifacts regenerate freely. | §6 |
 | D9 | No reorganizing rules mid-turn. | §6 |
 | D10 | Per-call logs are recorded: local, append-only, identifiers and short text only. | §7 |
 | D11 | The tool may be called more than once in a turn. A call is a correction point, not a one-shot. | §4.1 |

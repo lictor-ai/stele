@@ -71,7 +71,8 @@ is how a stateless binary knows three invocations are one exchange.
 
 ```
 stele.md  ──  stele compile  ──►  .stele/index.json
- user owns                          stele owns
+ read only        │                stele.lock
+                  └── never writes back to stele.md
 ```
 
 A parse and a validate. Plain Go. No model, no splitting, no derivation.
@@ -92,9 +93,11 @@ They are separate OS processes, so they share no memory. **All state is on disk*
 which also means `stele mcp` holds nothing between calls and is a thin dispatcher.
 
 ```
-stele.md                  the rules. hand-written, committed.   USER OWNS
+stele.md                  the rules. hand-written.        USER WRITES, stele reads
+stele.json                enforcement policy, optional.   USER WRITES, stele reads
+stele.lock                id ↔ rule. committed.           STELE WRITES, user reads
 
-.stele/                   everything generated. fully gitignored.   STELE OWNS
+.stele/                   everything else generated. fully gitignored.
   index.json              compiled corpus
   log.jsonl               append-only
   state/<session>.json    current prompt_id, arm state, touched dirs
@@ -102,16 +105,19 @@ stele.md                  the rules. hand-written, committed.   USER OWNS
   .gitignore              contains "*"
 ```
 
-**Ownership is the reason for the split.** The rules are a governance artifact the
-team writes, reviews and commits, so they live at the repository root where the
-team's other files live — beside `CLAUDE.md` and `AGENTS.md`, which is the company
-they keep. `.stele/` holds only what the binary generates.
+**Three tiers, and the boundary between the first two is absolute.** stele reads
+`stele.md` and `stele.json` and never writes to either. `stele.lock` is stele's,
+committed because an identity that dies on a fresh clone is not an identity.
+Everything under `.stele/` is regenerable and ignored.
 
-That makes the boundary clean in three ways. Nothing in `.stele/` is ever
-committed, so a single `.gitignore` containing `*` covers the whole directory and
-the root `.gitignore` is never touched. `uninstall` removes one directory and two
-registrations, and can never delete something a human wrote. And a user looking at
-their repository sees their rules, not a tool's working directory.
+The root files are at the root because that is where the team's files live —
+beside `CLAUDE.md` and `AGENTS.md`, which is the company they keep. A user looking
+at their repository sees their rules, not a tool's working directory.
+
+Two things follow. Nothing in `.stele/` is ever committed, so a single
+`.gitignore` containing `*` covers the whole directory and the repository's root
+`.gitignore` is never touched. And `uninstall` can never delete something a human
+wrote, because it only removes files stele created.
 
 State is keyed per session (D37), so two Claude Code sessions open on the same
 repository never disarm each other's hook.
@@ -177,32 +183,47 @@ rules. Consequence: a rule body cannot begin with a line that looks like
 | `tags` | Free vocabulary. stele ships none and imposes none. |
 | `scope` | Path globs. A hint to the matcher, not a hard filter — see `O-CORPUS`. |
 
-**Identity.** Every rule carries a UUID in an `id:` field. The user does not write
-it. Compile stamps one onto any rule that lacks one, writes it back into
-`stele.md`, and never recomputes it afterwards.
+**Identity lives in a lockfile, `stele.lock`.** Every rule gets a UUID. The user
+never writes one and never sees one in `stele.md`.
 
-The block above is what a user writes. After the first compile it is:
+> **stele never writes to `stele.md`. It reads it. Everything stele produces goes
+> in stele's own files.**
 
-```markdown
-id: 7f3a2b1c-9d44-4e21-b8a0-3c91f4e77d10
-tags: [db, security]
-scope: ["**/*.go"]
+That is the governing rule, and it is D8 in its original strict form. An earlier
+draft had compile stamp `id:` lines back into the source. Withdrawn: a governance
+tool that edits the governance artifact is exactly the shape §6 of the design doc
+warns about, even when the edit is deterministic and cosmetic.
 
-Never build SQL by string concatenation. Use parameterised queries.
+```
+stele.md      the rules. user writes, stele only reads.
+stele.lock    id ↔ rule. stele writes, user never edits. committed.
+.stele/       generated. gitignored.
 ```
 
-Once stamped, the id survives rewording, reordering, a fresh clone, a stele
-upgrade, and any change to how compile works. The only ways to lose it are
-deleting the rule or renaming the id by hand, both of which mean what they say.
+`stele.lock` is the same idea as `go.sum` or `package-lock.json`: produced by the
+tool, committed so the whole team and every fresh clone share it, never
+hand-edited. It holds one entry per rule — id, body hash, position.
 
-**Identity has to live in the file the user owns.** Anywhere else it either dies
-on a fresh clone or diverges between developers. Deriving it from the rule's text
-— a content hash — resets it on precisely the edit §7 exists to prompt, which
-makes the log's main feedback loop erase itself on use. See §11.
+It must be committed. In `.stele/` it would be gitignored, and an id that dies on
+a fresh clone or differs between developers is not an identity.
+
+### Matching rules to ids across an edit
+
+Compile reconciles `stele.md` against `stele.lock` in three passes:
+
+1. **Same hash** → same rule. Handles reordering.
+2. **Leftovers, same position** → same rule. Handles rewording, which is the case
+   that matters: §7 tells you a rule's wording is bad, you fix it, and the id has
+   to survive or the observations that prompted the fix are orphaned.
+3. **Still unmatched** → a new rule. Mint an id.
+
+Rewording *and* reordering the same rule in one edit can mismatch. It is rare, and
+compile reports every id it assigned by position rather than hash, so a wrong
+guess is visible in the diff rather than silent.
 
 **Compile validates that ids are unique on every run.** UUIDs do not collide, but
-copy-pasting a rule block duplicates its id. That must be a loud error, not two
-rules quietly sharing a history.
+a merge can duplicate an entry. That must be a loud error, not two rules quietly
+sharing a history.
 
 ### The hash, doing what a content hash is actually good at
 
@@ -314,11 +335,18 @@ should explore further and call then. See §4.2 of the design doc.
 
 ### Failure behaviour
 
-```toml
-[enforcement]
-backstop       = true    # block the first write until rules are delivered
-block_on_error = false   # block when the matcher itself fails
+`stele.json`, at the repository root, optional. Absent means defaults.
+
+```json
+{"backstop": true, "block_on_error": false}
 ```
+
+`backstop` — block the first write of a turn until rules are delivered.
+`block_on_error` — block when the matcher itself fails.
+
+It is committed and reviewed, like `stele.md` — the enforcement policy is a team
+decision, not a personal one. `init` does not write it; a user creates it only to
+change a default.
 
 | Situation | `block_on_error = false` | `= true` |
 | :-- | :-- | :-- |
@@ -419,11 +447,12 @@ New decisions, continuing the design doc's D-series.
 | D17 | v1: the user supplies the structure. stele infers nothing. | `O-ENTRY` |
 | D18 | One file, `stele.md`, rules separated by `---`. | `O-RULE-LOC` |
 | D19 | The delimiter defines the unit. No splitting. | `O-GRAIN` |
-| D20 | Id is a UUID, stamped into `stele.md` by compile and never recomputed. The body hash is kept for staleness, incremental compile and drift — never for identity. | `O-RULE-ID` |
+| D20 | Id is a UUID held in `stele.lock`, which stele writes and commits. Rules are matched to ids by hash, then by position. The body hash is for matching, staleness and drift — never identity itself. | `O-RULE-ID` |
+| D38 | stele never writes to `stele.md` or `stele.json`. It reads them. Everything it produces goes in its own files. | D8 |
 | D21 | All metadata is authored. Nothing is derived, so nothing is reconciled. | `O-METADATA` |
 | D22 | Compile is a Go parser. No model, no work order, no skill. | `O-COMPILE-PKG` |
 | D23 | Compile runs automatically when the source hash changes. | `O-COMPILE-WHEN` |
-| D24 | `stele.md` lives at the repository root and is committed. All of `.stele/` is generated and gitignored. | `O-INDEX-VCS` |
+| D24 | `stele.md`, `stele.json` and `stele.lock` live at the repository root and are committed. All of `.stele/` is generated and gitignored. | `O-INDEX-VCS` |
 | D25 | No starter tag vocabulary. Whatever the user writes. | `O-TAGS` |
 | D26 | An empty selection is a first-class, cheap answer. | `O-EMPTY` |
 | D27 | Claude Code first. Cursor second. | `O-AGENTS` |
@@ -442,13 +471,12 @@ Already argued in the design doc's prose but never recorded in §9.1. Recorded h
 | D34 | The matcher sees the full corpus, unfiltered. | §5, `O-CORPUS` |
 | D35 | `O-COST` is not stele's cost in v1. The subagent runs on the parent's model and auth; stele's own work is a file read and a parse. | consequence of D12 |
 
-**One decision in the design doc is amended by this spec.** D20 requires compile to
-write an `id:` into `stele.md`, which D8 as originally written forbade. D8
-is narrowed — in `stele-design-doc.md` §6 and §9.1 — to *stele never edits the
-substance of a rule; it may stamp bookkeeping metadata, deterministically, as a
-reviewable diff.* The rationale D8 gives is about a model rewriting the rules that
-constrain it. A deterministic id stamp from the binary, which never touches rule
-text, is a different act and does not engage it.
+**D8 stands unamended, and an earlier draft of this spec was wrong about it.** That
+draft had compile stamp `id:` lines into `stele.md`, and narrowed D8 to permit it
+on the grounds that a deterministic edit from the binary is not the hazard D8
+describes. The narrowing has been withdrawn from `stele-design-doc.md`. Identity
+lives in `stele.lock` instead — a file stele owns outright — which needs no
+exception to D8 and keeps the source file untouched.
 
 ---
 
@@ -518,18 +546,24 @@ tool path trustworthy, and D12 gives the agent three places to wander off instea
 of one. The hook staying armed until `fetch` is what contains this: wandering off
 means the write stays blocked, so the failure is loud rather than silent.
 
-**stele writes to the file it governs.** Stamping ids means the binary edits
-`stele.md`. D8 is narrowed to permit it — deterministically, never touching
-rule text, always as a reviewable diff. It is still a real narrowing of the
-governance boundary and belongs in the README rather than in a footnote.
+**Position matching is a guess, and it can be wrong.** Reconciliation matches by
+hash first, which is exact. The leftovers are matched by position, which is an
+inference. Reword and reorder the same rule in one edit and it can pair the wrong
+two. Compile reports every id assigned by position rather than hash, so the guess
+is visible in the diff — but it is still a guess, and a bad one silently transfers
+a rule's log history to a different rule.
 
-**The id identifies the slot, not the meaning.** A stamped id survives any edit to
-the body, including one that replaces it with something unrelated. The log history
-then attaches to a rule that no longer means what it meant. Compile's drift report
-is the mitigation, not a fix. Note this is the *opposite* failure to a content
-hash: that was over-sensitive, treating every reword as a new rule; this is
-under-sensitive, treating every rewrite as the same one. Under-sensitive is the
-better failure here, because it is visible in a report and the other is silent.
+**`stele.lock` conflicts on merge.** Two people adding rules on separate branches
+produce conflicting entries. Same as any lockfile. Resolvable by hand or by
+re-running compile, but it is friction the stamping design did not have.
+
+**The id identifies the slot, not the meaning.** An id survives any edit to the
+body, including one that replaces it with something unrelated. The log history
+then attaches to a rule that no longer means what it meant. The drift report is
+the mitigation, not a fix. This is the *opposite* failure to a content hash: that
+was over-sensitive, treating every reword as a new rule; this is under-sensitive,
+treating every rewrite as the same one. Under-sensitive is the better failure,
+because it is visible in a report and the other was silent.
 
 **Opaque ids need excerpts everywhere.** A UUID cannot be read. Every human-facing
 output — the drift report, any log summary, any future `stele doctor` — must print
