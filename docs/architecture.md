@@ -28,7 +28,7 @@ Two of these changed decisions. See §12.
 github.com/lictor-ai/stele
 
 cmd/stele/            main, subcommand dispatch, exit codes
-internal/corpus/      rules.md: parse, stamp, hash, validate
+internal/corpus/      stele.md: parse, stamp, hash, validate
 internal/index/       index.json: load, save
 internal/session/     state/<session>.json: arm state, touched dirs
 internal/enforce/     the enforcement policy
@@ -82,7 +82,7 @@ below is consistent with it.
 
 ### `internal/corpus` — the source of truth
 
-Owns `.stele/rules.md` and nothing else.
+Owns `stele.md` and nothing else.
 
 ```go
 type Rule struct {
@@ -314,11 +314,19 @@ blocking in the same millisecond can cross on (1); (2) removes even that.
 
 ---
 
-## 6. Locating `.stele/`
+## 6. Locating the project root
 
-Walk up from `cwd` for a directory containing `.stele/`. If none, walk up for one
-containing `.git/` and use that. Deterministic, and it behaves sensibly in a
-monorepo where a subproject has its own rules.
+Walk up from `cwd` for a directory containing `stele.md`. If none, walk up for one
+containing `.git/` and use that.
+
+`stele.md` comes first because it is what the user placed deliberately — in a
+monorepo, a subproject with its own rules should use them rather than the root's.
+`.git/` is the fallback for a repository that has stele installed but no rules
+written yet, which is the state right after `init`.
+
+`.stele/` is always a sibling of `stele.md` at whichever root wins. It is never
+searched for independently, because a stale `.stele/` left behind by an
+`uninstall` that was interrupted should not decide where the project root is.
 
 ---
 
@@ -331,7 +339,7 @@ target.
 POSIX and on Windows via `MoveFileEx`, and the temp file is created in the same
 directory so the rename never crosses a filesystem.
 
-This matters most for `rules.md`. A crash mid-stamp must never leave a user's rule
+This matters most for `stele.md`. A crash mid-stamp must never leave a user's rule
 file truncated.
 
 **`journal.Append` opens with `O_APPEND`** and writes one line per call. Short
@@ -389,7 +397,8 @@ Embedded with `go:embed`:
 ```
 assets/matcher-agent.md    → .claude/agents/stele-matcher.md
 assets/block-message.txt   → the permissionDecisionReason text
-assets/rules-header.md     → the header comment in a new rules.md
+assets/stele-header.md     → the header comment in a new stele.md
+assets/gitignore           → .stele/.gitignore, containing "*"
 ```
 
 Embedding rather than shipping files means `stele init` works from a single
@@ -473,7 +482,7 @@ block stele's own matcher subagent.
 
 - **`stele check` in CI** — worth having, not yet specified. What does it exit
   non-zero on? Duplicate ids certainly. Unstamped rules, arguably.
-- **Windows line endings in `rules.md`** — `Stamp` must preserve CRLF exactly.
+- **Windows line endings in `stele.md`** — `Stamp` must preserve CRLF exactly.
   Covered by a golden test, but worth naming as a first-class requirement given
   the development environment.
 - **`journal` rotation** — the log grows without bound. Not a v1 problem at one

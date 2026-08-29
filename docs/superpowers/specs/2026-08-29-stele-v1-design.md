@@ -70,8 +70,8 @@ is how a stateless binary knows three invocations are one exchange.
 ### 2.2 Cold path
 
 ```
-.stele/rules.md  ──  stele compile  ──►  .stele/index.json
-   user owns                                stele owns
+stele.md  ──  stele compile  ──►  .stele/index.json
+ user owns                          stele owns
 ```
 
 A parse and a validate. Plain Go. No model, no splitting, no derivation.
@@ -92,13 +92,26 @@ They are separate OS processes, so they share no memory. **All state is on disk*
 which also means `stele mcp` holds nothing between calls and is a thin dispatcher.
 
 ```
-.stele/
-  rules.md                source          committed
-  index.json              compiled        gitignored
-  log.jsonl               append-only     gitignored
-  state/<session>.json    current prompt_id, arm state, touched dirs   gitignored
-  state/current           pointer to the session that last blocked     gitignored
+stele.md                  the rules. hand-written, committed.   USER OWNS
+
+.stele/                   everything generated. fully gitignored.   STELE OWNS
+  index.json              compiled corpus
+  log.jsonl               append-only
+  state/<session>.json    current prompt_id, arm state, touched dirs
+  state/current           pointer to the session that last blocked
+  .gitignore              contains "*"
 ```
+
+**Ownership is the reason for the split.** The rules are a governance artifact the
+team writes, reviews and commits, so they live at the repository root where the
+team's other files live — beside `CLAUDE.md` and `AGENTS.md`, which is the company
+they keep. `.stele/` holds only what the binary generates.
+
+That makes the boundary clean in three ways. Nothing in `.stele/` is ever
+committed, so a single `.gitignore` containing `*` covers the whole directory and
+the root `.gitignore` is never touched. `uninstall` removes one directory and two
+registrations, and can never delete something a human wrote. And a user looking at
+their repository sees their rules, not a tool's working directory.
 
 State is keyed per session (D37), so two Claude Code sessions open on the same
 repository never disarm each other's hook.
@@ -124,7 +137,11 @@ outright.
 
 ## 3. The rule format
 
-One file: `.stele/rules.md`. Rules are separated by `---` on its own line.
+One file: **`stele.md`, at the repository root.** Rules are separated by `---` on
+its own line.
+
+It sits at the root, not inside `.stele/`, because the user writes it and owns it.
+`.stele/` is the tool's working directory and holds nothing a human wrote.
 
 Inside a rule block, leading `key: value` lines are metadata. Everything after the
 first blank line is the rule body.
@@ -162,7 +179,7 @@ rules. Consequence: a rule body cannot begin with a line that looks like
 
 **Identity.** Every rule carries a UUID in an `id:` field. The user does not write
 it. Compile stamps one onto any rule that lacks one, writes it back into
-`.stele/rules.md`, and never recomputes it afterwards.
+`stele.md`, and never recomputes it afterwards.
 
 The block above is what a user writes. After the first compile it is:
 
@@ -331,12 +348,14 @@ removes exactly those and nothing else.
 2. The MCP server registration
 3. `.claude/agents/stele-matcher.md` — the subagent definition, which is where the
    matcher prompt lives
-4. `.stele/rules.md`, with a header comment explaining the format
-5. `.stele/.gitignore`, ignoring `index.json` and `log.jsonl`
+4. `stele.md` at the repository root, with a header comment explaining the format
+5. `.stele/.gitignore`, containing `*`
 
-The fifth is what actually implements D24 and §7. Scoping it to `.stele/` rather
-than editing the repo's root `.gitignore` keeps everything stele writes inside one
-directory plus two registration entries, which is what makes `uninstall` clean.
+The fifth implements D24. Because nothing generated is ever committed, one
+wildcard covers the whole directory — including the `.gitignore` itself — and the
+repository's root `.gitignore` is never edited. Everything stele writes is then
+`stele.md`, one directory, and two registration entries, which is what makes
+`uninstall` provably clean.
 
 `init` stamps its own version. The hook checks it and warns on a mismatch rather
 than failing in some confusing way.
@@ -398,13 +417,13 @@ New decisions, continuing the design doc's D-series.
 | D15 | The hook disarms on a successful `fetch`. | M3 |
 | D16 | Two flags: `backstop` (default on), `block_on_error` (default off). | M2 |
 | D17 | v1: the user supplies the structure. stele infers nothing. | `O-ENTRY` |
-| D18 | One file, `.stele/rules.md`, rules separated by `---`. | `O-RULE-LOC` |
+| D18 | One file, `stele.md`, rules separated by `---`. | `O-RULE-LOC` |
 | D19 | The delimiter defines the unit. No splitting. | `O-GRAIN` |
-| D20 | Id is a UUID, stamped into `rules.md` by compile and never recomputed. The body hash is kept for staleness, incremental compile and drift — never for identity. | `O-RULE-ID` |
+| D20 | Id is a UUID, stamped into `stele.md` by compile and never recomputed. The body hash is kept for staleness, incremental compile and drift — never for identity. | `O-RULE-ID` |
 | D21 | All metadata is authored. Nothing is derived, so nothing is reconciled. | `O-METADATA` |
 | D22 | Compile is a Go parser. No model, no work order, no skill. | `O-COMPILE-PKG` |
 | D23 | Compile runs automatically when the source hash changes. | `O-COMPILE-WHEN` |
-| D24 | `rules.md` is committed. `index.json` is gitignored. | `O-INDEX-VCS` |
+| D24 | `stele.md` lives at the repository root and is committed. All of `.stele/` is generated and gitignored. | `O-INDEX-VCS` |
 | D25 | No starter tag vocabulary. Whatever the user writes. | `O-TAGS` |
 | D26 | An empty selection is a first-class, cheap answer. | `O-EMPTY` |
 | D27 | Claude Code first. Cursor second. | `O-AGENTS` |
@@ -424,7 +443,7 @@ Already argued in the design doc's prose but never recorded in §9.1. Recorded h
 | D35 | `O-COST` is not stele's cost in v1. The subagent runs on the parent's model and auth; stele's own work is a file read and a parse. | consequence of D12 |
 
 **One decision in the design doc is amended by this spec.** D20 requires compile to
-write an `id:` into `.stele/rules.md`, which D8 as originally written forbade. D8
+write an `id:` into `stele.md`, which D8 as originally written forbade. D8
 is narrowed — in `stele-design-doc.md` §6 and §9.1 — to *stele never edits the
 substance of a rule; it may stamp bookkeeping metadata, deterministically, as a
 reviewable diff.* The rationale D8 gives is about a model rewriting the rules that
@@ -500,7 +519,7 @@ of one. The hook staying armed until `fetch` is what contains this: wandering of
 means the write stays blocked, so the failure is loud rather than silent.
 
 **stele writes to the file it governs.** Stamping ids means the binary edits
-`.stele/rules.md`. D8 is narrowed to permit it — deterministically, never touching
+`stele.md`. D8 is narrowed to permit it — deterministically, never touching
 rule text, always as a reviewable diff. It is still a real narrowing of the
 governance boundary and belongs in the README rather than in a footnote.
 
