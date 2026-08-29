@@ -143,6 +143,7 @@ type Report struct {
 
 func Load(root string) (File, error)
 func Save(root string, f File) error
+func Validate(f File) error // ErrDuplicateID
 
 // Reconcile is pure. newID is injected so it stays testable.
 func Reconcile(rules []corpus.Rule, prev File, newID func() string) (ids []string, next File, rep Report)
@@ -162,6 +163,11 @@ be visible in a diff rather than silent.
 `newID` is a parameter rather than a call to `uuid.NewString` so `Reconcile` stays
 a pure function — see §2's note on injected sources.
 
+**`Validate`** returns `ErrDuplicateID` when two entries share an id. That cannot
+happen from `Reconcile`, which mints fresh UUIDs, but it can happen from a merge
+that duplicated an entry. It runs on every load, because two rules silently
+sharing a history is worse than a loud failure.
+
 ### `internal/index` — the build artifact
 
 ```go
@@ -178,7 +184,7 @@ type Entry struct {
 }
 
 func Load(dir string) (Index, error)   // ErrNoIndex, ErrStale
-func Save(dir string, idx Index) error // atomic
+func Save(dir string, idx Index) error // crash-safe replace, §7
 ```
 
 Gitignored and regenerated freely (D24), so the format carries no compatibility
@@ -198,7 +204,7 @@ type State struct {
 ```
 
 One file per session, `state/<session-id>.json`, per D37. Written by both the hook
-process and the MCP process, so every write is atomic (§7).
+process and the MCP process, so every write uses the crash-safe replace of §7.
 
 ### `internal/enforce` — policy
 
@@ -392,9 +398,9 @@ searched for independently, because a stale `.stele/` left behind by an
 Two processes write to `.stele/`, and stele runs on Windows as a first-class
 target.
 
-**All writes are write-temp-then-rename.** `os.Rename` replaces atomically on
-POSIX and on Windows via `MoveFileEx`, and the temp file is created in the same
-directory so the rename never crosses a filesystem.
+**All writes are write-temp-then-rename**, with the temp file created in the same
+directory so the rename never crosses a filesystem. The guarantee this buys is
+that the target is never truncated — not that the swap is atomic. See below.
 
 stele never writes `stele.md`, so the user's rules cannot be damaged by a crash at
 all. What this protects is `stele.lock` — which is committed, and losing it costs
@@ -416,7 +422,7 @@ takes a lock file for the duration of the append.
 
 **Session state needs no locking** across sessions, because each session owns its
 own file. Within a session the hook and the MCP process can write concurrently, so
-both use the same atomic replace.
+both use the same crash-safe replace.
 
 **Stale state is cleaned on write:** any `state/*.json` older than 24 hours is
 removed. Nothing tells stele that a session ended.
@@ -494,7 +500,7 @@ string literals scattered through the code, so they can be revised and diffed.
 | `lock.Reconcile` | Table-driven with a stub `newID`. Reorder, reword, insert, delete, and reword-plus-reorder — the case that mismatches. |
 | `backstop.Decide` | Table-driven over the full cross-product of state, policy and error. Pure, so no fixtures. |
 | `matcher` | Table-driven. Cap, truncation, empty selection. |
-| `index`, `session`, `journal` | Temp directories. Concurrent-write tests for the atomic replace. |
+| `index`, `session`, `journal` | Temp directories. Concurrent-write tests for the replace path, including a locked target. |
 | `serve` | Drive the SDK over an in-memory transport, asserting schemas and results. |
 | `cmd/stele hook` | Feed recorded stdin JSON, assert stdout JSON and exit code. |
 | End to end | A real Claude Code session on this repository. |

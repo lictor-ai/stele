@@ -376,14 +376,20 @@ removes exactly those and nothing else.
 2. The MCP server registration
 3. `.claude/agents/stele-matcher.md` — the subagent definition, which is where the
    matcher prompt lives
-4. `stele.md` at the repository root, with a header comment explaining the format
+4. `stele.md` at the repository root — **only if it does not already exist**, with
+   a header comment explaining the format
 5. `.stele/.gitignore`, containing `*`
 
-The fifth implements D24. Because nothing generated is ever committed, one
+The fourth is the single exception to D38, and it is a creation rather than a
+write: `init` scaffolds an empty rule file for a repository that has none, and
+nothing in stele ever touches it again. An existing `stele.md` is never opened for
+writing by any command.
+
+The fifth implements D24. Because nothing under `.stele/` is ever committed, one
 wildcard covers the whole directory — including the `.gitignore` itself — and the
 repository's root `.gitignore` is never edited. Everything stele writes is then
-`stele.md`, one directory, and two registration entries, which is what makes
-`uninstall` provably clean.
+`stele.lock`, one directory, two registration entries, and a scaffolded
+`stele.md`, which is what makes `uninstall` provably clean.
 
 `init` stamps its own version. The hook checks it and warns on a mismatch rather
 than failing in some confusing way.
@@ -448,7 +454,7 @@ New decisions, continuing the design doc's D-series.
 | D18 | One file, `stele.md`, rules separated by `---`. | `O-RULE-LOC` |
 | D19 | The delimiter defines the unit. No splitting. | `O-GRAIN` |
 | D20 | Id is a UUID held in `stele.lock`, which stele writes and commits. Rules are matched to ids by hash, then by position. The body hash is for matching, staleness and drift — never identity itself. | `O-RULE-ID` |
-| D38 | stele never writes to `stele.md` or `stele.json`. It reads them. Everything it produces goes in its own files. | D8 |
+| D38 | stele never modifies `stele.md` or `stele.json`. It reads them. `init` may create `stele.md` when absent; nothing writes to it after that. Everything stele produces goes in its own files. | D8 |
 | D21 | All metadata is authored. Nothing is derived, so nothing is reconciled. | `O-METADATA` |
 | D22 | Compile is a Go parser. No model, no work order, no skill. | `O-COMPILE-PKG` |
 | D23 | Compile runs automatically when the source hash changes. | `O-COMPILE-WHEN` |
