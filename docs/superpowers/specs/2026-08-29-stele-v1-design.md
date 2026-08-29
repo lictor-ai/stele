@@ -96,26 +96,25 @@ which also means `stele mcp` holds nothing between calls and is a thin dispatche
   rules.md                source          committed
   index.json              compiled        gitignored
   log.jsonl               append-only     gitignored
-  state/<session>.json    arm state, touched directories   gitignored
+  state/<session>.json    current prompt_id, arm state, touched dirs   gitignored
+  state/current           pointer to the session that last blocked     gitignored
 ```
 
 State is keyed per session (D37), so two Claude Code sessions open on the same
 repository never disarm each other's hook.
 
-**One lookup to confirm before writing code.** The hook receives Claude Code's
-session id on stdin. Whether `stele mcp` can obtain the same id — from its
-environment or from the protocol — is unverified, and it decides how `fetch`
-locates the right state file.
+**How `request` learns which session it serves.** The hook receives Claude Code's
+`session_id` on stdin — verified against the hooks documentation. The MCP process
+does not; MCP's own session concept is unrelated. So two mechanisms, together:
 
-- *If it can*: key the file directly.
-- *If it cannot*: the hook writes its session id to `.stele/state/current` at the
-  moment it blocks, and `request` reads it. The order is always hook-blocks then
-  agent-calls, so the pointer is fresh. Two sessions blocking in the same
-  millisecond can cross, and the cost is one session disarmed early — which is the
-  failure the per-repo alternative had permanently.
+1. **The hook deposits.** On blocking it writes its `session_id` to
+   `.stele/state/current`, and `request` reads it. No agent cooperation, and the
+   order is always block-then-call, so the pointer is fresh.
+2. **The block message carries it.** `request` takes an optional `session_id`
+   argument that wins when supplied.
 
-The layout above is the same either way, so this is a fact to check during
-implementation, not a fork in the design.
+Correct by default, exact when the agent cooperates. Two sessions blocking in the
+same millisecond can cross on (1); (2) removes even that.
 
 **Cleanup.** Nothing tells stele that a session ended, so session files are
 deleted once they are older than 24 hours. `stele uninstall` removes the directory
@@ -259,17 +258,31 @@ A `PreToolUse` hook on `Write` and `Edit`.
 | **Armed** | Blocks the write. Tells the agent to call stele. |
 | **Disarmed** | Stands aside. |
 
-Armed at session start, unless `backstop = false`, in which case the hook never
-arms and never blocks — it only warns. **Disarms on a successful `fetch`** — the
-only unambiguous evidence that rules were actually delivered, and the only one an
-agent cannot fake by calling `request` and wandering off.
+**Armed at the start of every turn**, unless `backstop = false`, in which case the
+hook never arms and never blocks — it only warns. Claude Code delivers a
+`prompt_id` on the hook payload, which is a turn identifier, so a turn boundary is
+observable rather than inferred. A new `prompt_id` re-arms the hook and clears the
+touched-directory set.
 
-**Re-arms on the first write into a directory not yet touched this session.** The
+Per-turn is what §4.2 of the design doc has always specified — "a hook fires the
+first time the agent writes to a file *in a turn*". An earlier draft of this spec
+armed per session, which would have left every turn after the first one in a
+session completely unprotected.
+
+**Disarms on a successful `fetch`** — the only unambiguous evidence that rules
+were actually delivered, and the only one an agent cannot fake by calling
+`request` and wandering off.
+
+**Re-arms within a turn on the first write into a directory not yet touched.** The
 comparison is on the file's immediate parent directory, matched exactly: writing
 `internal/api/v1/x.go` after `internal/api/y.go` re-arms, because `internal/api/v1`
-is a directory the session has not written to. Ancestors do not count as touched.
-This is deliberately the eager reading, and §12 lists it as the thing the logs
-should confirm or narrow.
+has not been written to this turn. Ancestors do not count as touched. This is
+deliberately the eager reading, and §12 lists it as the thing the logs should
+confirm or narrow.
+
+**The hook stands aside inside subagents.** The payload carries `agent_type` when
+the hook fires within one, and stele's own matcher must never be blocked by
+stele's own backstop.
 
 This is `O-REARM`, and what it defends against is intent drift: a brief written
 twenty edits ago covers the task as it was understood then, and a handler change
@@ -396,7 +409,7 @@ New decisions, continuing the design doc's D-series.
 | D26 | An empty selection is a first-class, cheap answer. | `O-EMPTY` |
 | D27 | Claude Code first. Cursor second. | `O-AGENTS` |
 | D28 | `init` writes five marked artifacts; `uninstall` removes exactly those. | `O-INSTALL` |
-| D29 | Re-arm on a write into an untouched directory. | `O-REARM` |
+| D29 | Arm at the start of every turn, keyed on `prompt_id`. Re-arm within a turn on a write into an untouched directory. | `O-REARM` |
 | D30 | `fetch` is capped at 10 rules and reports truncation. | `O-BUDGET` |
 | D31 | Index is a single JSON file, regenerated freely. | M5 |
 | D32 | `init` stamps a version; the hook warns on mismatch. | M6 |
