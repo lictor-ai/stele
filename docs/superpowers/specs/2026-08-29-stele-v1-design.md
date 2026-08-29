@@ -116,20 +116,55 @@ rules. Consequence: a rule body cannot begin with a line that looks like
 | `tags` | Free vocabulary. stele ships none and imposes none. |
 | `scope` | Path globs. A hint to the matcher, not a hard filter — see `O-CORPUS`. |
 
-**Identity.** A rule's id is a hash of its body, normalised first: lowercased,
-runs of whitespace collapsed to a single space, leading and trailing whitespace
-and punctuation stripped from each line, then lines joined with a single space.
-Normalising absorbs the most common edits — spacing, wrapping, a full stop added
-or removed — for free.
+**Identity.** Every rule carries a UUID in an `id:` field. The user does not write
+it. Compile stamps one onto any rule that lacks one, writes it back into
+`.stele/rules.md`, and never recomputes it afterwards.
 
-Rewriting a rule's words still produces a new id, and the old rule's log history
-is lost. That is a deliberate trade, taken for a zero-authoring id. To make the
-cost visible rather than silent, **compile prints every id that changed**:
+The block above is what a user writes. After the first compile it is:
+
+```markdown
+id: 7f3a2b1c-9d44-4e21-b8a0-3c91f4e77d10
+tags: [db, security]
+scope: ["**/*.go"]
+
+Never build SQL by string concatenation. Use parameterised queries.
+```
+
+Once stamped, the id survives rewording, reordering, a fresh clone, a stele
+upgrade, and any change to how compile works. The only ways to lose it are
+deleting the rule or renaming the id by hand, both of which mean what they say.
+
+**Identity has to live in the file the user owns.** Anywhere else it either dies
+on a fresh clone or diverges between developers. Deriving it from the rule's text
+— a content hash — resets it on precisely the edit §7 exists to prompt, which
+makes the log's main feedback loop erase itself on use. See §11.
+
+**Compile validates that ids are unique on every run.** UUIDs do not collide, but
+copy-pasting a rule block duplicates its id. That must be a loud error, not two
+rules quietly sharing a history.
+
+### The hash, doing what a content hash is actually good at
+
+Compile stores a normalised hash of each rule body in the index. Normalisation is
+lowercase, runs of whitespace collapsed, leading and trailing whitespace and
+punctuation stripped per line, lines joined with a single space.
+
+It is used for three things, none of them identity:
+
+1. **Staleness** — skip compile entirely when the file has not changed (D23).
+2. **Incremental compile** — skip rules that have not changed.
+3. **Drift detection** — when a body changes substantially, say so.
 
 ```
-2 rules changed id:
-  a91f3c… → 7b20e1…  "Never build SQL by string concat…"
+7f3a2b1c…  body changed substantially
+           "Never build SQL by string concat…"
+           156 observations may not be comparable
 ```
+
+Because identity no longer depends on it, the normalisation rules can change
+between releases with no consequence beyond drift reporting. Under a hash id they
+would have been frozen forever — any change would have silently reset every id in
+every repo.
 
 ---
 
@@ -263,10 +298,25 @@ One entry per `fetch`:
 
 ```json
 {"call_id":"...","ts":"...","brief":"...","target_path":"...",
- "offered":["a91f...","7b20..."],"selected":["a91f..."],"tokens":412,"truncated":false}
+ "index_hash":"...",
+ "selected":[{"id":"7f3a2b1c-...","excerpt":"Never build SQL by string concat..."}],
+ "tokens":412,"truncated":false}
 ```
 
 Rule identifiers and short text only. No source code, no diffs.
+
+Two consequences of decisions made elsewhere shape this record.
+
+**There is no `offered` field.** D34 gives the matcher the full corpus, so
+"offered" is the whole index on every call — logging it per entry would repeat two
+hundred ids a turn to record nothing. `index_hash` pins which corpus was in play,
+and *offered but never selected* is then derived: in the index, absent from every
+`selected`.
+
+**Selected entries carry a text excerpt.** Ids are UUIDs, so a log read six months
+later is unreadable on its own, and a rule that has since been deleted resolves to
+nothing at all. The excerpt makes each record self-describing. It is bounded to a
+short prefix, which keeps it inside §7's "identifiers and short text only."
 
 Three of §7's four signals are pure counting and work from day one:
 *offered but never selected*, *never offered at all*, *always selected together*.
@@ -292,7 +342,7 @@ New decisions, continuing the design doc's D-series.
 | D17 | v1: the user supplies the structure. stele infers nothing. | `O-ENTRY` |
 | D18 | One file, `.stele/rules.md`, rules separated by `---`. | `O-RULE-LOC` |
 | D19 | The delimiter defines the unit. No splitting. | `O-GRAIN` |
-| D20 | Id is a hash of the normalised body. Compile reports id churn. | `O-RULE-ID` |
+| D20 | Id is a UUID, stamped into `rules.md` by compile and never recomputed. The body hash is kept for staleness, incremental compile and drift — never for identity. | `O-RULE-ID` |
 | D21 | All metadata is authored. Nothing is derived, so nothing is reconciled. | `O-METADATA` |
 | D22 | Compile is a Go parser. No model, no work order, no skill. | `O-COMPILE-PKG` |
 | D23 | Compile runs automatically when the source hash changes. | `O-COMPILE-WHEN` |
@@ -313,6 +363,14 @@ Already argued in the design doc's prose but never recorded in §9.1. Recorded h
 | D33 | The `O-INPUTS` v1 set is brief plus target path. | §4.3, closing paragraph |
 | D34 | The matcher sees the full corpus, unfiltered. | §5, `O-CORPUS` |
 | D35 | `O-COST` is not stele's cost in v1. The subagent runs on the parent's model and auth; stele's own work is a file read and a parse. | consequence of D12 |
+
+**One decision in the design doc is amended by this spec.** D20 requires compile to
+write an `id:` into `.stele/rules.md`, which D8 as originally written forbade. D8
+is narrowed — in `stele-design-doc.md` §6 and §9.1 — to *stele never edits the
+substance of a rule; it may stamp bookkeeping metadata, deterministically, as a
+reviewable diff.* The rationale D8 gives is about a model rewriting the rules that
+constrain it. A deterministic id stamp from the binary, which never touches rule
+text, is a different act and does not engage it.
 
 ---
 
@@ -382,8 +440,24 @@ tool path trustworthy, and D12 gives the agent three places to wander off instea
 of one. The hook staying armed until `fetch` is what contains this: wandering off
 means the write stays blocked, so the failure is loud rather than silent.
 
-**Rewording a rule resets its history.** Accepted with D20. Made visible by
-compile's churn report, not prevented.
+**stele writes to the file it governs.** Stamping ids means the binary edits
+`.stele/rules.md`. D8 is narrowed to permit it — deterministically, never touching
+rule text, always as a reviewable diff. It is still a real narrowing of the
+governance boundary and belongs in the README rather than in a footnote.
+
+**The id identifies the slot, not the meaning.** A stamped id survives any edit to
+the body, including one that replaces it with something unrelated. The log history
+then attaches to a rule that no longer means what it meant. Compile's drift report
+is the mitigation, not a fix. Note this is the *opposite* failure to a content
+hash: that was over-sensitive, treating every reword as a new rule; this is
+under-sensitive, treating every rewrite as the same one. Under-sensitive is the
+better failure here, because it is visible in a report and the other is silent.
+
+**Opaque ids need excerpts everywhere.** A UUID cannot be read. Every human-facing
+output — the drift report, any log summary, any future `stele doctor` — must print
+a text excerpt beside the id or it is unusable. This is a standing requirement on
+every report stele ever writes, not a one-off, and it is the price paid for the
+UUID over a readable slug.
 
 ---
 
