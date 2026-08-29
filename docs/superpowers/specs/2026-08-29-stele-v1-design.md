@@ -76,6 +76,51 @@ is how a stateless binary knows three invocations are one exchange.
 
 A parse and a validate. Plain Go. No model, no splitting, no derivation.
 
+### 2.3 Process model and shared state
+
+Everything runs locally. One binary, two modes, both spawned by the host agent:
+
+```
+stele mcp    started at session start, lives for the session, answers
+             request / corpus / fetch over stdio. "MCP server" means a
+             process on a pipe, not a network service.
+
+stele hook   started on every Write/Edit, decides, exits.
+```
+
+They are separate OS processes, so they share no memory. **All state is on disk**,
+which also means `stele mcp` holds nothing between calls and is a thin dispatcher.
+
+```
+.stele/
+  rules.md                source          committed
+  index.json              compiled        gitignored
+  log.jsonl               append-only     gitignored
+  state/<session>.json    arm state, touched directories   gitignored
+```
+
+State is keyed per session (D37), so two Claude Code sessions open on the same
+repository never disarm each other's hook.
+
+**One lookup to confirm before writing code.** The hook receives Claude Code's
+session id on stdin. Whether `stele mcp` can obtain the same id — from its
+environment or from the protocol — is unverified, and it decides how `fetch`
+locates the right state file.
+
+- *If it can*: key the file directly.
+- *If it cannot*: the hook writes its session id to `.stele/state/current` at the
+  moment it blocks, and `request` reads it. The order is always hook-blocks then
+  agent-calls, so the pointer is fresh. Two sessions blocking in the same
+  millisecond can cross, and the cost is one session disarmed early — which is the
+  failure the per-repo alternative had permanently.
+
+The layout above is the same either way, so this is a fact to check during
+implementation, not a fork in the design.
+
+**Cleanup.** Nothing tells stele that a session ended, so session files are
+deleted once they are older than 24 hours. `stele uninstall` removes the directory
+outright.
+
 ---
 
 ## 3. The rule format
@@ -355,6 +400,7 @@ New decisions, continuing the design doc's D-series.
 | D30 | `fetch` is capped at 10 rules and reports truncation. | `O-BUDGET` |
 | D31 | Index is a single JSON file, regenerated freely. | M5 |
 | D32 | `init` stamps a version; the hook warns on mismatch. | M6 |
+| D37 | Hook and MCP mode are separate processes sharing state on disk, keyed per session. | M8 |
 
 Already argued in the design doc's prose but never recorded in §9.1. Recorded here:
 
