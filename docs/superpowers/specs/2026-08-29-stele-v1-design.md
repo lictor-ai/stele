@@ -77,6 +77,20 @@ stele.md  ──  stele compile  ──►  .stele/index.json
 
 A parse and a validate. Plain Go. No model, no splitting, no derivation.
 
+**Only two operations in all of stele may open `stele.md`** (D40):
+
+1. **Read and transform** — parse it, reconcile ids, write the index and the lock.
+2. **Has it changed** — hash it, compare against the hash the index recorded.
+
+Everything else — the matcher, the tools, the hook — reads `index.json` and never
+learns where `stele.md` is. One package holds that path.
+
+This is a boundary, not a convenience. It keeps the user's file out of the hot
+path except for a hash check, it means the index carries its source hash without
+ever having to interpret it, and it makes "is the index stale" a question with
+exactly one owner instead of a concern smeared across whichever caller happened to
+need it.
+
 ### 2.3 Process model and shared state
 
 Everything runs locally. One binary, two modes, both spawned by the host agent:
@@ -488,6 +502,7 @@ New decisions, continuing the design doc's D-series.
 | D32 | `init` stamps a version; the hook warns on mismatch. | M6 |
 | D37 | Hook and MCP mode are separate processes sharing state on disk, keyed per session. | M8 |
 | D39 | Failures are recorded in session state so the hook can see them, and a counter applies the failure policy after 3 blocks with no `fetch`. | G1, G2 |
+| D40 | Exactly two operations may open `stele.md`: read-and-transform, and has-it-changed. Everything else reads `index.json`. | G3 |
 
 Already argued in the design doc's prose but never recorded in §9.1. Recorded here:
 

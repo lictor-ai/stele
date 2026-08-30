@@ -28,7 +28,7 @@ Two of these changed decisions. See §12.
 github.com/lictor-ai/stele
 
 cmd/stele/            main, subcommand dispatch, exit codes
-internal/corpus/      stele.md: parse and hash. read-only.
+internal/source/      stele.md: read, hash, parse. the ONLY package that opens it.
 internal/lock/        stele.lock: identity, reconciliation
 internal/index/       index.json: load, save
 internal/session/     state/<session>.json: arm state, touched dirs
@@ -46,7 +46,7 @@ root — the official guidance's server-project layout. Nothing is importable, w
 means every package boundary can move later without breaking anyone.
 
 No `util`, `common`, `helpers`, or `pkg`. Package names are chosen so the name and
-the exported type read together: `corpus.Rule`, `session.State`, `enforce.Policy`,
+the exported type read together: `source.Rule`, `session.State`, `enforce.Policy`,
 `backstop.Decision`.
 
 ---
@@ -70,7 +70,7 @@ hook payload, the session state, and the policy, it returns allow or deny and wh
 That makes the most behaviour-dense part of the system a table-driven test with no
 fixtures, no temp directories, and no host agent.
 
-The same shape applies to `corpus.Parse([]byte) ([]Rule, error)` and to
+The same shape applies to `source.Parse([]byte) ([]Rule, error)` and to
 `lock.Reconcile`, which is the identity core.
 
 **Two things have to be injected for this to hold.** A `call_id` needs randomness
@@ -86,11 +86,18 @@ below is consistent with it.
 
 ## 3. Packages
 
-### `internal/corpus` — reading the user's file
+### `internal/source` — the only package that opens `stele.md`
 
-**Read-only. This package has no write path at all** (D38). `stele.md` belongs to
-the user; stele parses it and never touches it. There is deliberately no function
-here that produces bytes.
+**Two operations touch the user's file, and nothing else in stele may.**
+
+1. **Read and transform it** — parse `stele.md` into rules, on the way to the index.
+2. **Ask whether it changed** — hash it and compare against what the index recorded.
+
+Everything downstream takes `index.Index`. No other package is given the path to
+`stele.md`, so no other package can reach it (D40).
+
+**Read-only. There is no write path at all** (D38), and deliberately no function
+that produces bytes.
 
 ```go
 type Rule struct {
@@ -102,23 +109,36 @@ type Rule struct {
     Line        int      // for error messages
 }
 
-func Parse(src []byte) ([]Rule, error)
-func Hash(body string) string
+func Read(root string) ([]byte, error)                  // ErrNoRulesFile
+func Changed(root, knownHash string) (bool, string, error)
+
+func Parse(src []byte) ([]Rule, error) // pure
+func Hash(body string) string          // pure
 ```
 
 `Rule` carries no `ID`. Identity is not a property of the source file — it is
 assigned by `internal/lock`.
+
+**`Changed`** is the whole staleness mechanism. It hashes `stele.md`, compares
+against the hash the caller passes in (`index.Index.SourceHash`), and returns the
+new one. That is why `index.Load` does not report staleness: the index stores the
+hash but never interprets it, and it has no business knowing where `stele.md`
+lives.
 
 **`Parse`** splits on `---` at the start of a line, reads leading `key: value`
 lines as metadata, and takes everything after the first blank line as the body.
 
 **`Hash`** normalises before hashing: lowercase, runs of whitespace collapsed,
 leading and trailing whitespace and punctuation stripped per line, lines joined
-with a single space. It is used for reconciliation, staleness and drift — never
-as identity itself (D20).
+with a single space. Used for reconciliation, staleness and drift — never as
+identity (D20).
 
 Because nothing here writes, the byte-preservation problem disappears entirely,
 and with it the CRLF concern that was open in §13.
+
+The name follows the design doc's vocabulary: *source rules* are what the user
+writes, and the *corpus* is the compiled whole the matcher sees. This package
+handles the first.
 
 ### `internal/lock` — identity
 
@@ -146,7 +166,7 @@ func Save(root string, f File) error
 func Validate(f File) error // ErrDuplicateID
 
 // Reconcile is pure. newID is injected so it stays testable.
-func Reconcile(rules []corpus.Rule, prev File, newID func() string) (ids []string, next File, rep Report)
+func Reconcile(rules []source.Rule, prev File, newID func() string) (ids []string, next File, rep Report)
 ```
 
 `Reconcile` is the identity core, and it runs in three passes:
@@ -183,7 +203,7 @@ type Entry struct {
     BodyHash              string
 }
 
-func Load(dir string) (Index, error)   // ErrNoIndex, ErrStale
+func Load(dir string) (Index, error) // ErrNoIndex. never ErrStale — see internal/source
 func Save(dir string, idx Index) error // crash-safe replace, §7
 ```
 
@@ -494,12 +514,15 @@ Following Code Review Comments and the style guide.
 
 ```go
 var (
-    ErrNoIndex      = errors.New("no index")
-    ErrStale        = errors.New("index is stale")
-    ErrDuplicateID  = errors.New("duplicate rule id")
-    ErrNoRulesFile  = errors.New("no rules file")
+    ErrNoIndex      = errors.New("no index")        // index
+    ErrDuplicateID  = errors.New("duplicate rule id") // lock
+    ErrNoRulesFile  = errors.New("no rules file")     // source
 )
 ```
+
+There is no `ErrStale`. Staleness is not an error and not the index's business —
+it is a boolean answer from `source.Changed`, which is the only thing that can
+compute it (D40).
 
 The failure table in spec §5 is a switch over these. That is the reason they are
 sentinels rather than strings: `backstop.Decide` has to distinguish "never
@@ -553,7 +576,8 @@ string literals scattered through the code, so they can be revised and diffed.
 
 | Layer | Approach |
 | :-- | :-- |
-| `corpus.Parse` | Table-driven. Malformed input, no metadata, empty bodies, CRLF, unicode. |
+| `source.Parse` | Table-driven. Malformed input, no metadata, empty bodies, CRLF, unicode. Pure, so no fixtures. |
+| `source.Changed` | Temp directory. Unchanged, edited, missing, first run with no known hash. |
 | `lock.Reconcile` | Table-driven with a stub `newID`. Reorder, reword, insert, delete, and reword-plus-reorder — the case that mismatches. |
 | `backstop.Decide` | Table-driven over the full cross-product of state, policy and error. Pure, so no fixtures. |
 | `matcher` | Table-driven. Cap, truncation, empty selection. |
