@@ -31,6 +31,7 @@ cmd/stele/            main, subcommand dispatch, exit codes
 internal/source/      stele.md: read, hash, parse. the ONLY package that opens it.
 internal/lock/        stele.lock: identity, reconciliation
 internal/index/       index.json: load, save
+internal/compile/     the one place that turns stele.md into an index
 internal/session/     state/<session>.json: arm state, touched dirs
 internal/enforce/     the enforcement policy
 internal/journal/     log.jsonl
@@ -211,6 +212,39 @@ Gitignored and regenerated freely (D24), so the format carries no compatibility
 obligation. `Version` exists so a mismatch triggers a rebuild rather than a parse
 error.
 
+### `internal/compile` — the orchestration
+
+Compiling is seven steps across four packages:
+
+```
+source.Read → source.Parse → lock.Load → lock.Reconcile
+            → lock.Save → build the index → index.Save
+```
+
+Three callers need that sequence: `stele compile`, `stele check`, and `request`
+when the index is stale. Without a package owning it, it gets duplicated between
+`cmd/` and `serve/`.
+
+```go
+type Result struct {
+    Index  index.Index
+    Lock   lock.File
+    Report lock.Report
+}
+
+func Plan(root string, newID func() string) (Result, error)  // reads, writes nothing
+func Apply(root string, r Result) error                      // writes lock and index
+func EnsureFresh(root string, newID func() string) (index.Index, bool, error)
+```
+
+The `Plan`/`Apply` split is what makes `stele check` possible: CI runs `Plan`,
+inspects the `Report`, and never writes. `EnsureFresh` is the one `request` calls
+— it asks `source.Changed`, and only when the answer is yes does it `Plan` and
+`Apply`. The returned bool says whether it recompiled, so the caller can log it.
+
+This is the only package outside `source` that is given the project root, and it
+holds it solely to hand to `source`.
+
 ### `internal/session` — shared state between two processes
 
 ```go
@@ -309,25 +343,48 @@ UUID alone is unreadable later and a deleted rule resolves to nothing (spec §7)
 
 ### `internal/backstop` — the hook decision
 
-Pure, as in §2. One function, and its order is the whole behaviour:
+Pure, as in §2.
+
+```go
+type Input struct {
+    PromptID  string
+    AgentType string  // non-empty inside a subagent
+    Path      string  // the file about to be written
+    HasRules  bool    // the index exists and is non-empty
+}
+
+func Decide(in Input, st session.State, p enforce.Policy) Decision
+```
+
+`Input` is stele's assembled view, not the raw hook payload. `cmd/` builds it from
+what Claude Code sent plus one cheap `index.Load`. `HasRules` is deliberately a
+single bit — **existence, not freshness.** The hook runs on every write and never
+reads rule content, so it has no business parsing or recompiling anything.
+
+One function, and its order is the whole behaviour:
 
 ```
-1. agent_type is "stele-matcher"     → allow      never block our own subagent
+1. AgentType is "stele-matcher"      → allow      never block our own subagent
 2. !policy.Backstop                  → allow      the backstop is off
-3. prompt_id differs from state      → ARM, reset Touched, Blocks, LastError
-4. disarmed, dir not in Touched      → RE-ARM
-5. disarmed                          → allow, record the directory
+3. !HasRules                         → allow      nothing to deliver
+4. PromptID differs from state       → ARM, reset Touched, Blocks, LastError
+5. disarmed, dir not in Touched      → RE-ARM
+6. disarmed                          → allow, record the directory
    ── armed from here ──
-6. LastError is set                  → failure path
-7. Blocks >= 3                       → failure path
-8. otherwise                         → BLOCK, Blocks++
+7. LastError is set                  → failure path
+8. Blocks >= 3                       → failure path
+9. otherwise                         → BLOCK, Blocks++
 
 failure path:  policy.BlockOnError ? block, naming the error : allow, warn
 ```
 
-Steps 6 and 7 are the two halves of the same problem. **6 handles failures that
+**Step 3 is the first thing a new user hits.** Right after `init` there are no
+rules yet. Blocking a write to demand rules that do not exist would make stele
+look broken on the very first turn.
+
+Steps 7 and 8 are the two halves of the same problem. **7 handles failures that
 produced an error** — `stele mcp` recorded it, so the hook can act on it.
-**7 handles failures that produced nothing** — the exchange simply stopped, which
+**8 handles failures that produced nothing** — the exchange simply stopped, which
 is indistinguishable from an agent ignoring the redirect. The counter does not
 need to know which; it only needs to know the exchange is not completing.
 
@@ -597,8 +654,8 @@ or errors and call `t.Helper()`; they do not fail tests themselves. Comparisons 
 ```
 stele init         install the five artifacts
 stele uninstall    remove exactly what init wrote
-stele compile      parse, reconcile ids, write stele.lock and the index
-stele check        parse and reconcile in memory, write nothing (for CI)
+stele compile      compile.Plan + compile.Apply; prints the reconcile report
+stele check        compile.Plan only, writes nothing (for CI)
 stele mcp          run the MCP server on stdio
 stele hook         read a PreToolUse payload on stdin, decide
 ```

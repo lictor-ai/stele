@@ -276,7 +276,9 @@ backstop path, and the agent names it on the tool path. Both are the `O-INPUTS`
 recommended v1 set, unchanged from §4.3.
 
 Returns a `call_id` and a short instruction to dispatch the `stele-matcher`
-subagent. Triggers a compile first if the index is stale.
+subagent. Recompiles first if `stele.md` has changed since the index was built —
+this is the only place staleness is checked, and the only place a recompile
+happens during a session.
 
 ### `stele.corpus(call_id) -> { rules: [{ id, description, tags, scope, body }] }`
 
@@ -366,10 +368,18 @@ change a default.
 | :-- | :-- | :-- |
 | No rules file yet | allow | allow |
 | Rules file empty | allow | allow |
-| Index stale | allow, recompile | allow, recompile |
 | A call returned an error | allow, warn | **block** |
 | Exchange did not complete after 3 blocks | allow, warn | **block** |
 | stele binary missing | allow | allow |
+
+**A stale index is not on this list, and an earlier draft had it here with "allow,
+recompile".** That gave the hook a job it should not have. The hook runs on every
+single file write and then exits; making it parse rules and rebuild an index is
+real work on the hottest path in the system. It also does not need to. The hook
+never reads rule content — it decides on the turn id, the touched directories, the
+recorded error and the block count. The one thing it needs from the corpus is
+whether any rules exist at all, which is the first two rows above. Freshness
+belongs to `request`, which is where a stale index actually matters.
 
 **The last two rows are the same problem seen from two sides, and an earlier draft
 had only the first.** The hook is a fresh process on every write and can see
