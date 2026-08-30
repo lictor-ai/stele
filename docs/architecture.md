@@ -636,7 +636,8 @@ string literals scattered through the code, so they can be revised and diffed.
 | `source.Parse` | Table-driven. Malformed input, no metadata, empty bodies, CRLF, unicode. Pure, so no fixtures. |
 | `source.Changed` | Temp directory. Unchanged, edited, missing, first run with no known hash. |
 | `lock.Reconcile` | Table-driven with a stub `newID`. Reorder, reword, insert, delete, and reword-plus-reorder — the case that mismatches. |
-| `backstop.Decide` | Table-driven over the full cross-product of state, policy and error. Pure, so no fixtures. |
+| `compile.Plan` / `Apply` | Temp directory with a real `stele.md`. Round-trip, then edit and recompile to check ids carry over. `Plan` asserted to write nothing. |
+| `backstop.Decide` | Table-driven over the full cross-product of state, policy, error and `HasRules`. Pure, so no fixtures. |
 | `matcher` | Table-driven. Cap, truncation, empty selection. |
 | `index`, `session`, `journal` | Temp directories. Concurrent-write tests for the replace path, including a locked target. |
 | `serve` | Drive the SDK over an in-memory transport, asserting schemas and results. |
