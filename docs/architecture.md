@@ -170,12 +170,22 @@ func New() source.Source
 func Parse(src []byte) ([]source.Rule, error) // pure
 ```
 
-**`Parse`** splits on `---` at the start of a line, reads leading `key: value`
-lines as metadata, and takes everything after the first blank line as the body.
-A key matches `^[a-z][a-z0-9_-]*$`; a line whose prefix does not match is body.
-`description`, `tags` and `scope` fill their fields. **Every other key goes into
-`Meta` unchanged**, so the format can grow without a parser change. `check` and
-`blocking` are among them: they matter to `internal/check`, not to the parser.
+**`Parse`** splits on lines holding only `---`, except inside a fenced code
+block. It skips leading HTML comments, reads leading `key: value` lines as
+metadata, and takes everything after the first blank line as the body. A key
+matches `^[a-z][a-z0-9_-]*$` and is followed by `:` and a space or the end of the
+line; any other line is body. `description`, `tags` and `scope` fill their
+fields. **Every other key goes into `Meta` unchanged**, so the format can grow
+without a parser change. `check` and `blocking` are among them: they matter to
+`internal/check`, not to the parser. The full format is spec §3.
+
+**Bad input is a `*source.ParseError`**, which carries the file and line and
+prints as `stele.md:12: rule has no body`. Every source uses it, so every parse
+error reads alike.
+
+**`Read`** returns the same fingerprint `Fingerprint` would, computed from the
+bytes it parsed, so a file edited between the two calls cannot be recorded with
+the wrong fingerprint.
 
 **`Fingerprint`** hashes the raw bytes of `stele.md`. An absent file is zero rules
 and an empty fingerprint, not an error — a repository may take all its rules from
@@ -920,7 +930,7 @@ string literals scattered through the code, so they can be revised and diffed.
 
 | Layer | Approach |
 | :-- | :-- |
-| `stelemd.Parse` | Table-driven. Malformed input, no metadata, empty bodies, CRLF, unicode, unknown keys kept in `Meta`, a body opening with `Note:`. Pure, so no fixtures. |
+| `stelemd.Parse` | Table-driven. Malformed input, no metadata, empty bodies, CRLF, unicode, unknown keys kept in `Meta`, a body opening with `Note:`, `---` inside a code block, header comments. Pure, so no fixtures. |
 | `stelemd` fingerprint | Temp directory. Unchanged, edited, missing file. |
 | `lock.Reconcile` | Table-driven with a stub `newID`. Reorder, reword, insert, delete, reword-plus-reorder — the case that mismatches — and a rule moving between two sources. |
 | `compile.Plan` / `Apply` | Temp directory with a real `stele.md` and a fake second source. Round-trip, then edit and recompile to check ids carry over. `Plan` asserted to write nothing. `EnsureFresh` asserted never to call a non-built-in source. |

@@ -226,7 +226,9 @@ plugin of any kind.
 can list more (§2.4). This section describes the `stele.md` format. Every source,
 whatever its own format, produces the same thing: rules with a body and metadata.
 
-In `stele.md`, rules are separated by `---` on its own line.
+In `stele.md`, rules are separated by `---` on its own line. A `---` inside a
+fenced code block (```` ``` ```` or `~~~`, as in CommonMark) is part of the rule,
+so a rule can show YAML front matter (D56).
 
 It sits at the root, not inside `.stele/`, because the user writes it and owns it.
 `.stele/` is the tool's working directory and holds nothing a human wrote.
@@ -257,10 +259,31 @@ for a rule that has no metadata. A blank line closes the metadata; `---` separat
 rules. Consequence: a rule body cannot begin with a line that looks like
 `key: value`. Documented, not worked around.
 
-A metadata key is lowercase letters, digits, `_` and `-`, starting with a letter.
-So a body that opens with `Note: ...` is still body, because `Note` is not a key.
-A value is the rest of the line, trimmed, with one pair of matching outer quotes
-removed. `[a, b]` is a list.
+A metadata key is lowercase letters, digits, `_` and `-`, starting with a letter,
+followed by `:` and then a space or the end of the line. So a body that opens
+with `Note: ...` is still body, because `Note` is not a key, and so is one that
+opens with `https://...`, because no space follows the colon. A value is the rest
+of the line, trimmed, with one pair of matching outer quotes removed.
+
+`[a, b]` is a list. Commas inside quotes or braces do not split an item, so
+`["src/**/*.{go,ts}"]` is one glob. For `tags` and `scope`, a value without
+brackets is a list of one item: `tags: db` is `tags: [db]`. Other keys keep their
+value as written, brackets included.
+
+HTML comments before a rule's metadata are skipped, and a block holding only
+comments is not a rule. That is how the header comment `stele init` writes stays
+out of the rules (§6) (D56).
+
+**Bad input is an error naming the file and line**, for example
+`stele.md:12: rule has no body`. These are errors:
+
+* metadata with no body after it
+* metadata not followed by a blank line
+* the same key twice in one rule
+* a list with no closing `]`, or an empty item in a list
+* a code block or an HTML comment that never closes
+
+A missing `stele.md` is not an error. It gives no rules.
 
 **Fields.** All optional.
 
@@ -712,6 +735,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D53 | A fourth slot, sinks (`stele-sink-<name>`, external only). Data leaves only through a listed sink, only from `stele push` or `stele check --push`. Briefs only with `share_briefs`. | `O-LOG-LOC`, the mechanism only |
 | D54 | `stele status --format json` describes the install. `describe` reports the plugin's version. | — |
 | D55 | Org-wide rules reach a repository only through a source plugin. | — |
+| D56 | `stele.md` follows Markdown where it can: a `---` inside a fenced code block does not separate rules, and HTML comments before a rule's metadata are skipped. | — |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 
