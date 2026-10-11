@@ -2,7 +2,9 @@
 
 **Date:** 2026-08-29
 **Status:** draft for review
-**Implements:** `docs/superpowers/specs/2026-08-29-stele-v1-design.md`
+**Implements:** `docs/superpowers/specs/2026-08-29-stele-v1-design.md`,
+`docs/adr/0002-engine-and-extension-points.md` and
+`docs/adr/0003-ready-for-a-dashboard.md`
 
 The spec says *what* v1 does and why. This document says *how it is built* — module
 layout, package boundaries, types, contracts with the host agent, error handling,
@@ -28,16 +30,23 @@ Two of these changed decisions. See §12.
 github.com/lictor-ai/stele
 
 cmd/stele/            main, subcommand dispatch, exit codes
-internal/source/      stele.md: read, hash, parse. the ONLY package that opens it.
+internal/source/      the Source slot: Rule, the Source interface
+  stelemd/            the built-in stele.md source: read, hash, parse
 internal/lock/        stele.lock: identity, reconciliation
 internal/index/       index.json: load, save
-internal/compile/     the one place that turns stele.md into an index
+internal/compile/     the one place that turns sources into an index
 internal/session/     state/<session>.json: arm state, touched dirs
 internal/enforce/     the enforcement policy
 internal/journal/     log.jsonl
 internal/matcher/     request / corpus / fetch — pure logic
 internal/backstop/    the hook decision — pure logic
 internal/serve/       MCP wiring over the SDK
+internal/plugin/      registry of built-in and external plugins, exec protocol, sinks
+internal/status/      stele status: describe the install as JSON
+internal/check/       the Checker slot: stele check's runner and report
+  regex/              the built-in regex checker
+internal/adapter/     the agent adapter slot: the Adapter interface
+  claudecode/         the built-in Claude Code adapter
 internal/install/     init, uninstall, markers, version stamp
   assets/             embedded templates — must live here, see §9
 ```
@@ -45,6 +54,16 @@ internal/install/     init, uninstall, markers, version stamp
 `internal/` throughout. stele exports no library, so nothing lives at the module
 root — the official guidance's server-project layout. Nothing is importable, which
 means every package boundary can move later without breaking anyone.
+
+**The public extension surface is the plugin protocol, not a Go API** (ADR-0002).
+An external source or checker is a separate executable that speaks JSON over
+stdin/stdout (`internal/plugin`). So stele can stay unimportable and still be
+extended, in any language, by code it never links.
+
+Each slot follows the same shape: the interface lives in the package that
+consumes it (`source`, `check`, `adapter`), the built-in implementation is a
+subpackage, and `internal/plugin` is the only package that knows about both
+built-ins and executables.
 
 No `util`, `common`, `helpers`, or `pkg`. Package names are chosen so the name and
 the exported type read together: `source.Rule`, `session.State`, `enforce.Policy`,
@@ -71,8 +90,9 @@ hook payload, the session state, and the policy, it returns allow or deny and wh
 That makes the most behaviour-dense part of the system a table-driven test with no
 fixtures, no temp directories, and no host agent.
 
-The same shape applies to `source.Parse([]byte) ([]Rule, error)` and to
-`lock.Reconcile`, which is the identity core.
+The same shape applies to `stelemd.Parse([]byte) ([]source.Rule, error)`, to
+`lock.Reconcile`, which is the identity core, and to `regex.Match`, which is the
+whole built-in checker.
 
 **Two things have to be injected for this to hold.** A `call_id` needs randomness
 and a journal entry needs a timestamp, so "pure" here means *pure given a clock
@@ -87,59 +107,82 @@ below is consistent with it.
 
 ## 3. Packages
 
-### `internal/source` — the only package that opens `stele.md`
+### `internal/source` — the Source slot
 
-**Two operations touch the user's file, and nothing else in stele may.**
+**Only a source opens rule files, and only for two operations** (D40):
 
-1. **Read and transform it** — parse `stele.md` into rules, on the way to the index.
-2. **Ask whether it changed** — hash it and compare against what the index recorded.
+1. **Read and transform** — turn its files into rules, on the way to the index.
+2. **Has it changed** — return a fingerprint to compare against the index.
 
-Everything downstream takes `index.Index`. No other package is given the path to
-`stele.md`, so no other package can reach it (D40).
+Everything downstream takes `index.Index`. No other package is given a rule
+file's path, so no other package can reach one.
 
-**Read-only. There is no write path at all** (D38), and deliberately no function
+**Read-only. There is no write path at all** (D38), and deliberately no method
 that produces bytes.
 
 ```go
 type Rule struct {
-    Description string   // optional
+    Description string            // optional
     Tags        []string
-    Scope       []string // path globs
+    Scope       []string          // path globs
     Body        string
-    Position    int      // ordinal in the file, for reconciliation
-    Line        int      // for error messages
+    Meta        map[string]string // every other key, kept as written (D46)
+    ID          string            // optional; set only by a source that owns its ids (D52)
+    Source      string            // the source's name, e.g. "stelemd"
+    File        string            // relative to the root, for error messages
+    Position    int               // ordinal within this source, for reconciliation
+    Line        int               // for error messages
 }
 
-func Read(root string) ([]byte, error)                  // ErrNoRulesFile
-func Changed(root, knownHash string) (bool, string, error)
+type Source interface {
+    Name() string
+    Read(ctx context.Context, root string) (rules []Rule, fingerprint string, err error)
+    Fingerprint(ctx context.Context, root string) (string, error) // must be cheap
+}
 
-func Parse(src []byte) ([]Rule, error) // pure
-func Hash(body string) string          // pure
+func Hash(body string) string // pure, shared by every source
 ```
 
-`Rule` carries no `ID`. Identity is not a property of the source file — it is
-assigned by `internal/lock`.
+`Rule.ID` is empty for every built-in source. Identity is not a property of a
+rule file — it is assigned by `internal/lock`. The one exception is a source that
+owns its ids, such as an org-wide source whose rules must share an id across
+repositories (D52); the lock then records that id instead of minting one.
 
-**`Changed`** is the whole staleness mechanism. It hashes `stele.md`, compares
-against the hash the caller passes in (`index.Index.SourceHash`), and returns the
-new one. That is why `index.Load` does not report staleness: the index stores the
-hash but never interprets it, and it has no business knowing where `stele.md`
-lives.
-
-**`Parse`** splits on `---` at the start of a line, reads leading `key: value`
-lines as metadata, and takes everything after the first blank line as the body.
+**`Fingerprint`** is the whole staleness mechanism. Compile compares it against
+the fingerprint the index recorded for that source. That is why `index.Load` does
+not report staleness: the index stores fingerprints but never interprets them,
+and it has no business knowing where any rule file lives.
 
 **`Hash`** normalises before hashing: lowercase, runs of whitespace collapsed,
 leading and trailing whitespace and punctuation stripped per line, lines joined
 with a single space. Used for reconciliation, staleness and drift — never as
-identity (D20).
-
-Because nothing here writes, the byte-preservation problem disappears entirely,
-and with it the CRLF concern that was open in §13.
+identity (D20). It lives here, not in each source, so every source hashes alike
+and a rule moving between sources keeps its id.
 
 The name follows the design doc's vocabulary: *source rules* are what the user
 writes, and the *corpus* is the compiled whole the matcher sees. This package
 handles the first.
+
+#### `internal/source/stelemd` — the built-in source
+
+```go
+func New() source.Source
+func Parse(src []byte) ([]source.Rule, error) // pure
+```
+
+**`Parse`** splits on `---` at the start of a line, reads leading `key: value`
+lines as metadata, and takes everything after the first blank line as the body.
+A key matches `^[a-z][a-z0-9_-]*$`; a line whose prefix does not match is body.
+`description`, `tags` and `scope` fill their fields. **Every other key goes into
+`Meta` unchanged**, so the format can grow without a parser change. `check` and
+`blocking` are among them: they matter to `internal/check`, not to the parser.
+
+**`Fingerprint`** hashes the raw bytes of `stele.md`. An absent file is zero rules
+and an empty fingerprint, not an error — a repository may take all its rules from
+other sources.
+
+Because nothing here writes, the byte-preservation problem disappears entirely,
+and with it the CRLF concern that was open in §13.
 
 ### `internal/lock` — identity
 
@@ -148,12 +191,14 @@ Owns `stele.lock`: committed, stele-written, never hand-edited.
 ```go
 type Entry struct {
     ID       string `json:"id"`
+    Source   string `json:"source"`   // the source the rule came from
     Hash     string `json:"hash"`
-    Position int    `json:"position"`
+    Position int    `json:"position"` // within that source
 }
 
 type File struct {
     Version int     `json:"version"`
+    Project string  `json:"project"` // this repository's UUID, minted once (D51)
     Rules   []Entry `json:"rules"`
 }
 
@@ -170,11 +215,18 @@ func Validate(f File) error // ErrDuplicateID
 func Reconcile(rules []source.Rule, prev File, newID func() string) (ids []string, next File, rep Report)
 ```
 
-`Reconcile` is the identity core, and it runs in three passes:
+`Reconcile` is the identity core, and it runs in three passes after one step
+that is not a guess:
 
-1. **Exact hash match** → same rule. Survives reordering.
-2. **Remaining rules, matched by position** → same rule. Survives rewording, which
-   is the case that matters, since §7 exists to prompt rewording.
+0. **Supplied id** → the rule keeps the id its source gave it (D52). A supplied
+   id that clashes with another rule's is `ErrDuplicateID`. A rule whose id
+   changes because its source started supplying one is reported.
+1. **Exact hash match** → same rule. Survives reordering, and a rule moving to
+   another source.
+2. **Remaining rules, matched by source and position** → same rule. Survives
+   rewording, which is the case that matters, since §7 exists to prompt
+   rewording. Positions are only compared within one source: position 3 of
+   `stele.md` says nothing about position 3 of `.cursor/rules`.
 3. **Still unmatched** → new rule, mint an id.
 
 Pass 2 is an inference, so every id it assigns lands in `Report.Guessed` and gets
@@ -182,7 +234,8 @@ printed. A wrong guess moves a rule's log history to the wrong rule, and that mu
 be visible in a diff rather than silent.
 
 `newID` is a parameter rather than a call to `uuid.NewString` so `Reconcile` stays
-a pure function — see §2's note on injected sources.
+a pure function — see §2's note on injected sources. It also mints `Project`
+when `prev` has none; once set, `Reconcile` never changes it.
 
 **`Validate`** returns `ErrDuplicateID` when two entries share an id. That cannot
 happen from `Reconcile`, which mints fresh UUIDs, but it can happen from a merge
@@ -193,15 +246,17 @@ sharing a history is worse than a loud failure.
 
 ```go
 type Index struct {
-    Version   int
-    SourceHash string
-    Rules     []Entry
+    Version int
+    Project string            // copied from stele.lock, so the hot path never opens the lock
+    Sources map[string]string // source name → fingerprint at compile
+    Rules   []Entry
 }
 
 type Entry struct {
-    ID, Description, Body string
-    Tags, Scope           []string
-    BodyHash              string
+    ID, Source, Description, Body string
+    Tags, Scope                   []string
+    Meta                          map[string]string
+    BodyHash                      string
 }
 
 func Load(dir string) (Index, error) // ErrNoIndex. never ErrStale — see internal/source
@@ -214,11 +269,11 @@ error.
 
 ### `internal/compile` — the orchestration
 
-Compiling is seven steps across four packages:
+Compiling is these steps across four packages:
 
 ```
-source.Read → source.Parse → lock.Load → lock.Reconcile
-            → lock.Save → build the index → index.Save
+each Source.Read → lock.Load → lock.Reconcile
+                 → lock.Save → build the index → index.Save
 ```
 
 Three callers need that sequence: `stele compile`, `stele check`, and `request`
@@ -232,18 +287,30 @@ type Result struct {
     Report lock.Report
 }
 
-func Plan(root string, newID func() string) (Result, error)  // reads, writes nothing
-func Apply(root string, r Result) error                      // writes lock and index
-func EnsureFresh(root string, newID func() string) (index.Index, bool, error)
+// Plan reads every source and writes nothing.
+func Plan(ctx context.Context, root string, srcs []source.Source, newID func() string) (Result, error)
+// Apply writes the lock and the index.
+func Apply(root string, r Result) error
+// EnsureFresh re-reads only builtins, and only those whose fingerprint changed.
+// Rules from every other source are carried over from the current index.
+func EnsureFresh(ctx context.Context, root string, builtins []source.Source, newID func() string) (index.Index, bool, error)
 ```
 
 The `Plan`/`Apply` split is what makes `stele check` possible: CI runs `Plan`,
 inspects the `Report`, and never writes. `EnsureFresh` is the one `request` calls
-— it asks `source.Changed`, and only when the answer is yes does it `Plan` and
-`Apply`. The returned bool says whether it recompiled, so the caller can log it.
+— it asks each built-in source for its `Fingerprint`, and only when one differs
+does it re-read that source, reconcile and `Apply`. The returned bool says
+whether it recompiled, so the caller can log it.
 
-This is the only package outside `source` that is given the project root, and it
-holds it solely to hand to `source`.
+**`EnsureFresh` takes built-in sources only** (D45). An external source may be a
+network call to Confluence; it runs at `stele compile` and `stele check`, never
+while the agent waits. Its rules stay in the index as they were last compiled. If there is no usable
+index — none yet, or a `Version` mismatch — `EnsureFresh` builds one from the
+built-ins alone, and external rules come back at the next `stele compile`.
+
+`compile` never resolves plugins itself. `cmd/` asks `internal/plugin` for the
+sources and passes them in, which keeps `compile` free of `PATH`, executables and
+`stele.json`.
 
 ### `internal/session` — shared state between two processes
 
@@ -302,6 +369,11 @@ func Load(root string) (Policy, error) // defaults when the file is absent
 {"backstop": true, "block_on_error": false}
 ```
 
+The same file also lists plugins. `enforce.Load` decodes the two policy keys and
+ignores the rest; `internal/plugin` decodes `sources` and `checkers` and ignores
+the rest. The hook only ever needs the policy, so it never pays for plugin
+resolution.
+
 Absent means defaults, which is the normal case — `init` does not write one. A
 user creates it only to change a default. That is what lets it be JSON: a file
 nobody has to read does not need explanatory comments, so it costs no TOML
@@ -319,6 +391,8 @@ style guide's test for choosing between them points here.
 
 ```go
 type Entry struct {
+    V          int       `json:"v"`       // record format version, 1 (D50)
+    Project    string    `json:"project"` // from stele.lock (D51)
     CallID     string    `json:"call_id"`
     Timestamp  time.Time `json:"ts"`
     Brief      string    `json:"brief"`
@@ -390,7 +464,7 @@ need to know which; it only needs to know the exchange is not completing.
 
 Three is a placeholder. One would fire on the normal path, where the agent is
 blocked once and complies. Two would fire on a legitimate retry. Three gives two
-real attempts, and §12 of the spec lists it as a number the logs should settle.
+real attempts, and §13 of the spec lists it as a number the logs should settle.
 
 ### `internal/matcher` and `internal/serve`
 
@@ -403,11 +477,217 @@ not the home of it.
 `corpus` records itself before returning, because a failure the hook cannot see is
 a failure the policy cannot act on.
 
+`corpus` and `fetch` never carry `Meta`. Checker settings are for CI; the matcher
+and the agent need the prose (spec §3).
+
+### `internal/plugin` — the registry and the exec protocol
+
+The only package that knows a plugin can be either compiled in or an executable.
+Everything else sees `source.Source` and `check.Checker`.
+
+```go
+type Config struct {
+    Sources  []Ref `json:"sources"`
+    Checkers []Ref `json:"checkers"`
+    Sinks    []Ref `json:"sinks"`
+}
+
+type Ref struct {
+    Name        string          `json:"name"`
+    Config      json.RawMessage `json:"config,omitempty"` // passed to the plugin untouched
+    ShareBriefs bool            `json:"share_briefs,omitempty"` // sinks only (D53)
+}
+
+func LoadConfig(root string) (Config, error) // reads stele.json; absent means empty
+
+func Sources(root string, c Config) ([]source.Source, error)  // built-ins first, then externals
+func Builtins() []source.Source                               // what EnsureFresh gets
+func Checkers(root string, c Config) (map[string]check.Checker, error)
+func Sinks(root string, c Config) ([]Sink, error)             // externals only
+```
+
+**Built-ins** are registered by name: `stelemd` for sources, `regex` for
+checkers. They are always present and need no entry in `stele.json`. There is no
+built-in sink: every real destination is a network call, and the engine stays
+offline (ADR-0003).
+
+**Externals are resolved by one function**, and it is the security boundary
+(D43):
+
+1. The name must match `^[a-z][a-z0-9-]*$`. No separators, no dots, so no path.
+2. It must not be a built-in name.
+3. `exec.LookPath("stele-source-" + name)` (or `stele-checker-`). Go already
+   refuses a result found through a relative `PATH` entry such as `.`
+   (`exec.ErrDot`); stele does not override that.
+4. The resolved path, after `filepath.EvalSymlinks`, must not be inside the
+   project root. A `PATH` that names `./bin` by absolute path is caught here.
+
+A failure at any step is `ErrPluginNotFound` or `ErrPluginRefused`, and the
+message names the executable it looked for. Nothing is ever run from a path
+written in `stele.json`, because `stele.json` is committed and a clone must not
+run code it brought with it.
+
+**The protocol, version 1.** One process per call: stele writes one JSON request
+to stdin and closes it, the plugin writes one JSON response to stdout and exits 0.
+
+| `op` | Request | Response |
+| :-- | :-- | :-- |
+| `describe` | — | `{"kind": "source" \| "checker" \| "sink", "protocols": [1], "version": "1.4.0"}` |
+| `fingerprint` | `root`, `config` | `{"fingerprint": "…"}` |
+| `read` | `root`, `config` | `{"fingerprint": "…", "rules": [{file, position, line, description, tags, scope, body, meta}]}` |
+| `validate` | `config`, `rules: [{id, meta}]` | `{"problems": [{"rule_id", "message"}]}` |
+| `check` | `root`, `config`, `files`, `rules: [{id, body, scope, meta}]` | `{"violations": [{rule_id, file, line, column, message}]}` |
+| `push` | `config`, `project`, `records: [...]` — log entries and check reports, each with its own `v` | `{"accepted": n}` |
+
+A `read` response may set `id` on a rule; only a source that owns its ids should
+(D52).
+
+**Sinks** (ADR-0003). `stele push` reads `.stele/log.jsonl` from the offset
+stored in `.stele/push/<sink>.json`, sends the new entries, and advances the
+offset only after the sink accepts them. `stele check --push` sends the report
+it just produced. Unless `share_briefs` is set for that sink, `brief` is removed
+from every record before it is sent. Neither runs from `stele hook` or
+`stele mcp`.
+
+Every request and response carries `"protocol": 1`. A plugin sent a version it
+does not speak answers `{"protocol": 1, "error": "unsupported protocol 2; speaks [1]"}`.
+Any response may be `{"error": "…"}` instead of a result. stderr is passed
+through to the user. A non-zero exit, invalid JSON or a missing field is
+`ErrProtocol`, naming the plugin.
+
+Each call has a timeout: 30 seconds for `read` and `check`, 5 for the rest,
+overridable per plugin in `stele.json` (`"timeout": "2m"`). `describe` runs once
+per process, before the first real call, so a plugin of the wrong kind fails
+early and clearly.
+
+The adapter between the protocol and the interfaces — `execSource` and
+`execChecker` — lives here and is unexported. To `compile` and `check`, an
+external source is indistinguishable from `stelemd`.
+
+### `internal/check` — `stele check`
+
+```go
+type Checker interface {
+    Name() string
+    Validate(rules []Rule) []Problem                         // settings, before any file is read
+    Check(ctx context.Context, root string, rules []Rule, files []string) ([]Violation, error)
+}
+
+type Rule struct {          // what a checker sees of index.Entry
+    ID, Body string
+    Scope    []string
+    Meta     map[string]string
+}
+
+type Problem struct {
+    RuleID, Message string
+}
+
+type Violation struct {
+    RuleID       string
+    File         string
+    Line, Column int
+    Message      string
+}
+
+type Report struct {
+    V          int          `json:"v"`       // 1 (D50)
+    Project    string       `json:"project"` // D51
+    Problems   []Problem    // invalid rules: exit 1
+    Violations []Finding    // Violation + Blocking + rule excerpt
+}
+
+func Run(ctx context.Context, root string, idx index.Index, files []string, cs map[string]Checker) (Report, error)
+func (r Report) ExitCode() int // 0, 1; errors from Run are 2
+```
+
+`Run` groups rules by their `check` key and calls each checker once, with only
+its own rules and, per rule, only the files that match the rule's `scope`. A rule
+whose `check` names no known checker is a `Problem`, not a skip. Whether a
+violation is blocking is read from the rule's `blocking` key — default `true`
+when `check` is set — never from the checker (spec §8).
+
+`Run` takes an `index.Index`, not rule files: `cmd/` calls `compile.Plan` first
+and hands over the planned index (D40). `Plan`'s `Report` also tells `cmd/`
+whether the lock is out of date, which is a `Problem` too.
+
+**Choosing files is `cmd/`'s job**, through `git`: `git diff --name-only
+--diff-filter=ACMR` against `HEAD` or `<base>...HEAD`, `git ls-files` for
+`--all`, or the paths given. `check` receives a plain list of paths relative to
+the root, so it never runs `git` and its tests need no repository.
+
+#### `internal/check/regex` — the built-in checker
+
+```go
+func Match(pattern *regexp.Regexp, content []byte) []Location // pure
+```
+
+Reads `pattern` from `Meta` and compiles it with Go's `regexp` (RE2). `Validate`
+reports a missing or invalid pattern. `Check` reads each file once, runs every
+rule's pattern over the whole content, and turns each match offset into a line
+and column. An optional `message` key replaces the default message. Binary
+files — a NUL in the first 8 KB — are skipped.
+
+### `internal/status` — `stele status`
+
+```go
+type Status struct {
+    V        int           `json:"v"` // 1 (D50)
+    Project  string        `json:"project"`
+    Binary   string        `json:"binary_version"`
+    Stamped  string        `json:"installed_version"` // what init stamped
+    Adapters []AdapterInfo `json:"adapters"`          // which artifacts are present
+    Plugins  []PluginInfo  `json:"plugins"`           // kind, name, found on PATH, version from describe
+    Sources  []SourceInfo  `json:"sources"`           // name, fingerprint, rule count
+    Fresh    bool          `json:"index_fresh"`
+}
+
+func Collect(ctx context.Context, root string, c plugin.Config, adapters []adapter.Adapter) (Status, error)
+```
+
+Read-only. It runs `describe` on external plugins to learn their versions, so
+like `compile` it may start plugins, and like `compile` it never runs on the hot
+path. Without `--format json` it prints the same as a short human summary.
+
+This is the whole surface a dashboard uses to see an install (D54). A dashboard
+never writes to a repository; it proposes a change to `stele.json` that a human
+reviews.
+
+### `internal/adapter` — the agent adapter slot
+
+Everything that knows one agent's shape. Adapters are always compiled in
+(D44): they run on the hot path, so there is nothing to resolve.
+
+```go
+type Adapter interface {
+    Name() string
+    Artifacts(version string) []Artifact                    // what init writes for this agent
+    ParseHook(stdin []byte) (backstop.Input, string, error) // the input and the session id
+    RenderDecision(d backstop.Decision) (stdout []byte, exitCode int)
+}
+
+type Artifact struct {
+    Path   string // relative to the root
+    Merge  bool   // a JSON entry merged into an existing file, not a whole file
+    Bytes  []byte
+}
+```
+
+`Artifact` is defined here, not in `install`, so `install` imports `adapter` and
+never the reverse.
+
+`claudecode` is the only implementation in v1. It owns everything in §4: the
+payload fields, the `hookSpecificOutput` shape, the `.claude/settings.json` hook
+entry, the MCP registration and the matcher subagent file. `backstop.Decide` and
+`install` stay agent-neutral; a Cursor adapter adds a subpackage and touches
+neither.
+
 ### `internal/install`
 
-Writes five marked artifacts and removes exactly those (D28). Every artifact
-carries `stele:v<version>` in a comment or a JSON field so `uninstall` can
-identify its own work and leave hand edits alone.
+Writes five marked artifacts and removes exactly those (D28). Three of them come
+from the adapter's `Artifacts`. Every artifact carries `stele:v<version>` in a
+comment or a JSON field so `uninstall` can identify its own work and leave hand
+edits alone.
 
 ---
 
@@ -513,8 +793,9 @@ blocking in the same millisecond can cross on (1); (2) removes even that.
 
 ## 6. Locating the project root
 
-Walk up from `cwd` for a directory containing `stele.md`. If none, walk up for one
-containing `.git/` and use that.
+Walk up from `cwd` for a directory containing `stele.md` or `stele.json`. If none,
+walk up for one containing `.git/` and use that. `stele.json` counts because a
+repository may take all its rules from other sources and have no `stele.md`.
 
 `stele.md` comes first because it is what the user placed deliberately — in a
 monorepo, a subproject with its own rules should use them rather than the root's.
@@ -571,15 +852,21 @@ Following Code Review Comments and the style guide.
 
 ```go
 var (
-    ErrNoIndex      = errors.New("no index")        // index
-    ErrDuplicateID  = errors.New("duplicate rule id") // lock
-    ErrNoRulesFile  = errors.New("no rules file")     // source
+    ErrNoIndex        = errors.New("no index")             // index
+    ErrDuplicateID    = errors.New("duplicate rule id")    // lock
+    ErrPluginNotFound = errors.New("plugin not found")     // plugin
+    ErrPluginRefused  = errors.New("plugin refused")       // plugin: inside the repo, bad name
+    ErrProtocol       = errors.New("plugin protocol error") // plugin
 )
 ```
 
 There is no `ErrStale`. Staleness is not an error and not the index's business —
-it is a boolean answer from `source.Changed`, which is the only thing that can
-compute it (D40).
+it is a comparison of a source's `Fingerprint` with the index, and only a source
+can compute a fingerprint (D40). There is no `ErrNoRulesFile` either: a missing
+`stele.md` is zero rules, because other sources may supply them.
+
+`stele check` maps the plugin errors to exit 2, never 0: a check that could not
+run has not passed.
 
 The failure table in spec §5 is a switch over these. That is the reason they are
 sentinels rather than strings: `backstop.Decide` has to distinguish "never
@@ -619,7 +906,7 @@ top-level `assets/` is unreachable from the package that needs it. This is a
 compiler constraint, not a preference.
 
 Embedding rather than shipping files means `stele init` works from a single
-binary. `matcher-agent.md` is written to disk by design — spec §11 records that as
+binary. `matcher-agent.md` is written to disk by design — spec §12 records that as
 a known weakness, since it lands in a file the governed agent can edit.
 
 The block message and the matcher prompt are the two highest-leverage strings in
@@ -633,10 +920,17 @@ string literals scattered through the code, so they can be revised and diffed.
 
 | Layer | Approach |
 | :-- | :-- |
-| `source.Parse` | Table-driven. Malformed input, no metadata, empty bodies, CRLF, unicode. Pure, so no fixtures. |
-| `source.Changed` | Temp directory. Unchanged, edited, missing, first run with no known hash. |
-| `lock.Reconcile` | Table-driven with a stub `newID`. Reorder, reword, insert, delete, and reword-plus-reorder — the case that mismatches. |
-| `compile.Plan` / `Apply` | Temp directory with a real `stele.md`. Round-trip, then edit and recompile to check ids carry over. `Plan` asserted to write nothing. |
+| `stelemd.Parse` | Table-driven. Malformed input, no metadata, empty bodies, CRLF, unicode, unknown keys kept in `Meta`, a body opening with `Note:`. Pure, so no fixtures. |
+| `stelemd` fingerprint | Temp directory. Unchanged, edited, missing file. |
+| `lock.Reconcile` | Table-driven with a stub `newID`. Reorder, reword, insert, delete, reword-plus-reorder — the case that mismatches — and a rule moving between two sources. |
+| `compile.Plan` / `Apply` | Temp directory with a real `stele.md` and a fake second source. Round-trip, then edit and recompile to check ids carry over. `Plan` asserted to write nothing. `EnsureFresh` asserted never to call a non-built-in source. |
+| `plugin` resolution | Temp `PATH`. Found, not found, bad name, built-in name reused, executable inside the root, symlink into the root. |
+| `plugin` protocol | A tiny Go test plugin built by `TestMain`, scripted by an env var: good answer, wrong protocol, `error` field, invalid JSON, non-zero exit, timeout. |
+| `check.Run` | Table-driven with a fake checker. Grouping by `check`, `scope` filtering, `blocking` default, unknown checker, exit codes. |
+| `lock.Reconcile`, ids from a source | Supplied id kept, clash is an error, `Project` minted once and never changed. |
+| sinks / `stele push` | The test plugin as a sink: offset advances only on success, no record sent twice, `brief` stripped unless `share_briefs`. |
+| `status` | Temp directory: JSON shape and `v`, plugin found and missing, stale index. |
+| `regex` | Table-driven over `Match`: line and column, multiple matches, multi-line content, CRLF, binary skip, invalid pattern. |
 | `backstop.Decide` | Table-driven over the full cross-product of state, policy, error and `HasRules`. Pure, so no fixtures. |
 | `matcher` | Table-driven. Cap, truncation, empty selection. |
 | `index`, `session`, `journal` | Temp directories. Concurrent-write tests for the replace path, including a locked target. |
@@ -655,14 +949,24 @@ or errors and call `t.Helper()`; they do not fail tests themselves. Comparisons 
 ```
 stele init         install the five artifacts
 stele uninstall    remove exactly what init wrote
-stele compile      compile.Plan + compile.Apply; prints the reconcile report
-stele check        compile.Plan only, writes nothing (for CI)
+stele compile      every source, then compile.Plan + compile.Apply; prints the reconcile report
+stele check        validate the rules, run checkers on changed files; writes nothing (for CI)
+                     [--base <ref>] [--all] [--format text|json] [--push] [path...]
+stele status       describe the install [--format text|json]
+stele push         send new log entries to every listed sink
 stele mcp          run the MCP server on stdio
 stele hook         read a PreToolUse payload on stdin, decide
 ```
 
-Standard-library `flag` and a switch on `os.Args[1]`. Six subcommands with almost
-no flags does not justify a CLI framework.
+Standard-library `flag` and a switch on `os.Args[1]`. Eight subcommands with a
+handful of flags does not justify a CLI framework.
+
+`compile`, `check`, `status` and `push` are the only commands that run external
+plugins. `mcp` and `hook` never do (D45).
+
+`check` exits 0 when the rules are valid and nothing blocking was found, 1 for an
+invalid rule or a blocking violation, and 2 when stele or a plugin could not run
+(spec §8). It needs `git` on `PATH` unless explicit paths are given.
 
 **Dependencies: two.** `github.com/modelcontextprotocol/go-sdk` and
 `github.com/google/uuid`, plus `go-cmp` in tests. Config is JSON rather than TOML
@@ -702,11 +1006,14 @@ block stele's own matcher subagent.
 
 ## 13. Open
 
-- **`stele check` in CI** — worth having, not yet specified. Duplicate ids should
-  certainly fail. A `stele.lock` that is out of date with `stele.md`, arguably —
-  that is the check that catches someone editing rules without recompiling.
+- **Protocol version 2.** Nothing needs it yet. When something does, stele has
+  to speak both versions for a while, and `describe` is where it finds out which
+  one a plugin speaks.
 - **`journal` rotation** — the log grows without bound. Not a v1 problem at one
   entry per turn, but it has no answer.
 
 *Windows line endings were open here while compile wrote back to `stele.md`. D38
 removed the write path, so nothing has to preserve them.*
+
+*`stele check` in CI was open here. Spec §8 now specifies it: invalid rules,
+duplicate ids and a lock out of date with the sources all fail.*

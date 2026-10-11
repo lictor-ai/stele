@@ -330,7 +330,7 @@ Known weaknesses to take up when we return:
 
 ## 9\. State of the argument
 
-**Where the numbers live.** D1–D11 and D36 are discussion-level decisions and are recorded here. D12–D35 are v1 implementation decisions and live in `docs/superpowers/specs/2026-08-29-stele-v1-design.md`, which is authoritative for the first release. §9.2 below remains the discussion-level state — the spec closes or defers most of it for v1, and says which.
+**Where the numbers live.** D1–D11 and D36 are discussion-level decisions and are recorded here. D12–D35 and D37 onward are v1 implementation decisions and live in `docs/superpowers/specs/2026-08-29-stele-v1-design.md`, which is authoritative for the first release; D41–D48 come from `docs/adr/0002-engine-and-extension-points.md`, and D49–D55 from `docs/adr/0003-ready-for-a-dashboard.md`. §9.2 below remains the discussion-level state — the spec closes or defers most of it for v1, and says which.
 
 ### 9.1 Decided
 
@@ -386,7 +386,7 @@ Answered for v1 by D12. The row stays because that answer does not generalise to
 
 | ID | Question | Where |
 | :---- | :---- | :---- |
-| `O-ENTRY` | Is the derived floor good enough to be the default entry path? Empirical, and the architecture does not depend on the answer. | §1, §6 |
+| `O-ENTRY` | Is the derived floor good enough to be the default entry path? Empirical, and the architecture does not depend on the answer. Deriving rules from prose ships after v1 as a paid source plugin (ADR-0002). | §1, §6 |
 | `O-CTX-SOURCE` | Under `O-INPUTS`: how does surrounding code reach the matcher — declared paths, read ledger, or both? | §4.3 |
 | `O-CTX-RES` | Under `O-INPUTS`: at what resolution — full file contents or cheap extracts? | §4.3 |
 | `O-LOGSIG` | Which log signals do we act on, and do we apply or only propose? | §7 |
