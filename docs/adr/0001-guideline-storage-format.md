@@ -1,7 +1,16 @@
 # Store guidelines as Markdown with YAML frontmatter, compiled to agent-native formats
 
-* Status: accepted
+* Status: superseded by [ADR-0002](0002-engine-and-extension-points.md)
 * Date: 2026-10-11
+
+> **Superseded.** This format conflicts with the v1 spec on file location, format,
+> rule identity and delivery, and it is too heavy for a single developer. v1 uses
+> `stele.md` as described in `docs/superpowers/specs/2026-08-29-stele-v1-design.md`,
+> with the extension points in ADR-0002. What follows is kept as a record of
+> post-v1 enterprise ideas: owners, versions, severity, guideline documents, and
+> compiling rules into each agent's native files. It is not a v1 format, and the
+> `.stele/guidelines/` location below would be gitignored and deleted by
+> `stele uninstall` under v1.
 
 ## Context and Problem Statement
 

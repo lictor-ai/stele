@@ -3,10 +3,17 @@
 **Date:** 2026-08-29
 **Status:** approved, ready for planning
 **Depends on:** `stele-design-doc.md`
+**Extended by:** `docs/adr/0002-engine-and-extension-points.md`,
+`docs/adr/0003-ready-for-a-dashboard.md`
 
 `stele-design-doc.md` is the discussion document. It carries the reasoning, the
 vocabulary, and the arguments. This spec is narrower: it is the set of decisions
 that define v1, and it is the authority where the two disagree.
+
+ADR-0002 adds the engine's extension points: sources, agent adapters and
+checkers. ADR-0003 fixes the formats and ids a later org-wide dashboard needs.
+This spec carries both ADRs' decisions. ADR-0001 is superseded and is not a v1
+format.
 
 ---
 
@@ -15,7 +22,11 @@ that define v1, and it is the authority where the two disagree.
 A tool that puts the right project rules in front of a coding agent at the moment
 it is about to write code.
 
-**v1 does not infer anything.** The user writes rules in one file, in stele's
+It is also an open engine. Where rules come from (sources), which coding agent
+runs it (agent adapters), and how code is checked in CI (checkers) are slots
+that plugins fill. v1 ships one of each. See §2.4.
+
+**v1 does not infer anything.** The user writes rules in `stele.md`, in stele's
 format. stele parses them, matches them to the task with a subagent, delivers the
 matches, and logs what happened. Reading rules out of a `CLAUDE.md` and deriving
 structure from prose is the roadmap, not the first release.
@@ -70,26 +81,31 @@ is how a stateless binary knows three invocations are one exchange.
 ### 2.2 Cold path
 
 ```
-stele.md  ──  stele compile  ──►  .stele/index.json
- read only        │                stele.lock
-                  └── never writes back to stele.md
+stele.md ─┐
+other     ├─ sources ── stele compile ──►  .stele/index.json
+sources  ─┘ read only         │             stele.lock
+                              └── never writes back to a rule file
 ```
 
-A parse and a validate. Plain Go. No model, no splitting, no derivation.
+A parse and a validate. The built-in `stele.md` source is plain Go: no model, no
+splitting, no derivation. Other sources are plugins (§2.4).
 
-**Only two operations in all of stele may open `stele.md`** (D40):
+**Only source plugins may open rule files** (D40). A source does two things, and
+nothing else in stele may do either:
 
-1. **Read and transform** — parse it, reconcile ids, write the index and the lock.
-2. **Has it changed** — hash it, compare against the hash the index recorded.
+1. **Read and transform** — turn its files into rules, which compile then
+   reconciles against the lock and writes into the index.
+2. **Has it changed** — return a fingerprint, compared against the one the index
+   recorded for that source.
 
-Everything else — the matcher, the tools, the hook — reads `index.json` and never
-learns where `stele.md` is. One package holds that path.
+Everything else — the matcher, the tools, the hook, the checkers — reads
+`index.json` and never learns where a rule file is.
 
-This is a boundary, not a convenience. It keeps the user's file out of the hot
-path except for a hash check, it means the index carries its source hash without
-ever having to interpret it, and it makes "is the index stale" a question with
-exactly one owner instead of a concern smeared across whichever caller happened to
-need it.
+This is a boundary, not a convenience. It keeps the user's files out of the hot
+path except for a fingerprint check, it means the index carries each source's
+fingerprint without ever having to interpret it, and it makes "is the index
+stale" a question with exactly one owner per source instead of a concern smeared
+across whichever caller happened to need it.
 
 ### 2.3 Process model and shared state
 
@@ -108,14 +124,15 @@ which also means `stele mcp` holds nothing between calls and is a thin dispatche
 
 ```
 stele.md                  the rules. hand-written.        USER WRITES, stele reads
-stele.json                enforcement policy, optional.   USER WRITES, stele reads
-stele.lock                id ↔ rule. committed.           STELE WRITES, user reads
+stele.json                policy and plugins, optional.   USER WRITES, stele reads
+stele.lock                id ↔ rule, project id. committed. STELE WRITES, user reads
 
 .stele/                   everything else generated. fully gitignored.
   index.json              compiled corpus
   log.jsonl               append-only
   state/<session>.json    current prompt_id, arm state, touched dirs
   state/current           pointer to the session that last blocked
+  push/<sink>.json        how far stele push got, per sink
   .gitignore              contains "*"
 ```
 
@@ -153,12 +170,63 @@ same millisecond can cross on (1); (2) removes even that.
 deleted once they are older than 24 hours. `stele uninstall` removes the directory
 outright.
 
+### 2.4 Extension points
+
+ADR-0002 defines three slots, and v1 ships one plugin in each. ADR-0003 adds a
+fourth, sinks, with no plugin in v1.
+
+| Slot | Does | v1 ships | How it loads |
+| :-- | :-- | :-- | :-- |
+| **Source** | Turns rule files into rules. | `stele.md` | Built in, or an external `stele-source-<name>` |
+| **Agent adapter** | Hook, MCP registration, subagent and skills for one agent. | Claude Code | Always built in, always free |
+| **Checker** | Checks code against rules in CI (§8). | `regex` | Built in, or an external `stele-checker-<name>` |
+| **Sink** | Sends log entries and check reports elsewhere (ADR-0003). | none | External only, `stele-sink-<name>` |
+
+**External plugins are executables** that speak versioned JSON over stdin and
+stdout: one request in, one response out. They can be closed source and written
+in any language. The protocol is in `docs/architecture.md`, `internal/plugin`.
+
+**Only plugins listed in `stele.json` and found on `PATH` ever run** (D43).
+stele never runs an executable from inside the repository, even when `PATH`
+points there. `stele.json` is committed, so this is what stops a cloned
+repository from running code it brought with it.
+
+```json
+{
+  "backstop": true,
+  "block_on_error": false,
+  "sources":  [{"name": "cursor-rules"}],
+  "checkers": [{"name": "semgrep", "config": {}}]
+}
+```
+
+**Nothing leaves the machine unless a sink is listed** (D53). Sinks run only from
+`stele push` and `stele check --push`. A sink receives briefs only with
+`"share_briefs": true`; code never leaves.
+
+**`stele status --format json`** describes the install: binary and stamped
+versions, adapters and what they installed, plugins with their versions and
+whether they are on `PATH`, sources with fingerprints and rule counts, index
+freshness, and the project id (D54). It is what a later dashboard reads.
+
+`sources` adds to the built-in `stele.md` source; it never replaces it. A
+repository without a `stele.md` simply gets no rules from it. Built-in plugins
+need no entry.
+
+**External plugins never run on the hot path** (D45). `stele compile` and
+`stele check` run them. `request` refreshes built-in sources only, and keeps the
+rules each external source produced at the last compile. The hook never runs a
+plugin of any kind.
+
 ---
 
 ## 3. The rule format
 
-One file: **`stele.md`, at the repository root.** Rules are separated by `---` on
-its own line.
+**`stele.md`, at the repository root, is the default source** (D18). `stele.json`
+can list more (§2.4). This section describes the `stele.md` format. Every source,
+whatever its own format, produces the same thing: rules with a body and metadata.
+
+In `stele.md`, rules are separated by `---` on its own line.
 
 It sits at the root, not inside `.stele/`, because the user writes it and owns it.
 `.stele/` is the tool's working directory and holds nothing a human wrote.
@@ -189,13 +257,38 @@ for a rule that has no metadata. A blank line closes the metadata; `---` separat
 rules. Consequence: a rule body cannot begin with a line that looks like
 `key: value`. Documented, not worked around.
 
+A metadata key is lowercase letters, digits, `_` and `-`, starting with a letter.
+So a body that opens with `Note: ...` is still body, because `Note` is not a key.
+A value is the rest of the line, trimmed, with one pair of matching outer quotes
+removed. `[a, b]` is a list.
+
 **Fields.** All optional.
 
 | Field | Meaning |
 | :-- | :-- |
 | `description` | What the matcher keys on. Absent means the body is used. Useful only for long rules. |
 | `tags` | Free vocabulary. stele ships none and imposes none. |
-| `scope` | Path globs. A hint to the matcher, not a hard filter — see `O-CORPUS`. |
+| `scope` | Path globs. A hint to the matcher, not a hard filter — see `O-CORPUS`. For a checker it is a filter (§8). |
+| `check` | The checker that checks this rule in CI, for example `regex`. Absent means the rule is guidance only. |
+| `blocking` | `true` or `false`: whether a violation fails `stele check`. Default `true` when `check` is set. |
+
+**Unknown keys are kept, not rejected** (D46). They travel with the rule into the
+index, and the rule's checker receives them. That is how checker settings work:
+
+```markdown
+tags: [security]
+check: regex
+pattern: (?i)(password|api_key|secret)\s*[:=]\s*"[^"]{8,}"
+
+Never put credentials in source code. Read them from the environment.
+```
+
+`pattern` means nothing to stele. It means something to the `regex` checker. It
+also means the format can grow: an `owner:` key added later breaks no file that
+exists today.
+
+The matcher and the agent never see checker keys. `corpus` and `fetch` carry
+description, tags, scope and body only. An agent needs the prose, not the check.
 
 **Identity lives in a lockfile, `stele.lock`.** Every rule gets a UUID. The user
 never writes one and never sees one in `stele.md`.
@@ -216,17 +309,25 @@ stele.lock    id ↔ rule. stele writes, user never edits. committed.
 
 `stele.lock` is the same idea as `go.sum` or `package-lock.json`: produced by the
 tool, committed so the whole team and every fresh clone share it, never
-hand-edited. It holds one entry per rule — id, body hash, position.
+hand-edited. It holds one entry per rule — id, the source the rule came from,
+body hash, and position within that source — and a `project` id: a UUID minted
+by the first compile that identifies this repository across an organization
+(D51).
 
 It must be committed. In `.stele/` it would be gitignored, and an id that dies on
 a fresh clone or differs between developers is not an identity.
 
 ### Matching rules to ids across an edit
 
-Compile reconciles `stele.md` against `stele.lock` in three passes:
+Compile reconciles the rules from every source against `stele.lock` in three
+passes, after one step that is not a guess:
 
-1. **Same hash** → same rule. Handles reordering.
-2. **Leftovers, same position** → same rule. Handles rewording, which is the case
+0. **The source supplied an id** → use it as-is (D52). A centrally managed rule
+   must have the same id in every repository. `stele.md` never supplies one. A
+   supplied id that clashes with another rule's is a loud error.
+1. **Same hash** → same rule. Handles reordering, and a rule moving to another
+   source.
+2. **Leftovers, same source and same position** → same rule. Handles rewording, which is the case
    that matters: §7 tells you a rule's wording is bad, you fix it, and the id has
    to survive or the observations that prompted the fix are orphaned.
 3. **Still unmatched** → a new rule. Mint an id.
@@ -276,14 +377,15 @@ backstop path, and the agent names it on the tool path. Both are the `O-INPUTS`
 recommended v1 set, unchanged from §4.3.
 
 Returns a `call_id` and a short instruction to dispatch the `stele-matcher`
-subagent. Recompiles first if `stele.md` has changed since the index was built —
-this is the only place staleness is checked, and the only place a recompile
-happens during a session.
+subagent. Recompiles first if a built-in source has changed since the index was
+built — this is the only place staleness is checked, and the only place a
+recompile happens during a session. External sources are not run here (§2.4).
 
 ### `stele.corpus(call_id) -> { rules: [{ id, description, tags, scope, body }] }`
 
 The whole index. Called by the subagent, so this lands in the subagent's context
-and nowhere else. Full corpus, no pre-filter (`O-CORPUS`).
+and nowhere else. Full corpus, no pre-filter (`O-CORPUS`). Checker keys (§3) are
+left out.
 
 ### `stele.fetch(call_id, ids) -> { rules: [...], truncated: bool }`
 
@@ -331,7 +433,7 @@ were actually delivered, and the only one an agent cannot fake by calling
 comparison is on the file's immediate parent directory, matched exactly: writing
 `internal/api/v1/x.go` after `internal/api/y.go` re-arms, because `internal/api/v1`
 has not been written to this turn. Ancestors do not count as touched. This is
-deliberately the eager reading, and §12 lists it as the thing the logs should
+deliberately the eager reading, and §13 lists it as the thing the logs should
 confirm or narrow.
 
 **The hook stands aside inside subagents.** The payload carries `agent_type` when
@@ -356,6 +458,8 @@ should explore further and call then. See §4.2 of the design doc.
 ```json
 {"backstop": true, "block_on_error": false}
 ```
+
+The same file lists plugins (§2.4). This section covers only the two policy keys.
 
 `backstop` — block the first write of a turn until rules are delivered.
 `block_on_error` — block when the matcher itself fails.
@@ -413,7 +517,8 @@ a guarantee that code never lands without rules, and it should not be sold as on
 ## 6. Install
 
 `stele init` writes five things. Each carries a marker so `stele uninstall`
-removes exactly those and nothing else.
+removes exactly those and nothing else. Items 1–3 are the Claude Code agent
+adapter's work (§2.4); another adapter writes its own agent's equivalents.
 
 1. The `PreToolUse` hook, in `.claude/settings.json`
 2. The MCP server registration
@@ -446,12 +551,14 @@ spawn story changes for them.
 
 ## 7. Logging
 
-`.stele/log.jsonl`. Append-only, local, gitignored, never leaves the machine.
+`.stele/log.jsonl`. Append-only, local, gitignored. It never leaves the machine
+unless the user lists a sink and runs `stele push` (§2.4).
 
-One entry per `fetch`:
+One entry per `fetch`. `v` is the record's format version and `project` the
+repository's id (D50, D51):
 
 ```json
-{"call_id":"...","ts":"...","brief":"...","target_path":"...",
+{"v":1,"project":"...","call_id":"...","ts":"...","brief":"...","target_path":"...",
  "index_hash":"...",
  "selected":[{"id":"7f3a2b1c-...","excerpt":"Never build SQL by string concat..."}],
  "tokens":412,"truncated":false}
@@ -482,7 +589,74 @@ until there is data.
 
 ---
 
-## 8. Decisions
+## 8. Checking code: `stele check`
+
+The hook and the MCP tools put rules in front of the agent before it writes.
+`stele check` is the other half: it checks code against those rules in CI, after
+it is written. It is how rules that can be checked by a tool get checked (D47).
+
+It does two jobs, in this order.
+
+**1. Validate the rules.** It compiles every source, including external ones,
+and writes nothing. It fails when:
+
+- a rule file does not parse — the error names the file and the line;
+- two lock entries share an id;
+- `stele.lock` is out of date with the sources — the message says to run
+  `stele compile` and commit the lock;
+- a rule's `check` names a checker that is neither built in nor listed in
+  `stele.json`;
+- a checker rejects a rule's settings, such as a `regex` rule with no `pattern`
+  or a pattern that does not compile.
+
+A stale lock is an error and not a warning: CI would otherwise report violations
+against ids that exist on nobody's machine.
+
+**2. Run the checkers on the selected files.**
+
+```
+stele check                 files changed against HEAD: staged, unstaged, untracked
+stele check --base <ref>    files changed between <ref> and HEAD. In CI: --base origin/main
+stele check --all           every tracked file
+stele check <path>...       exactly these files
+```
+
+Deleted files are skipped. A file is checked whole, not just its changed lines,
+so a violation on an untouched line of a changed file is reported. That is
+simpler and predictable; narrowing to changed lines can come later.
+
+A checker receives only the rules that name it, and for each rule only the files
+that match its `scope`. A rule with no `scope` gets every selected file.
+
+**Output.** One line per violation: file, line and column, the rule id with an
+excerpt (§12), the message, and whether it is blocking. `--format json` gives the
+same as JSON for other tools, with `"v": 1` and the `project` id at the top
+(D50). `--push` also hands that report to every listed sink.
+
+**Exit codes.**
+
+| Code | Meaning |
+| :-- | :-- |
+| 0 | Rules are valid and no blocking violation was found. Non-blocking ones are printed as warnings. |
+| 1 | A rule is invalid, or a blocking violation was found. |
+| 2 | stele or a plugin could not run: a missing executable, a protocol error, a crash. |
+
+A plugin listed in `stele.json` but not installed is exit 2, never a pass. A CI
+job that silently skips a check is worse than a red build. The message names the
+executable it looked for.
+
+**The `regex` checker.** Built in. It reads the rule's `pattern` as a Go regular
+expression (RE2 syntax) and reports one violation per match, with the line and
+column where the match starts. An optional `message` key replaces the default
+message, which is the rule's excerpt.
+
+`stele check` reads rules from the index it just planned, never from rule files
+(D40). It does not touch the hook, the session state or the log. The log records
+selections at coding time; it is not a CI report.
+
+---
+
+## 9. Decisions
 
 New decisions, continuing the design doc's D-series.
 
@@ -493,13 +667,13 @@ New decisions, continuing the design doc's D-series.
 | D14 | A `call_id` issued at `request` ties the exchange together. | M1 |
 | D15 | The hook disarms on a successful `fetch`. | M3 |
 | D16 | Two flags: `backstop` (default on), `block_on_error` (default off). | M2 |
-| D17 | v1: the user supplies the structure. stele infers nothing. | `O-ENTRY` |
-| D18 | One file, `stele.md`, rules separated by `---`. | `O-RULE-LOC` |
+| D17 | v1: the user supplies the structure. stele infers nothing. Extracting rules from guideline prose comes after v1, as a paid source plugin (ADR-0002). | `O-ENTRY` |
+| D18 | `stele.md`, rules separated by `---`, is the default source. `stele.json` can list more sources. *Amended by ADR-0002; was "one file".* | `O-RULE-LOC` |
 | D19 | The delimiter defines the unit. No splitting. | `O-GRAIN` |
-| D20 | Id is a UUID held in `stele.lock`, which stele writes and commits. Rules are matched to ids by hash, then by position. The body hash is for matching, staleness and drift — never identity itself. | `O-RULE-ID` |
+| D20 | Id is a UUID held in `stele.lock`, which stele writes and commits. Each entry records the source its rule came from. Rules are matched to ids by hash, then by position within the same source. The body hash is for matching, staleness and drift — never identity itself. | `O-RULE-ID` |
 | D38 | stele never modifies `stele.md` or `stele.json`. It reads them. `init` may create `stele.md` when absent; nothing writes to it after that. Everything stele produces goes in its own files. | D8 |
 | D21 | All metadata is authored. Nothing is derived, so nothing is reconciled. | `O-METADATA` |
-| D22 | Compile is a Go parser. No model, no work order, no skill. | `O-COMPILE-PKG` |
+| D22 | Compile is a Go parser. No model, no work order, no skill. Binds the built-in sources; an external source is a plugin (D42). | `O-COMPILE-PKG` |
 | D23 | Compile runs automatically when the source hash changes. | `O-COMPILE-WHEN` |
 | D24 | `stele.md`, `stele.json` and `stele.lock` live at the repository root and are committed. All of `.stele/` is generated and gitignored. | `O-INDEX-VCS` |
 | D25 | No starter tag vocabulary. Whatever the user writes. | `O-TAGS` |
@@ -512,9 +686,34 @@ New decisions, continuing the design doc's D-series.
 | D32 | `init` stamps a version; the hook warns on mismatch. | M6 |
 | D37 | Hook and MCP mode are separate processes sharing state on disk, keyed per session. | M8 |
 | D39 | Failures are recorded in session state so the hook can see them, and a counter applies the failure policy after 3 blocks with no `fetch`. | G1, G2 |
-| D40 | Exactly two operations may open `stele.md`: read-and-transform, and has-it-changed. Everything else reads `index.json`. | G3 |
+| D40 | Only source plugins open rule files, and only to read-and-transform or to answer has-it-changed. Everything else reads `index.json`. *Amended by ADR-0002; was "only one package opens `stele.md`".* | G3 |
 
-Already argued in the design doc's prose but never recorded in §9.1. Recorded here:
+From ADR-0002, `docs/adr/0002-engine-and-extension-points.md`:
+
+| # | Decision | Closes |
+| :-- | :-- | :-- |
+| D41 | Three extension slots: source, agent adapter, checker. v1 ships `stele.md`, Claude Code and `regex`. | — |
+| D42 | Built-in plugins are compiled in. External plugins are executables, `stele-source-<name>` and `stele-checker-<name>`, speaking versioned JSON over stdin/stdout. | — |
+| D43 | Only plugins listed in `stele.json` and found on `PATH` run. Never an executable inside the repository. | — |
+| D44 | Agent adapters are compiled into the binary and are always free. | — |
+| D45 | External plugins never run on the hot path. `request` refreshes built-in sources only. | — |
+| D46 | Unknown metadata keys are kept and passed to checkers. `check` and `blocking` are the keys stele itself reads. | — |
+| D47 | `stele check` validates the rules and runs checkers on changed files, failing CI on invalid rules and blocking violations. | design doc §8.2, rules checked by running a command |
+| D48 | Free if a single developer would want it. Paid only for needs that only an organization has. | — |
+
+From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
+
+| # | Decision | Closes |
+| :-- | :-- | :-- |
+| D49 | A future dashboard is an ordinary client of public formats. The engine has no private API for it. | — |
+| D50 | Every public format carries a version: the log entry, the `stele check` JSON report and the `stele status` JSON gain `"v": 1`. | — |
+| D51 | `stele.lock` holds a `project` UUID, minted once and committed. Log entries and check reports carry it. | — |
+| D52 | A source may supply a rule's id; reconciliation uses it as-is. `stele.md` never does. | — |
+| D53 | A fourth slot, sinks (`stele-sink-<name>`, external only). Data leaves only through a listed sink, only from `stele push` or `stele check --push`. Briefs only with `share_briefs`. | `O-LOG-LOC`, the mechanism only |
+| D54 | `stele status --format json` describes the install. `describe` reports the plugin's version. | — |
+| D55 | Org-wide rules reach a repository only through a source plugin. | — |
+
+Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 
 | # | Decision | Where argued |
 | :-- | :-- | :-- |
@@ -531,7 +730,7 @@ exception to D8 and keeps the source file untouched.
 
 ---
 
-## 9. Corrections applied to `stele-design-doc.md`
+## 10. Corrections applied to `stele-design-doc.md`
 
 The audit that produced this spec found three contradictions in the source
 document. All three are now fixed there. Recorded here so the reasoning survives.
@@ -540,8 +739,8 @@ document. All three are now fixed there. Recorded here so the reasoning survives
 half of it.** `O-METADATA` states outright that "the question is no longer whether
 to allow authoring." The fix separates the halves: *both authored and derived
 metadata can be present* is now D36, and what remains open — whether the derived
-floor is good enough to be the default — is empirical, so it moved to §9.2's
-settle-with-data tier. It was never a gate, because the architecture carries both
+floor is good enough to be the default — is empirical, so it moved to the design
+doc's §9.2 settle-with-data tier. It was never a gate, because the architecture carries both
 regardless of the answer.
 
 **D7 as written forbade an option the document itself listed.** "stele never calls
@@ -566,18 +765,27 @@ requirement, not answered in general.
 
 ---
 
-## 10. Out of scope for v1
+## 11. Out of scope for v1
 
-Inferring structure from `CLAUDE.md`, `AGENTS.md` or `.cursor/rules` ·
-exit-time verification (§8.1) · the read ledger and situated context
-(`O-CTX-SOURCE`, `O-CTX-RES`) · acting on log signals (`O-LOGSIG`) ·
-ranking by past selection (`O-ENTRENCH`) · corpus-wide reorganization
-(`O-REORG`) · team log aggregation (`O-LOG-LOC`) · agents beyond Claude Code ·
-blocking a turn on a compliance failure · rules checked by running a linter.
+Extracting rules from guideline prose, or inferring structure from `CLAUDE.md`,
+`AGENTS.md` or `.cursor/rules` — post-v1, paid (ADR-0002) ·
+sources other than `stele.md` and checkers other than `regex` — the slots ship
+in v1, more plugins come after · paid plugins · LLM-judged checks ·
+checking changed lines only · exit-time verification (design doc §8.1) · the
+read ledger and situated context (`O-CTX-SOURCE`, `O-CTX-RES`) · acting on log
+signals (`O-LOGSIG`) · ranking by past selection (`O-ENTRENCH`) · corpus-wide
+reorganization (`O-REORG`) · team log aggregation (`O-LOG-LOC`) · agents beyond
+Claude Code · blocking a turn on a compliance failure · the dashboard, and any
+sink implementation — v1 ships the formats and the slot (ADR-0003), not a
+destination.
+
+**Now in scope, and an earlier draft had it here:** rules checked by running a
+tool. That is what checkers are (§8). It is still not part of the hot path: a
+checker runs in CI, never while the agent works.
 
 ---
 
-## 11. Known weaknesses
+## 12. Known weaknesses
 
 **The matcher prompt sits in a file the agent can edit.**
 `.claude/agents/stele-matcher.md` is written by `init` and is editable by the thing
@@ -622,9 +830,20 @@ a text excerpt beside the id or it is unusable. This is a standing requirement o
 every report stele ever writes, not a one-off, and it is the price paid for the
 UUID over a readable slug.
 
+**The `regex` checker is a blunt instrument.** It matches text, not code. It
+fires inside comments and strings and misses anything split across names. It is
+in v1 because it is free, has no dependencies, and covers the rules that really
+are textual — secrets, banned imports, banned calls. Anything subtler belongs in
+a checker plugin.
+
+**A plugin is per machine, but `stele.json` is shared.** Listing a checker in
+`stele.json` makes `stele check` fail for every teammate who has not installed
+it. That is deliberate (§8), and the error says what to install, but it is still
+friction a built-in does not have.
+
 ---
 
-## 12. Open, to settle with data
+## 13. Open, to settle with data
 
 Everything here is a placeholder until the logs say otherwise. Shipping §7 first
 is the point.
