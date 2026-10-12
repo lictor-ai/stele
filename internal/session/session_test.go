@@ -338,8 +338,9 @@ func TestReadsRefuseSymlinks(t *testing.T) {
 	if err := os.Symlink("/dev/zero", path(root, "s1")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Current(root); err == nil {
-		t.Error("Current through a symlink succeeded")
+	// A current that is not a plain file names no session.
+	if id, err := Current(root); err != nil || id != "" {
+		t.Errorf("Current through a symlink = %q, %v; want no session", id, err)
 	}
 	if _, err := Load(root, "s1"); err == nil {
 		t.Error("Load through a symlink succeeded")
