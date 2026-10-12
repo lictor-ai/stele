@@ -12,7 +12,11 @@ Guideline enforcement for coding agents. Go, single binary.
 3. `docs/adr/0003-ready-for-a-dashboard.md` — formats and ids a later org-wide
    dashboard needs: versions on every format, a project id, source-supplied rule
    ids, sinks, `stele status`. The spec carries its decisions as D49–D55.
-4. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+4. `docs/adr/0004-v1-for-one-developer.md` — v1's scope: one developer, rules
+   chosen by `scope`, delivered and checked by Claude Code hooks; no MCP server
+   or matcher in v1. Where it and the spec disagree about v1, it wins. The spec
+   carries it as D58.
+5. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.

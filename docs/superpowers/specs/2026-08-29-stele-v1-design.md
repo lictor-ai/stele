@@ -19,6 +19,13 @@ format.
 
 ## 1. What v1 is
 
+> **Amended by ADR-0004 (D58).** v1 is for one developer. Rules are chosen by
+> their `scope`, not by a model: a `PreToolUse` hook shows the rules for a file
+> before the agent writes it, and a `PostToolUse` hook checks the write. The MCP
+> server and its tools (§4), the matcher subagent, and the model-driven parts of
+> §2.1 and §5 move to the "team" milestone. Where this spec and ADR-0004 disagree
+> about v1, ADR-0004 wins.
+
 A tool that puts the right project rules in front of a coding agent at the moment
 it is about to write code.
 
@@ -392,6 +399,9 @@ every repo.
 
 ## 4. Tool surface
 
+> **Not in v1** (ADR-0004, D58). The MCP server and its three tools are in the
+> "team" milestone. v1 delivers rules through the hook's deny reason.
+
 Three MCP tools.
 
 ### `stele.request(brief, target_path?) -> { call_id, instruction }`
@@ -429,6 +439,11 @@ or the matcher will invent relevance to look useful (`O-EMPTY`).
 ---
 
 ## 5. The hook
+
+> **Amended by ADR-0004 (D58).** In v1 the hook does not arm and wait for
+> `fetch`. It denies a write that brings rules not yet shown this turn, with the
+> rules as the reason, and a `PostToolUse` hook checks each write. `backstop` and
+> `block_on_error` keep their meaning; the three-blocks circuit breaker goes.
 
 A `PreToolUse` hook on `Write` and `Edit`.
 
@@ -739,6 +754,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D55 | Org-wide rules reach a repository only through a source plugin. | — |
 | D56 | `stele.md` follows Markdown where it can: a `---` inside a fenced code block or an HTML comment does not separate rules, and HTML comments before a rule's metadata are skipped. | — |
 | D57 | stele trusts only the generated files it wrote on this machine. `index.json` and session state carry an HMAC-SHA256 made with a per-user key kept outside every repository (the user config directory, owner-only); a file that does not verify is rebuilt or started afresh. `stele.lock` is shared on purpose and not signed. Malware running as the user is out of scope. | follows from D24 and D45: `.stele/` is not covered by the repository's `.gitignore`, so a repository could otherwise commit an index the agent is served |
+| D58 | v1 is for one developer. Rules are chosen by `scope`, not by a model: a `PreToolUse` hook denies a write that brings rules not yet shown this turn, with those rules as the reason; a `PostToolUse` hook runs built-in checks on the written file and reports violations. The MCP server, matcher subagent, logging, plugins and sinks move to the "team" milestone. | ADR-0004 |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 
