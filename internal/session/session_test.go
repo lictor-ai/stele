@@ -1,0 +1,235 @@
+package session
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/go-cmp/cmp"
+)
+
+var t0 = time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+
+func TestLoadMissing(t *testing.T) {
+	got, err := Load(t.TempDir(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(State{SessionID: "s1"}, got); diff != "" {
+		t.Errorf("new session (-want +got):\n%s", diff)
+	}
+}
+
+func TestUpdate(t *testing.T) {
+	root := t.TempDir()
+	st, err := Update(root, "s1", t0, func(s *State) error {
+		s.PromptID = "p1"
+		s.Armed = true
+		s.Touched = []string{"internal/db"}
+		s.Blocks = 1
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	want := State{SessionID: "s1", PromptID: "p1", Armed: true, Touched: []string{"internal/db"}, Blocks: 1, UpdatedAt: t0}
+	if diff := cmp.Diff(want, st); diff != "" {
+		t.Errorf("returned state (-want +got):\n%s", diff)
+	}
+	got, err := Load(root, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("loaded state (-want +got):\n%s", diff)
+	}
+
+	// The other process changes another field; the first one's survive.
+	if _, err := Update(root, "s1", t0, func(s *State) error {
+		s.LastError = "request: no index"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = Load(root, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.LastError = "request: no index"
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("after a second update (-want +got):\n%s", diff)
+	}
+
+	// .stele/ is ignored, and no lock file is left behind.
+	if _, err := os.Stat(filepath.Join(root, ".stele", ".gitignore")); err != nil {
+		t.Errorf(".stele/.gitignore: %v", err)
+	}
+	if _, err := os.Stat(path(root, "s1") + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("lock file left behind: %v", err)
+	}
+}
+
+func TestUpdateErrorSavesNothing(t *testing.T) {
+	root := t.TempDir()
+	boom := errors.New("boom")
+	_, err := Update(root, "s1", t0, func(s *State) error {
+		s.Armed = true
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want boom", err)
+	}
+	got, err := Load(root, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Armed {
+		t.Error("state saved although fn failed")
+	}
+}
+
+// Two sessions on one repository never affect each other (D37).
+func TestSessionsAreSeparate(t *testing.T) {
+	root := t.TempDir()
+	for _, id := range []string{"a", "b"} {
+		if _, err := Update(root, id, t0, func(s *State) error {
+			s.Armed = true
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a's fetch disarms a only.
+	if _, err := Update(root, "a", t0, func(s *State) error {
+		s.Armed = false
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(root, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b.Armed {
+		t.Error("disarming session a disarmed session b")
+	}
+}
+
+// Concurrent read-modify-write updates lose nothing.
+func TestUpdateConcurrent(t *testing.T) {
+	root := t.TempDir()
+	const n = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := Update(root, "s1", t0, func(s *State) error {
+				s.Blocks++
+				return nil
+			})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+	}
+	got, err := Load(root, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Blocks != n {
+		t.Errorf("Blocks = %d, want %d: an update was lost", got.Blocks, n)
+	}
+}
+
+func TestStaleLockIsTakenOver(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	// A crashed process left its lock file.
+	lockFile := path(root, "s1") + ".lock"
+	if err := os.WriteFile(lockFile, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(lockFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+		t.Errorf("Update with a stale lock: %v", err)
+	}
+}
+
+func TestCleanup(t *testing.T) {
+	root := t.TempDir()
+	for _, id := range []string{"old", "recent"} {
+		if _, err := Update(root, id, t0, func(*State) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now()
+	age := map[string]time.Duration{"old": 25 * time.Hour, "recent": time.Hour}
+	for id, d := range age {
+		ts := now.Add(-d)
+		if err := os.Chtimes(path(root, id), ts, ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := Update(root, "writer", now, func(*State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path(root, "old")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("session older than 24 hours kept: %v", err)
+	}
+	if _, err := os.Stat(path(root, "recent")); err != nil {
+		t.Errorf("recent session removed: %v", err)
+	}
+}
+
+func TestCurrent(t *testing.T) {
+	root := t.TempDir()
+	got, err := Current(root)
+	if err != nil || got != "" {
+		t.Fatalf("Current with none = %q, %v; want \"\", nil", got, err)
+	}
+	for _, id := range []string{"s1", "s2"} {
+		if err := SetCurrent(root, id); err != nil {
+			t.Fatal(err)
+		}
+		got, err := Current(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != id {
+			t.Errorf("Current = %q, want %q", got, id)
+		}
+	}
+}
+
+// The id comes from the host agent and names a file, so it cannot escape
+// .stele/state.
+func TestBadSessionID(t *testing.T) {
+	root := t.TempDir()
+	for _, id := range []string{"", "../escape", `a\b`, "a/b", "..", "a.b"} {
+		if _, err := Load(root, id); !errors.Is(err, ErrBadSessionID) {
+			t.Errorf("Load(%q): err = %v, want ErrBadSessionID", id, err)
+		}
+		if _, err := Update(root, id, t0, func(*State) error { return nil }); !errors.Is(err, ErrBadSessionID) {
+			t.Errorf("Update(%q): err = %v, want ErrBadSessionID", id, err)
+		}
+		if err := SetCurrent(root, id); !errors.Is(err, ErrBadSessionID) {
+			t.Errorf("SetCurrent(%q): err = %v, want ErrBadSessionID", id, err)
+		}
+	}
+}

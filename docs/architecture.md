@@ -366,9 +366,16 @@ type State struct {
     LastError string    // written by stele mcp when an exchange step fails
     UpdatedAt time.Time
 }
+
+func Load(root, id string) (State, error)  // no file yet: a zero State carrying id
+func Update(root, id string, now time.Time, fn func(*State) error) (State, error)
+func SetCurrent(root, id string) error     // the hook, on every block
+func Current(root string) (string, error)  // request; "" when no session has blocked
 ```
 
-One file per session, `state/<session-id>.json`, per D37.
+One file per session, `state/<session-id>.json`, per D37. The id comes from the
+host agent and becomes part of a path, so anything but letters, digits, `_` and
+`-` is `ErrBadSessionID`.
 
 **`LastError` and `Blocks` exist because the hook is a new process every time.**
 When `request` fails, `stele mcp` knows — but the hook that runs two seconds later
@@ -393,6 +400,15 @@ Two processes updating different fields of one record makes every update
 read-modify-write, so state writes take a lock file for the duration — the same
 treatment as `journal.Append` in §7. In practice they rarely overlap, since the
 agent does one thing at a time. "Rarely" is not a concurrency design.
+
+`Update` is that read-modify-write: it takes `state/<id>.json.lock` by creating it
+exclusively, which works alike everywhere, loads, applies `fn`, saves through the
+crash-safe replace, and removes the lock. It waits at most 2 seconds for another
+holder, since the hook runs on every write, and takes over a lock older than 10
+seconds as left by a crashed process. On Windows, creating a lock file that was
+just removed while another process still has it open fails with access denied,
+so that also counts as held. After saving, `Update` removes session files not
+updated for 24 hours.
 
 ### `internal/enforce` — policy
 
