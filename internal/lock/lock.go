@@ -41,8 +41,7 @@ type File struct {
 }
 
 // Load reads stele.lock under root. No stele.lock is an empty File, not an
-// error: the first compile creates it. A lock with duplicate ids is
-// ErrDuplicateID.
+// error: the first compile creates it. A lock that fails Validate is an error.
 func Load(root string) (File, error) {
 	data, err := os.ReadFile(filepath.Join(root, FileName))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -65,10 +64,18 @@ func Load(root string) (File, error) {
 }
 
 // Validate returns ErrDuplicateID when two entries share an id. Reconcile
-// never produces one, but a merge can.
+// never produces one, but a merge can. It also rejects a lock with no project
+// or an entry with no id, which only a hand edit can produce: accepting them
+// would mint a second project id or let one rule claim two entries.
 func Validate(f File) error {
+	if f.Project == "" {
+		return fmt.Errorf("%s: no project id", FileName)
+	}
 	seen := make(map[string]int, len(f.Rules))
 	for i, e := range f.Rules {
+		if e.ID == "" {
+			return fmt.Errorf("%s: rule %d (%s position %d) has no id", FileName, i+1, e.Source, e.Position)
+		}
 		if j, ok := seen[e.ID]; ok {
 			return fmt.Errorf("%s: %w %s: rules %d and %d (%s position %d, %s position %d)",
 				FileName, ErrDuplicateID, e.ID, j+1, i+1,
@@ -102,6 +109,12 @@ func replaceFile(path string, data []byte) error {
 		return err
 	}
 	defer os.Remove(tmp.Name()) // fails harmlessly once renamed
+	// CreateTemp makes the file 0600, and the rename would carry that over to
+	// a committed file that other users and CI must read.
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return err
+	}
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return err

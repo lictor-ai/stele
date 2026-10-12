@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -38,6 +39,25 @@ func TestSaveLoad(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Errorf("root holds %v, want only %s", names, FileName)
+	}
+}
+
+// The lock is committed and read by other users and CI, so it must not end up
+// with CreateTemp's 0600.
+func TestSaveMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permission bits")
+	}
+	root := t.TempDir()
+	if err := Save(root, File{Version: 1, Project: "proj"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(root, FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Errorf("mode = %v, want 0644", got)
 	}
 }
 
@@ -102,6 +122,19 @@ func TestLoadErrors(t *testing.T) {
 				{"id": "a", "source": "stelemd", "hash": "h2", "position": 1}]}`,
 			is:     ErrDuplicateID,
 			substr: "rules 1 and 2",
+		},
+		{
+			name: "empty id",
+			content: `{"version": 1, "project": "p", "rules": [
+				{"id": "", "source": "stelemd", "hash": "h1", "position": 0}]}`,
+			substr: "rule 1 (stelemd position 0) has no id",
+		},
+		{
+			// A hand-resolved merge dropped it. Minting a new one would split
+			// the repository's history across two project ids.
+			name:    "no project",
+			content: `{"version": 1, "rules": []}`,
+			substr:  "no project id",
 		},
 	}
 	for _, tt := range tests {

@@ -75,10 +75,19 @@ func Reconcile(rules []source.Rule, prev File, newID func() string) (ids []strin
 		if r.ID == "" || held[r.ID] {
 			continue
 		}
-		if old, ok := claim(func(e Entry) bool {
+		// Same source and position first, as in pass 1, so two rules with
+		// one body keep their own ids.
+		sameBody := func(e Entry) bool {
 			_, supplied := owner[e.ID]
 			return !supplied && e.Hash == hashes[i]
-		}); ok {
+		}
+		old, ok := claim(func(e Entry) bool {
+			return sameBody(e) && e.Source == r.Source && e.Position == r.Position
+		})
+		if !ok {
+			old, ok = claim(sameBody)
+		}
+		if ok {
 			rep.Rekeyed = append(rep.Rekeyed, Rekey{Old: old, New: r.ID})
 		}
 	}

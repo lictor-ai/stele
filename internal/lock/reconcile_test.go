@@ -163,6 +163,16 @@ func TestReconcile(t *testing.T) {
 			rep:  Report{Supplied: 1, ByHash: 1, Rekeyed: []Rekey{{Old: "a", New: "ORG-1"}}},
 		},
 		{
+			name: "rekeying takes the entry at the rule's own position",
+			rules: []source.Rule{
+				md(0, sql),
+				{Source: "stelemd", Position: 1, Body: sql, ID: "X"},
+			},
+			prev: lockOf([]string{"a", "b"}, md(0, sql), md(1, sql)),
+			want: []string{"a", "X"},
+			rep:  Report{Supplied: 1, ByHash: 1, Rekeyed: []Rekey{{Old: "b", New: "X"}}},
+		},
+		{
 			name: "a supplied id taken from another rule is not inherited by position",
 			rules: []source.Rule{
 				md(0, sql2),
