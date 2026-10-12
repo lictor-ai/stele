@@ -98,6 +98,10 @@ func TestMatchStaysFast(t *testing.T) {
 		strings.Repeat("{a,b}", 30),       // brace bomb
 		strings.Repeat("**/a/", 20) + "b", // backtracking bomb
 		"{" + strings.Repeat("x,", 200) + "x}/" + strings.Repeat("**/a/", 10) + "b",
+		strings.Repeat("{", 80000) + strings.Repeat("}", 80000),           // deep nesting
+		strings.Repeat("{a,b}", 8) + strings.Repeat("x", 500000),          // long literal × 256
+		"{" + strings.Repeat(strings.Repeat("{a,b}", 8)+",", 20000) + "}", // many wide branches
+		strings.Repeat("{a,b}", 8) + strings.Repeat("/**", 20000) + "/z",  // long ** run × 256
 	}
 	for _, p := range patterns {
 		start := time.Now()
@@ -119,5 +123,12 @@ func TestFoldCase(t *testing.T) {
 	foldCase = false
 	if Match("internal/**", "Internal/X.go") {
 		t.Error("without case folding, Internal/X.go should not match internal/**")
+	}
+}
+
+func TestLongPatternMatchesNothing(t *testing.T) {
+	long := strings.Repeat("a", maxPattern) + "*"
+	if Match(long, strings.Repeat("a", maxPattern)+"x") {
+		t.Error("a pattern over the length cap matched")
 	}
 }

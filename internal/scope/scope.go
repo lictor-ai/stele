@@ -14,10 +14,10 @@
 // On Windows and macOS, whose file systems ignore case, so does matching: an
 // agent that writes Internal/x.go writes into internal/.
 //
-// A malformed pattern, or one that expands to more than 256 alternatives,
-// matches nothing. Matching takes time proportional to the pattern's length
-// times the path's, whatever the pattern: stele.md comes from the repository,
-// and the hook runs on every write.
+// A malformed pattern, one longer than 1 KB, or one that expands to more than
+// 256 alternatives matches nothing. Those caps bound the work whatever the
+// pattern: stele.md comes from the repository, and the hook runs on every
+// write. Real scope globs are a few dozen characters.
 package scope
 
 import (
@@ -26,8 +26,13 @@ import (
 	"strings"
 )
 
-// maxAlternatives caps brace expansion.
-const maxAlternatives = 256
+const (
+	// maxPattern caps a pattern's length. Brace expansion and matching are
+	// bounded by it, times maxAlternatives.
+	maxPattern = 1024
+	// maxAlternatives caps brace expansion.
+	maxAlternatives = 256
+)
 
 // foldCase is whether matching ignores case, as the platform's file system
 // does. Tests set it.
@@ -49,6 +54,9 @@ func Applies(patterns []string, file string) bool {
 
 // Match reports whether file matches the glob pattern.
 func Match(pattern, file string) bool {
+	if len(pattern) > maxPattern {
+		return false
+	}
 	file = strings.TrimPrefix(path.Clean("/"+file), "/")
 	if foldCase {
 		pattern, file = strings.ToLower(pattern), strings.ToLower(file)
