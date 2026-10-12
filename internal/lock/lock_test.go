@@ -155,6 +155,9 @@ func TestLoadErrors(t *testing.T) {
 			if !strings.Contains(err.Error(), tt.substr) {
 				t.Errorf("err = %q, want it to mention %q", err, tt.substr)
 			}
+			if !strings.Contains(err.Error(), "delete it and run stele compile") {
+				t.Errorf("err = %q, want the recovery step", err)
+			}
 		})
 	}
 }

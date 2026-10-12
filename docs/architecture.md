@@ -926,9 +926,11 @@ an expected shape, and anything else gets one of two outcomes:
 | `stele.lock` | plain file, ≤ 16 MiB | refused, `ErrInvalid`: restore it, or delete it and compile |
 | `.stele/index.json` | plain file, ≤ 64 MiB | `ErrNoIndex`: rebuilt, and the write moves it aside |
 | `state/<id>.json`, `state/current` | plain file, small | a fresh state / no session; the write moves it aside |
-| `*.lock` | plain file holding a token | moved aside at once |
+| `*.lock` | plain file holding a token | a non-file is moved aside at once; a plain file once stale (§3) |
 
-Every read goes through `safefile.ReadRegular`: a regular file only, never through
+Every read of a file under `.stele/` or of `stele.lock` goes through
+`safefile.ReadRegular` — `stele.md` is not covered: a user may symlink it on
+purpose. It reads a regular file only, never through
 a symlink, never a device, capped in size, so a link to `/dev/zero` cannot hang
 stele or exhaust its memory. `safefile.Replace` moves anything but a plain file
 out of its way before the rename, which callers rely on only for files stele can
@@ -970,7 +972,7 @@ Following Code Review Comments and the style guide.
 var (
     ErrNoIndex        = errors.New("no index")             // index
     ErrDuplicateID    = errors.New("duplicate rule id")    // lock
-    ErrInvalid        = errors.New("invalid")              // lock: bad JSON, version, project or id
+    ErrInvalid        = errors.New("invalid")              // lock: not a plain file, too large, bad JSON, version, project or id
     ErrPluginNotFound = errors.New("plugin not found")     // plugin
     ErrPluginRefused  = errors.New("plugin refused")       // plugin: inside the repo, bad name
     ErrProtocol       = errors.New("plugin protocol error") // plugin

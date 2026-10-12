@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"runtime"
 	"syscall"
@@ -45,6 +46,16 @@ func ReadRegular(path string, limit int64) ([]byte, error) {
 
 func readRegular(path string, limit int64) ([]byte, error) {
 	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	if runtime.GOOS != "windows" && errors.Is(err, syscall.ENOTDIR) {
+		// A parent is a file, not a directory: a clone committed a file
+		// named .stele, say. Report it like any other non-file, so callers
+		// regenerate or refuse it with their recovery step. (Windows calls
+		// that "path not found", which is already ErrNotExist.)
+		return nil, fmt.Errorf("%s: a parent is not a directory: %w", path, ErrNotRegular)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -147,5 +148,22 @@ func TestIndexNotAFile(t *testing.T) {
 	}
 	if _, err := Load(root); err != nil {
 		t.Errorf("Load after Save: %v", err)
+	}
+}
+
+// A committed file named .stele makes every path under it unreadable. That is
+// no index, so callers rebuild, and EnsureDir then refuses .stele with its
+// recovery step.
+func TestDirIsAFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, Dir), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(root); !errors.Is(err, ErrNoIndex) {
+		t.Errorf("Load: err = %v, want ErrNoIndex", err)
+	}
+	err := Save(root, sample())
+	if err == nil || !strings.Contains(err.Error(), "delete it and stele recreates it") {
+		t.Errorf("Save: err = %v, want the recovery step", err)
 	}
 }
