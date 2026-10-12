@@ -1,5 +1,8 @@
 // Package safefile writes files so a crash never leaves one half-written,
-// and provides the lock files and directory checks that go with that.
+// and provides the lock files, directory checks and bounded reads that go
+// with that. Nothing under .stele/ is covered by the repository's
+// .gitignore, so a cloned repository can commit anything there; these
+// helpers never follow a symlink or trust a file stele did not write.
 //
 // Replace writes the new content to a temp file in the same directory, which
 // is then renamed over the target. The target is never truncated. On Windows
@@ -17,6 +20,12 @@ import (
 // Replace writes data to path. The file ends up 0644 whatever the umask did
 // to the temp file, because stele's files are read by other users and CI.
 func Replace(path string, data []byte) error {
+	// A directory where the file belongs is never stele's: .stele/ is not
+	// covered by the repository's .gitignore, so a clone can commit one.
+	// The rename would fail anyway; say why, and at once.
+	if info, err := os.Lstat(path); err == nil && info.IsDir() {
+		return fmt.Errorf("%s is a directory, not a file stele wrote: remove it", path)
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return err
@@ -35,13 +44,17 @@ func Replace(path string, data []byte) error {
 		return err
 	}
 	// A reader with the target open makes the rename fail on Windows until
-	// it closes the file, so retry for as long as ReadRegular would.
+	// it closes the file, so retry that, and only that, for as long as
+	// ReadRegular would.
 	deadline := time.Now().Add(transientWait)
 	backoff := time.Millisecond
 	for {
 		err = os.Rename(tmp.Name(), path)
 		if err == nil {
 			return nil
+		}
+		if !transient(err) {
+			return fmt.Errorf("replace %s: %w", filepath.Base(path), err)
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("replace %s: %w (an editor, antivirus or search indexer may hold it open)",

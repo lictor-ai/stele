@@ -166,7 +166,9 @@ func SetCurrent(root, id string) error {
 // state file and its id checked the same way.
 func Current(root string) (string, error) {
 	data, err := safefile.ReadRegular(filepath.Join(root, index.Dir, stateDir, currentFile), 1024)
-	if errors.Is(err, fs.ErrNotExist) {
+	// Something stele did not write, such as a committed directory, names no
+	// session; the hook's next SetCurrent says which one blocked.
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, safefile.ErrNotRegular) || errors.Is(err, safefile.ErrTooLarge) {
 		return "", nil
 	}
 	if err != nil {
@@ -207,7 +209,12 @@ func cleanup(dir, keep string, now time.Time) {
 		case isState && id != keep:
 			removeIdle(filepath.Join(dir, name), now)
 		case strings.HasSuffix(name, ".lock"), strings.HasSuffix(name, ".tmp"), strings.HasSuffix(name, ".stale"):
-			os.Remove(filepath.Join(dir, name))
+			// Checked again just before removing: on Windows the listing's
+			// times can be stale, and a lock may have been taken since.
+			p := filepath.Join(dir, name)
+			if fresh, err := os.Lstat(p); err == nil && now.Sub(fresh.ModTime()) > maxAge {
+				os.Remove(p)
+			}
 		}
 	}
 }

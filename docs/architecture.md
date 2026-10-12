@@ -33,7 +33,7 @@ cmd/stele/            main, subcommand dispatch, exit codes
 internal/source/      the Source slot: Rule, the Source interface
   stelemd/            the built-in stele.md source: read, hash, parse
 internal/lock/        stele.lock: identity, reconciliation
-internal/safefile/    crash-safe replace, create-if-absent, lock files, symlink-refusing dirs (§7)
+internal/safefile/    crash-safe replace, create-if-absent, lock files, safe dirs and bounded reads (§7)
 internal/index/       index.json: load, save
 internal/compile/     the one place that turns sources into an index
 internal/session/     state/<session>.json: arm state, touched dirs
@@ -374,8 +374,16 @@ func Current(root string) (string, error)  // request; "" when no session has bl
 ```
 
 One file per session, `state/<session-id>.json`, per D37. The id comes from the
-host agent and becomes part of a path, so anything but letters, digits, `_` and
-`-` is `ErrBadSessionID`.
+host agent, or from `state/current`, which a cloned repository can commit, and
+becomes part of a path. So anything but letters, digits, `_` and `-` is
+`ErrBadSessionID`, and so is a Windows device name (`CON`, `NUL`, `COM1`, …),
+since `CON.json` is the console whatever the extension.
+
+`Load` and `Current` read through `safefile.ReadRegular`: a regular file only,
+never a symlink or a device, capped in size. A `current` that is not a plain file
+names no session. A state file that cannot be read — not JSON, not a regular file,
+too large — fails `Load`, and `Update` replaces it with a fresh state rather than
+fail every update of that session.
 
 **`LastError` and `Blocks` exist because the hook is a new process every time.**
 When `request` fails, `stele mcp` knows — but the hook that runs two seconds later
@@ -411,14 +419,18 @@ crashed process.
 and writes a token unique to its holder into it. Unlocking removes the file only
 while it still holds that token, so a holder that was taken over never removes its
 successor's lock. A stale lock is taken over by renaming it away, which only one
-of several racing processes can do. On Windows, creating a lock file that was just
-removed while another process still has it open fails with access denied, so that
-also counts as held.
+of several racing processes can do. A lock that is not a plain file — a directory
+or a symlink a cloned repository committed — is never one stele made, and is moved
+aside at once. On Windows, creating a lock file that was just removed while
+another process still has it open fails with access denied, so that also counts
+as held.
 
-After saving, `Update` removes session files not updated for 24 hours, and their
-lock files only if those are old too. `.stele/state` must be a real directory, as
-`.stele/` must: a committed symlink would otherwise make stele write, and delete
-old `*.json` files, wherever it points.
+After saving, `Update` removes session files not updated for 24 hours, each under
+that session's lock and only if it is still old once the lock is held. Lock, temp
+and `.stale` files older than 24 hours go too, checked again just before removal.
+`.stele/state` must be a real directory, as `.stele/` must: a committed symlink
+would otherwise make stele write, and delete old `*.json` files, wherever it
+points. A directory where a file belongs makes the write fail at once, saying so.
 
 ### `internal/enforce` — policy
 
@@ -896,7 +908,8 @@ matters — the target is never truncated, because the temp file holds the compl
 new content until the swap. What Windows adds is a failure mode: the rename can be
 refused outright when another process holds the target open, which an editor,
 antivirus, or the search indexer will do — or stele itself, reading the file in
-another process. So the rename retries for up to 2 seconds, and on final failure
+another process. So the rename retries those errors, access denied and sharing
+violation, and only those, for up to 2 seconds; anything else fails at once. On final failure it
 reports the likely cause rather than an opaque `*LinkError`. Reads retry the same
 way: on Windows a read that meets another process's rename fails with a sharing
 violation or access denied, which `safefile.ReadRegular` retries rather than

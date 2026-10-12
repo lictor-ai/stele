@@ -431,3 +431,24 @@ func TestLoadDuringUpdates(t *testing.T) {
 		t.Errorf("Load during updates: %v", err)
 	}
 }
+
+// A committed directory at current names no session, and SetCurrent fails
+// at once with a reason rather than waiting.
+func TestCurrentNotAFile(t *testing.T) {
+	root := t.TempDir()
+	cur := filepath.Join(root, ".stele", "state", "current")
+	if err := os.MkdirAll(filepath.Join(cur, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id, err := Current(root)
+	if err != nil || id != "" {
+		t.Errorf("Current = %q, %v; want no session", id, err)
+	}
+	start := time.Now()
+	if err := SetCurrent(root, "s1"); err == nil {
+		t.Error("SetCurrent over a directory succeeded")
+	}
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Errorf("SetCurrent failed after %v, want at once", d)
+	}
+}

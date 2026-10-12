@@ -139,3 +139,59 @@ func TestLockStaleTakeover(t *testing.T) {
 		t.Errorf("%d files left behind", len(entries))
 	}
 }
+
+// A lock that is not a plain file was committed by a cloned repository, not
+// made by stele, and is moved aside at once whatever its age.
+func TestLockTakesOverNonFile(t *testing.T) {
+	t.Run("directory", func(t *testing.T) {
+		name := filepath.Join(t.TempDir(), "x.lock")
+		if err := os.MkdirAll(filepath.Join(name, "inside"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		unlock, err := Lock(name, time.Second, time.Hour)
+		if err != nil {
+			t.Fatalf("Lock over a directory: %v", err)
+		}
+		defer unlock()
+		if d := time.Since(start); d > 500*time.Millisecond {
+			t.Errorf("took %v, want no wait", d)
+		}
+	})
+	t.Run("dangling symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		name := filepath.Join(dir, "x.lock")
+		if err := os.Symlink(filepath.Join(dir, "nowhere"), name); err != nil {
+			t.Skipf("cannot make a symlink here: %v", err)
+		}
+		unlock, err := Lock(name, time.Second, time.Hour)
+		if err != nil {
+			t.Fatalf("Lock over a dangling symlink: %v", err)
+		}
+		unlock()
+	})
+}
+
+func TestLockMissingDir(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "missing", "x.lock")
+	if _, err := Lock(name, time.Second, time.Hour); err == nil {
+		t.Error("Lock in a missing directory succeeded")
+	}
+}
+
+// Replace fails at once, and says why, when a directory sits where the file
+// belongs; it does not spend the Windows retry budget on it.
+func TestReplaceOntoDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "current")
+	if err := os.MkdirAll(filepath.Join(path, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	err := Replace(path, []byte("x"))
+	if err == nil {
+		t.Fatal("Replace onto a directory succeeded")
+	}
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Errorf("failed after %v, want at once", d)
+	}
+}
