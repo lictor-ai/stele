@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 
 	"github.com/lictor-ai/stele/internal/safefile"
@@ -22,6 +21,9 @@ const FileName = "stele.lock"
 
 // version is the lock format this stele reads and writes.
 const version = 1
+
+// maxSize caps stele.lock. An entry is about 150 bytes.
+const maxSize = 16 << 20
 
 var (
 	// ErrDuplicateID is two rules sharing an id: a merge that duplicated an
@@ -50,9 +52,28 @@ type File struct {
 // Load reads stele.lock under root. No stele.lock is an empty File, not an
 // error: the first compile creates it. A lock that fails Validate is an error.
 func Load(root string) (File, error) {
-	data, err := os.ReadFile(filepath.Join(root, FileName))
+	f, err := load(root)
+	// The lock is committed and holds every rule's identity, so it is never
+	// regenerated silently: every refusal says how to recover.
+	if errors.Is(err, ErrInvalid) || errors.Is(err, ErrDuplicateID) {
+		err = fmt.Errorf("%w; %s", err, recovery)
+	}
+	return f, err
+}
+
+// recovery is what to do about a stele.lock stele cannot use.
+const recovery = "restore the committed stele.lock, or delete it and run stele compile (rules then get new ids)"
+
+func load(root string) (File, error) {
+	data, err := safefile.ReadRegular(filepath.Join(root, FileName), maxSize)
 	if errors.Is(err, fs.ErrNotExist) {
 		return File{}, nil
+	}
+	if errors.Is(err, safefile.ErrNotRegular) {
+		return File{}, fmt.Errorf("%s: %w: not a plain file (a symlink?)", FileName, ErrInvalid)
+	}
+	if errors.Is(err, safefile.ErrTooLarge) {
+		return File{}, fmt.Errorf("%s: %w: over %d bytes", FileName, ErrInvalid, maxSize)
 	}
 	if err != nil {
 		return File{}, err

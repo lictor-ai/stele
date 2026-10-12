@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 
 	"github.com/lictor-ai/stele/internal/safefile"
@@ -24,6 +23,8 @@ const (
 	fileName = "index.json"
 	// Version is the index format this stele reads and writes.
 	Version = 1
+	// maxSize caps the index. Thousands of rules fit in a few megabytes.
+	maxSize = 64 << 20
 )
 
 // ErrNoIndex is an index that is missing, unreadable or of another version.
@@ -55,12 +56,17 @@ type Entry struct {
 func Path(root string) string { return filepath.Join(root, Dir, fileName) }
 
 // Load reads the index under root. A missing, unreadable or other-version
-// index is ErrNoIndex. It never reports staleness: only a source can say
-// whether it changed (architecture §3).
+// index is ErrNoIndex, and so is anything but a plain file of bounded size: a
+// clone can commit a directory or a symlink to /dev/zero there, and the
+// index is cheap to rebuild. It never reports staleness: only a source can
+// say whether it changed (architecture §3).
 func Load(root string) (Index, error) {
-	data, err := os.ReadFile(Path(root))
+	data, err := safefile.ReadRegular(Path(root), maxSize)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Index{}, ErrNoIndex
+	}
+	if errors.Is(err, safefile.ErrNotRegular) || errors.Is(err, safefile.ErrTooLarge) {
+		return Index{}, fmt.Errorf("%w: %v", ErrNoIndex, err)
 	}
 	if err != nil {
 		return Index{}, err

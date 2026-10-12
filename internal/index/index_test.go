@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -129,5 +130,40 @@ func TestSaveRefusesSymlinkedDir(t *testing.T) {
 	entries, _ := os.ReadDir(elsewhere)
 	if len(entries) != 0 {
 		t.Errorf("Save wrote %d files where the symlink points", len(entries))
+	}
+}
+
+// A committed directory at index.json is no index: callers rebuild, and Save
+// moves it aside.
+func TestIndexNotAFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(Path(root), "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(root); !errors.Is(err, ErrNoIndex) {
+		t.Fatalf("Load: err = %v, want ErrNoIndex", err)
+	}
+	if err := Save(root, sample()); err != nil {
+		t.Fatalf("Save over a directory: %v", err)
+	}
+	if _, err := Load(root); err != nil {
+		t.Errorf("Load after Save: %v", err)
+	}
+}
+
+// A committed file named .stele makes every path under it unreadable. That is
+// no index, so callers rebuild, and EnsureDir then refuses .stele with its
+// recovery step.
+func TestDirIsAFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, Dir), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(root); !errors.Is(err, ErrNoIndex) {
+		t.Errorf("Load: err = %v, want ErrNoIndex", err)
+	}
+	err := Save(root, sample())
+	if err == nil || !strings.Contains(err.Error(), "delete it and stele recreates it") {
+		t.Errorf("Save: err = %v, want the recovery step", err)
 	}
 }

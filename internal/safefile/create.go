@@ -47,7 +47,7 @@ func Dir(path string) error {
 		return err
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("%s is not a plain directory (a symlink?): refusing to write there", path)
+		return fmt.Errorf("%s is not a plain directory (a symlink?): refusing to write there; delete it and stele recreates it", path)
 	}
 	return nil
 }

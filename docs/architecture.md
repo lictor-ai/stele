@@ -33,7 +33,7 @@ cmd/stele/            main, subcommand dispatch, exit codes
 internal/source/      the Source slot: Rule, the Source interface
   stelemd/            the built-in stele.md source: read, hash, parse
 internal/lock/        stele.lock: identity, reconciliation
-internal/safefile/    crash-safe replace, create-if-absent, lock files, symlink-refusing dirs (§7)
+internal/safefile/    crash-safe replace, create-if-absent, lock files, safe dirs and bounded reads (§7)
 internal/index/       index.json: load, save
 internal/compile/     the one place that turns sources into an index
 internal/session/     state/<session>.json: arm state, touched dirs
@@ -287,7 +287,7 @@ func Equal(a, b Index) bool
 Gitignored and regenerated freely (D24), so the format carries no compatibility
 obligation. `Version` exists so a mismatch triggers a rebuild rather than a parse
 error: `Load` returns `ErrNoIndex` for a missing, unparsable or other-version
-index alike. `Save` creates `.stele/` and its `.gitignore` (`*`) when they are
+index alike, and for one that is not a plain file or is over 64 MiB (§7). `Save` creates `.stele/` and its `.gitignore` (`*`) when they are
 missing, so a compile before `init` never leaves the index committable. The
 `.gitignore` is created whole or not at all. `.stele/` must be a real directory:
 the repository's own `.gitignore` does not cover it, so a cloned repository could
@@ -366,9 +366,24 @@ type State struct {
     LastError string    // written by stele mcp when an exchange step fails
     UpdatedAt time.Time
 }
+
+func Load(root, id string) (State, error)  // no file yet: a zero State carrying id
+func Update(root, id string, now time.Time, fn func(*State) error) (State, error)
+func SetCurrent(root, id string) error     // the hook, on every block
+func Current(root string) (string, error)  // request; "" when no session has blocked
 ```
 
-One file per session, `state/<session-id>.json`, per D37.
+One file per session, `state/<session-id>.json`, per D37. The id comes from the
+host agent, or from `state/current`, which a cloned repository can commit, and
+becomes part of a path. So anything but letters, digits, `_` and `-` is
+`ErrBadSessionID`, and so is a Windows device name (`CON`, `NUL`, `COM1`, …),
+since `CON.json` is the console whatever the extension.
+
+`Load` and `Current` read through `safefile.ReadRegular`: a regular file only,
+never a symlink or a device, capped in size. A `current` that is not a plain file
+names no session. A state file that cannot be read — not JSON, not a regular file,
+too large — fails `Load`, and `Update` replaces it with a fresh state rather than
+fail every update of that session.
 
 **`LastError` and `Blocks` exist because the hook is a new process every time.**
 When `request` fails, `stele mcp` knows — but the hook that runs two seconds later
@@ -393,6 +408,29 @@ Two processes updating different fields of one record makes every update
 read-modify-write, so state writes take a lock file for the duration — the same
 treatment as `journal.Append` in §7. In practice they rarely overlap, since the
 agent does one thing at a time. "Rarely" is not a concurrency design.
+
+`Update` is that read-modify-write: it takes `state/<id>.json.lock` with
+`safefile.Lock`, loads, applies `fn`, saves through the crash-safe replace, and
+releases the lock. It waits at most 2 seconds for another holder, since the hook
+runs on every write, and takes over a lock older than 10 seconds as left by a
+crashed process.
+
+`safefile.Lock` creates the lock file exclusively, which works alike everywhere,
+and writes a token unique to its holder into it. Unlocking removes the file only
+while it still holds that token, so a holder that was taken over never removes its
+successor's lock. A stale lock is taken over by renaming it away, which only one
+of several racing processes can do. A lock that is not a plain file — a directory
+or a symlink a cloned repository committed — is never one stele made, and is moved
+aside at once. On Windows, creating a lock file that was just removed while
+another process still has it open fails with access denied, so that also counts
+as held.
+
+After saving, `Update` removes session files not updated for 24 hours, each under
+that session's lock and only if it is still old once the lock is held. Lock, temp
+and `.stale` files older than 24 hours go too, checked again just before removal.
+`.stele/state` must be a real directory, as `.stele/` must: a committed symlink
+would otherwise make stele write, and delete old `*.json` files, wherever it
+points. A directory or link where a file belongs is moved aside by the write (§7).
 
 ### `internal/enforce` — policy
 
@@ -869,20 +907,58 @@ atomic operation."* The property that still holds everywhere is the one that
 matters — the target is never truncated, because the temp file holds the complete
 new content until the swap. What Windows adds is a failure mode: the rename can be
 refused outright when another process holds the target open, which an editor,
-antivirus, or the search indexer will do. So the rename retries a few times with a
-short backoff, and on final failure reports the likely cause rather than an
-opaque `*LinkError`.
+antivirus, or the search indexer will do — or stele itself, reading the file in
+another process. So the rename retries those errors, access denied and sharing
+violation, and only those, for up to 2 seconds; anything else fails at once. On final failure it
+reports the likely cause rather than an opaque `*LinkError`. Reads retry the same
+way: on Windows a read that meets another process's rename fails with a sharing
+violation or access denied, which `safefile.ReadRegular` retries rather than
+reporting.
+
+**stele trusts only what it would have written itself.** Nothing under `.stele/`
+is covered by the repository's own `.gitignore`, so a repository can commit
+anything there, and `stele.lock` is committed by design. Every file stele uses has
+an expected shape, and anything else gets one of two outcomes:
+
+| Path | Expected | Otherwise |
+| :-- | :-- | :-- |
+| `.stele/`, `.stele/state/` | real directories | refused: "delete it, stele recreates it" |
+| `stele.lock` | plain file, ≤ 16 MiB | refused, `ErrInvalid`: restore it, or delete it and compile |
+| `.stele/index.json` | plain file, ≤ 64 MiB | `ErrNoIndex`: rebuilt, and the write moves it aside |
+| `state/<id>.json`, `state/current` | plain file, small | a fresh state / no session; the write moves it aside |
+| `*.lock` | plain file holding a token | a non-file is moved aside at once; a plain file once stale (§3) |
+
+Every read of a file under `.stele/` or of `stele.lock` goes through
+`safefile.ReadRegular` — `stele.md` is not covered: a user may symlink it on
+purpose. It reads a regular file only, never through
+a symlink, never a device, capped in size, so a link to `/dev/zero` cannot hang
+stele or exhaust its memory. `safefile.Replace` moves anything but a plain file
+out of its way before the rename, which callers rely on only for files stele can
+regenerate or has just read as a plain file. A non-empty directory moved aside
+stays, renamed `*.stale`; nothing reads it again. Session ids that are Windows
+device names (`CON`, `NUL`, …) are rejected, since `CON.json` is the console
+whatever the extension.
+
+The shape check stops files that would crash or hang stele. It says nothing about
+who wrote a well-formed file: a committed `index.json` with a matching fingerprint
+would still be trusted. Signing generated files with a per-machine key closes that
+(#27).
 
 **`journal.Append` opens with `O_APPEND`** and writes one line per call. Short
 appends are atomic on POSIX. Windows offers no equivalent guarantee, so the writer
 takes a lock file for the duration of the append.
 
-**Session state needs no locking** across sessions, because each session owns its
-own file. Within a session the hook and the MCP process can write concurrently, so
-both use the same crash-safe replace.
+**Session state is locked per session**, not across sessions, because each session
+owns its own file. Within a session the hook and the MCP process both
+read-modify-write one record, so `session.Update` holds that session's lock file
+for the duration (§3). A state file that cannot be read is replaced by a fresh
+state, so one corrupt file never blocks a session.
 
 **Stale state is cleaned on write:** any `state/*.json` older than 24 hours is
-removed. Nothing tells stele that a session ended.
+removed, under that session's lock and only if it is still old once the lock is
+held, so an update landing meanwhile is never deleted. Lock, temp and `.stale`
+files older than 24 hours, which only a crash leaves, go too. Nothing tells stele
+that a session ended.
 
 ---
 
@@ -896,7 +972,7 @@ Following Code Review Comments and the style guide.
 var (
     ErrNoIndex        = errors.New("no index")             // index
     ErrDuplicateID    = errors.New("duplicate rule id")    // lock
-    ErrInvalid        = errors.New("invalid")              // lock: bad JSON, version, project or id
+    ErrInvalid        = errors.New("invalid")              // lock: not a plain file, too large, bad JSON, version, project or id
     ErrPluginNotFound = errors.New("plugin not found")     // plugin
     ErrPluginRefused  = errors.New("plugin refused")       // plugin: inside the repo, bad name
     ErrProtocol       = errors.New("plugin protocol error") // plugin

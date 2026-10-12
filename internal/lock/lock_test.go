@@ -155,6 +155,9 @@ func TestLoadErrors(t *testing.T) {
 			if !strings.Contains(err.Error(), tt.substr) {
 				t.Errorf("err = %q, want it to mention %q", err, tt.substr)
 			}
+			if !strings.Contains(err.Error(), "delete it and run stele compile") {
+				t.Errorf("err = %q, want the recovery step", err)
+			}
 		})
 	}
 }
@@ -174,5 +177,21 @@ func TestEqual(t *testing.T) {
 	}
 	if Equal(a, lockOf([]string{"x"}, md(0, sql))) {
 		t.Error("locks with different ids are equal")
+	}
+}
+
+// stele.lock is never regenerated silently: one that is not a plain file is
+// ErrInvalid, and the message says how to recover.
+func TestLoadNotAFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, FileName, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(root)
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	if !strings.Contains(err.Error(), "delete it and run stele compile") {
+		t.Errorf("err = %q, want the recovery step", err)
 	}
 }
