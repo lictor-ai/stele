@@ -10,7 +10,8 @@
 // line, trimmed, with one pair of matching outer quotes removed.
 //
 // HTML comments before a rule's metadata are skipped, so the header comment
-// stele init writes is not a rule.
+// stele init writes is not a rule. As in a code block, a --- inside a comment
+// does not separate rules.
 package stelemd
 
 import (
@@ -100,12 +101,23 @@ func Parse(src []byte) ([]source.Rule, error) {
 	var rules []source.Rule
 	start := 0
 	fence, fenceLine := "", 0 // the open code fence, if any, and its index
+	comment, commentLine := false, 0
 	for i := 0; i <= len(lines); i++ {
 		if i < len(lines) {
+			if comment {
+				if strings.Contains(lines[i], "-->") {
+					comment = false
+				}
+				continue
+			}
 			if fence != "" {
 				if closesFence(lines[i], fence) {
 					fence = ""
 				}
+				continue
+			}
+			if opensComment(lines[i]) {
+				comment, commentLine = true, i
 				continue
 			}
 			if f := opensFence(lines[i]); f != "" {
@@ -117,6 +129,8 @@ func Parse(src []byte) ([]source.Rule, error) {
 			}
 		} else if fence != "" {
 			return nil, &source.ParseError{File: fileName, Line: fenceLine + 1, Err: errors.New("unclosed code block")}
+		} else if comment {
+			return nil, &source.ParseError{File: fileName, Line: commentLine + 1, Err: errors.New("unclosed comment")}
 		}
 		r, ok, err := parseRule(lines[start:i], start+1)
 		if err != nil {
@@ -147,7 +161,19 @@ func opensFence(line string) string {
 	if n < 3 {
 		return ""
 	}
+	// A backtick fence's info string cannot hold a backtick: ```x``` is
+	// inline code, not a fence.
+	if c == '`' && strings.Contains(trimmed[n:], "`") {
+		return ""
+	}
 	return trimmed[:n]
+}
+
+// opensComment reports whether line opens an HTML comment that does not close
+// on the same line. Until it closes, no line separates rules or opens a fence.
+func opensComment(line string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(line), "<!--")
+	return ok && !strings.Contains(rest, "-->")
 }
 
 // closesFence reports whether line closes fence: the same character, at least
@@ -165,7 +191,7 @@ func parseRule(lines []string, first int) (r source.Rule, ok bool, err error) {
 		return source.Rule{}, false, &source.ParseError{File: fileName, Line: first + i, Err: fmt.Errorf(format, args...)}
 	}
 
-	i, unclosed := skipPreamble(lines)
+	lines, i, unclosed := skipPreamble(lines)
 	if unclosed >= 0 {
 		return fail(unclosed, "unclosed comment")
 	}
@@ -222,8 +248,9 @@ func parseRule(lines []string, first int) (r source.Rule, ok bool, err error) {
 
 // skipPreamble skips blank lines and HTML comments, and returns the index of
 // the first line of the rule. unclosed is the index of a comment that never
-// closes, or -1.
-func skipPreamble(lines []string) (i, unclosed int) {
+// closes, or -1. Text after a comment's --> is the start of the rule, so the
+// returned lines may hold that line with the comment cut off.
+func skipPreamble(lines []string) (out []string, i, unclosed int) {
 	for i < len(lines) {
 		line := strings.TrimSpace(lines[i])
 		switch {
@@ -235,14 +262,21 @@ func skipPreamble(lines []string) (i, unclosed int) {
 				end++
 			}
 			if end == len(lines) {
-				return i, i
+				return lines, i, i
 			}
-			i = end + 1
+			_, rest, _ := strings.Cut(lines[end], "-->")
+			if rest = strings.TrimLeft(rest, " \t"); strings.TrimSpace(rest) == "" {
+				i = end + 1
+				continue
+			}
+			lines = append([]string(nil), lines...)
+			lines[end] = rest
+			i = end
 		default:
-			return i, -1
+			return lines, i, -1
 		}
 	}
-	return i, -1
+	return lines, i, -1
 }
 
 // unquote trims s and removes one pair of matching outer quotes.
@@ -290,7 +324,9 @@ func parseList(s string) ([]string, error) {
 			if c == quote {
 				quote = 0
 			}
-		case c == '"' || c == '\'':
+		case (c == '"' || c == '\'') && strings.TrimSpace(inner[from:j]) == "":
+			// Only a quote that opens an item quotes it: don't-care is a
+			// plain item.
 			quote = c
 		case c == '{':
 			depth++
@@ -302,6 +338,9 @@ func parseList(s string) ([]string, error) {
 			}
 			from = j + 1
 		}
+	}
+	if quote != 0 {
+		return nil, errors.New("unclosed quote")
 	}
 	if err := add(inner[from:]); err != nil {
 		return nil, err
