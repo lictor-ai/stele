@@ -13,6 +13,7 @@ import (
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/plugin"
+	"github.com/lictor-ai/stele/internal/sign"
 	"github.com/lictor-ai/stele/internal/source"
 )
 
@@ -23,13 +24,31 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return exitCantRun
 	}
-	r, err := compile.Compile(context.Background(), root, sources(), uuid.NewString)
+	key, err := loadKey()
+	if err != nil {
+		fmt.Fprintf(stderr, "stele compile: %v\n", err)
+		return exitCantRun
+	}
+	r, err := compile.Compile(context.Background(), root, sources(), uuid.NewString, key)
 	if err != nil {
 		fmt.Fprintf(stderr, "stele compile: %v\n", err)
 		return exitCantRun
 	}
 	printCompile(stdout, r)
 	return exitOK
+}
+
+// keyDir is where this machine's signing key lives. Tests point it at a
+// temp directory.
+var keyDir = sign.DefaultDir
+
+// loadKey returns the key stele signs its generated files with (#27).
+func loadKey() (sign.Key, error) {
+	dir, err := keyDir()
+	if err != nil {
+		return nil, err
+	}
+	return sign.LoadKey(dir)
 }
 
 // runCheck validates the rules and writes nothing. It fails on a rule file

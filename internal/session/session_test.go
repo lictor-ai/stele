@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,12 +11,14 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/lictor-ai/stele/internal/sign"
 )
 
 var t0 = time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
 
 func TestLoadMissing(t *testing.T) {
-	got, err := Load(t.TempDir(), "s1")
+	got, err := Load(t.TempDir(), "s1", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +29,7 @@ func TestLoadMissing(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	root := t.TempDir()
-	st, err := Update(root, "s1", t0, func(s *State) error {
+	st, err := Update(root, "s1", t0, testKey, func(s *State) error {
 		s.PromptID = "p1"
 		s.Armed = true
 		s.Touched = []string{"internal/db"}
@@ -40,7 +43,7 @@ func TestUpdate(t *testing.T) {
 	if diff := cmp.Diff(want, st); diff != "" {
 		t.Errorf("returned state (-want +got):\n%s", diff)
 	}
-	got, err := Load(root, "s1")
+	got, err := Load(root, "s1", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,13 +52,13 @@ func TestUpdate(t *testing.T) {
 	}
 
 	// The other process changes another field; the first one's survive.
-	if _, err := Update(root, "s1", t0, func(s *State) error {
+	if _, err := Update(root, "s1", t0, testKey, func(s *State) error {
 		s.LastError = "request: no index"
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got, err = Load(root, "s1")
+	got, err = Load(root, "s1", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,14 +79,14 @@ func TestUpdate(t *testing.T) {
 func TestUpdateErrorSavesNothing(t *testing.T) {
 	root := t.TempDir()
 	boom := errors.New("boom")
-	_, err := Update(root, "s1", t0, func(s *State) error {
+	_, err := Update(root, "s1", t0, testKey, func(s *State) error {
 		s.Armed = true
 		return boom
 	})
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want boom", err)
 	}
-	got, err := Load(root, "s1")
+	got, err := Load(root, "s1", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +99,7 @@ func TestUpdateErrorSavesNothing(t *testing.T) {
 func TestSessionsAreSeparate(t *testing.T) {
 	root := t.TempDir()
 	for _, id := range []string{"a", "b"} {
-		if _, err := Update(root, id, t0, func(s *State) error {
+		if _, err := Update(root, id, t0, testKey, func(s *State) error {
 			s.Armed = true
 			return nil
 		}); err != nil {
@@ -104,13 +107,13 @@ func TestSessionsAreSeparate(t *testing.T) {
 		}
 	}
 	// a's fetch disarms a only.
-	if _, err := Update(root, "a", t0, func(s *State) error {
+	if _, err := Update(root, "a", t0, testKey, func(s *State) error {
 		s.Armed = false
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	b, err := Load(root, "b")
+	b, err := Load(root, "b", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +132,7 @@ func TestUpdateConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := Update(root, "s1", t0, func(s *State) error {
+			_, err := Update(root, "s1", t0, testKey, func(s *State) error {
 				s.Blocks++
 				return nil
 			})
@@ -143,7 +146,7 @@ func TestUpdateConcurrent(t *testing.T) {
 			t.Fatalf("Update: %v", err)
 		}
 	}
-	got, err := Load(root, "s1")
+	got, err := Load(root, "s1", testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +157,7 @@ func TestUpdateConcurrent(t *testing.T) {
 
 func TestStaleLockIsTakenOver(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+	if _, err := Update(root, "s1", t0, testKey, func(*State) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	// A crashed process left its lock file.
@@ -166,7 +169,7 @@ func TestStaleLockIsTakenOver(t *testing.T) {
 	if err := os.Chtimes(lockFile, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+	if _, err := Update(root, "s1", t0, testKey, func(*State) error { return nil }); err != nil {
 		t.Errorf("Update with a stale lock: %v", err)
 	}
 }
@@ -174,7 +177,7 @@ func TestStaleLockIsTakenOver(t *testing.T) {
 func TestCleanup(t *testing.T) {
 	root := t.TempDir()
 	for _, id := range []string{"old", "recent"} {
-		if _, err := Update(root, id, t0, func(*State) error { return nil }); err != nil {
+		if _, err := Update(root, id, t0, testKey, func(*State) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -187,7 +190,7 @@ func TestCleanup(t *testing.T) {
 		}
 	}
 
-	if _, err := Update(root, "writer", now, func(*State) error { return nil }); err != nil {
+	if _, err := Update(root, "writer", now, testKey, func(*State) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path(root, "old")); !errors.Is(err, os.ErrNotExist) {
@@ -223,10 +226,10 @@ func TestCurrent(t *testing.T) {
 func TestBadSessionID(t *testing.T) {
 	root := t.TempDir()
 	for _, id := range []string{"", "../escape", `a\b`, "a/b", "..", "a.b", "CON", "nul", "Com1", "LPT9"} {
-		if _, err := Load(root, id); !errors.Is(err, ErrBadSessionID) {
+		if _, err := Load(root, id, testKey); !errors.Is(err, ErrBadSessionID) {
 			t.Errorf("Load(%q): err = %v, want ErrBadSessionID", id, err)
 		}
-		if _, err := Update(root, id, t0, func(*State) error { return nil }); !errors.Is(err, ErrBadSessionID) {
+		if _, err := Update(root, id, t0, testKey, func(*State) error { return nil }); !errors.Is(err, ErrBadSessionID) {
 			t.Errorf("Update(%q): err = %v, want ErrBadSessionID", id, err)
 		}
 		if err := SetCurrent(root, id); !errors.Is(err, ErrBadSessionID) {
@@ -254,7 +257,7 @@ func TestUpdateRefusesSymlinkedState(t *testing.T) {
 	if err := os.Symlink(elsewhere, filepath.Join(root, ".stele", "state")); err != nil {
 		t.Skipf("cannot make a symlink here: %v", err)
 	}
-	if _, err := Update(root, "s1", time.Now(), func(*State) error { return nil }); err == nil {
+	if _, err := Update(root, "s1", time.Now(), testKey, func(*State) error { return nil }); err == nil {
 		t.Error("Update through a symlinked .stele/state succeeded")
 	}
 	if err := SetCurrent(root, "s1"); err == nil {
@@ -269,7 +272,7 @@ func TestUpdateRefusesSymlinkedState(t *testing.T) {
 // Cleanup removes an old session's lock only if the lock is old too.
 func TestCleanupKeepsFreshLock(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Update(root, "old", t0, func(*State) error { return nil }); err != nil {
+	if _, err := Update(root, "old", t0, testKey, func(*State) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
@@ -282,7 +285,7 @@ func TestCleanupKeepsFreshLock(t *testing.T) {
 	if err := os.WriteFile(lockFile, []byte("token"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Update(root, "writer", now, func(*State) error { return nil }); err != nil {
+	if _, err := Update(root, "writer", now, testKey, func(*State) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(lockFile); err != nil {
@@ -298,16 +301,16 @@ func TestCleanupKeepsFreshLock(t *testing.T) {
 // afresh rather than failing every update for a day.
 func TestUpdateRecoversUnreadableState(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+	if _, err := Update(root, "s1", t0, testKey, func(*State) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path(root, "s1"), []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(root, "s1"); err == nil {
+	if _, err := Load(root, "s1", testKey); err == nil {
 		t.Error("Load of a corrupt file succeeded")
 	}
-	st, err := Update(root, "s1", t0, func(s *State) error {
+	st, err := Update(root, "s1", t0, testKey, func(s *State) error {
 		s.Armed = true
 		return nil
 	})
@@ -317,7 +320,7 @@ func TestUpdateRecoversUnreadableState(t *testing.T) {
 	if !st.Armed {
 		t.Error("Update did not apply fn")
 	}
-	if _, err := Load(root, "s1"); err != nil {
+	if _, err := Load(root, "s1", testKey); err != nil {
 		t.Errorf("Load after recovery: %v", err)
 	}
 }
@@ -342,24 +345,24 @@ func TestReadsRefuseSymlinks(t *testing.T) {
 	if id, err := Current(root); err != nil || id != "" {
 		t.Errorf("Current through a symlink = %q, %v; want no session", id, err)
 	}
-	if _, err := Load(root, "s1"); err == nil {
+	if _, err := Load(root, "s1", testKey); err == nil {
 		t.Error("Load through a symlink succeeded")
 	}
 	// Update replaces the link with a real file instead of reading through it.
-	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+	if _, err := Update(root, "s1", t0, testKey, func(*State) error { return nil }); err != nil {
 		t.Errorf("Update over a symlinked state file: %v", err)
 	}
 }
 
 func TestLoadTooLarge(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+	if _, err := Update(root, "s1", t0, testKey, func(*State) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path(root, "s1"), make([]byte, maxSize+1), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(root, "s1"); err == nil {
+	if _, err := Load(root, "s1", testKey); err == nil {
 		t.Error("Load of an oversized file succeeded")
 	}
 }
@@ -368,7 +371,7 @@ func TestLoadTooLarge(t *testing.T) {
 // file from Replace, a stale lock moved aside.
 func TestCleanupLeftovers(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+	if _, err := Update(root, "s1", t0, testKey, func(*State) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(root, ".stele", "state")
@@ -384,7 +387,7 @@ func TestCleanupLeftovers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := Update(root, "s1", now, func(*State) error { return nil }); err != nil {
+	if _, err := Update(root, "s1", now, testKey, func(*State) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range leftovers {
@@ -399,7 +402,7 @@ func TestCleanupLeftovers(t *testing.T) {
 // must outlast the read.
 func TestLoadDuringUpdates(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+	if _, err := Update(root, "s1", t0, testKey, func(*State) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
@@ -412,14 +415,14 @@ func TestLoadDuringUpdates(t *testing.T) {
 				return
 			default:
 			}
-			if _, err := Load(root, "s1"); err != nil {
+			if _, err := Load(root, "s1", testKey); err != nil {
 				readErrs <- err
 				return
 			}
 		}
 	}()
 	for i := range 200 {
-		if _, err := Update(root, "s1", t0, func(s *State) error {
+		if _, err := Update(root, "s1", t0, testKey, func(s *State) error {
 			s.Blocks = i
 			return nil
 		}); err != nil {
@@ -454,5 +457,54 @@ func TestCurrentNotAFile(t *testing.T) {
 	}
 	if id, err := Current(root); err != nil || id != "s1" {
 		t.Errorf("Current = %q, %v; want s1", id, err)
+	}
+}
+
+var testKey = sign.Key(bytes.Repeat([]byte{7}, 32))
+
+// A state file stele did not sign on this machine is never believed, and the
+// session starts afresh: a repository cannot plant a disarmed state, and one
+// session's file cannot pass for another's.
+func TestPlantedStateIsIgnored(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Update(root, "other", t0, testKey, func(s *State) error {
+		s.Blocks = 2
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	signedForOther, err := os.ReadFile(path(root, "other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsigned := []byte(`{"session_id": "s1", "armed": false, "blocks": 99}`)
+	foreign := sign.Key(bytes.Repeat([]byte{8}, 32)).Seal("session:s1", unsigned)
+
+	for name, content := range map[string][]byte{
+		"unsigned":              unsigned,
+		"another machine's key": foreign,
+		"another session's":     signedForOther,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(path(root, "s1"), content, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(root, "s1", testKey); err == nil {
+				t.Error("Load believed a file stele did not sign for this session")
+			}
+			st, err := Update(root, "s1", t0, testKey, func(*State) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.Blocks != 0 {
+				t.Errorf("Blocks = %d, want a fresh state", st.Blocks)
+			}
+		})
+	}
+}
+
+func TestUpdateNeedsKey(t *testing.T) {
+	if _, err := Update(t.TempDir(), "s1", t0, nil, func(*State) error { return nil }); err == nil {
+		t.Error("Update without a key succeeded")
 	}
 }

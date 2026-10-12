@@ -1,6 +1,7 @@
 package index
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/lictor-ai/stele/internal/sign"
 )
 
 func sample() Index {
@@ -30,10 +33,10 @@ func sample() Index {
 func TestSaveLoad(t *testing.T) {
 	root := t.TempDir()
 	want := sample()
-	if err := Save(root, want); err != nil {
+	if err := Save(root, want, testKey); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	got, err := Load(root)
+	got, err := Load(root, testKey)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -61,7 +64,7 @@ func TestSaveKeepsGitignore(t *testing.T) {
 	if err := os.WriteFile(ignore, []byte("custom\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Save(root, sample()); err != nil {
+	if err := Save(root, sample(), testKey); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(ignore)
@@ -93,7 +96,7 @@ func TestLoadNoIndex(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := Load(root); !errors.Is(err, ErrNoIndex) {
+			if _, err := Load(root, testKey); !errors.Is(err, ErrNoIndex) {
 				t.Errorf("Load: err = %v, want ErrNoIndex", err)
 			}
 		})
@@ -124,7 +127,7 @@ func TestSaveRefusesSymlinkedDir(t *testing.T) {
 	if err := os.Symlink(elsewhere, filepath.Join(root, Dir)); err != nil {
 		t.Skipf("cannot make a symlink here: %v", err)
 	}
-	if err := Save(root, sample()); err == nil {
+	if err := Save(root, sample(), testKey); err == nil {
 		t.Fatal("Save through a symlinked .stele succeeded")
 	}
 	entries, _ := os.ReadDir(elsewhere)
@@ -140,13 +143,13 @@ func TestIndexNotAFile(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(Path(root), "inside"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(root); !errors.Is(err, ErrNoIndex) {
+	if _, err := Load(root, testKey); !errors.Is(err, ErrNoIndex) {
 		t.Fatalf("Load: err = %v, want ErrNoIndex", err)
 	}
-	if err := Save(root, sample()); err != nil {
+	if err := Save(root, sample(), testKey); err != nil {
 		t.Fatalf("Save over a directory: %v", err)
 	}
-	if _, err := Load(root); err != nil {
+	if _, err := Load(root, testKey); err != nil {
 		t.Errorf("Load after Save: %v", err)
 	}
 }
@@ -159,11 +162,47 @@ func TestDirIsAFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, Dir), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(root); !errors.Is(err, ErrNoIndex) {
+	if _, err := Load(root, testKey); !errors.Is(err, ErrNoIndex) {
 		t.Errorf("Load: err = %v, want ErrNoIndex", err)
 	}
-	err := Save(root, sample())
+	err := Save(root, sample(), testKey)
 	if err == nil || !strings.Contains(err.Error(), "delete it and stele recreates it") {
 		t.Errorf("Save: err = %v, want the recovery step", err)
+	}
+}
+
+var testKey = sign.Key(bytes.Repeat([]byte{7}, 32))
+
+// The attack #27 closes: a repository commits an index.json whose rules
+// nobody reviewed. Unsigned, or signed on another machine, it is no index.
+func TestLoadRejectsForeignIndex(t *testing.T) {
+	root := t.TempDir()
+	plain, err := encode(sample())
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := sign.Key(bytes.Repeat([]byte{8}, 32))
+	for name, content := range map[string][]byte{
+		"unsigned":              plain,
+		"another machine's key": other.Seal(purpose, plain),
+		"signed as a session":   testKey.Seal("session:s1", plain),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.MkdirAll(filepath.Join(root, Dir), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(Path(root), content, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(root, testKey); !errors.Is(err, ErrNoIndex) {
+				t.Errorf("Load: err = %v, want ErrNoIndex", err)
+			}
+		})
+	}
+}
+
+func TestSaveNeedsKey(t *testing.T) {
+	if err := Save(t.TempDir(), sample(), nil); err == nil {
+		t.Error("Save without a key succeeded")
 	}
 }

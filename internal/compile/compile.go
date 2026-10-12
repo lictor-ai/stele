@@ -17,6 +17,7 @@ import (
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/safefile"
+	"github.com/lictor-ai/stele/internal/sign"
 	"github.com/lictor-ai/stele/internal/source"
 )
 
@@ -45,19 +46,21 @@ const (
 	lockStale = 30 * time.Second
 )
 
-// Plan reads every source and writes nothing.
+// Plan reads every source and writes nothing. It holds no key, so it trusts
+// no index on disk and IndexChanged is always true: stele check, its caller,
+// never serves the index and never writes, so it needs neither.
 func Plan(ctx context.Context, root string, srcs []source.Source, newID func() string) (Result, error) {
 	rules, fps, err := readAll(ctx, root, srcs)
 	if err != nil {
 		return Result{}, err
 	}
-	return plan(root, rules, fps, newID, false)
+	return plan(root, rules, fps, newID, false, nil)
 }
 
 // Compile is stele compile: it reads every source, then plans and applies
 // under the compile lock, so a concurrent EnsureFresh never interleaves its
 // writes with these.
-func Compile(ctx context.Context, root string, srcs []source.Source, newID func() string) (Result, error) {
+func Compile(ctx context.Context, root string, srcs []source.Source, newID func() string, key sign.Key) (Result, error) {
 	rules, fps, err := readAll(ctx, root, srcs)
 	if err != nil {
 		return Result{}, err
@@ -67,11 +70,11 @@ func Compile(ctx context.Context, root string, srcs []source.Source, newID func(
 		return Result{}, err
 	}
 	defer unlock()
-	r, err := plan(root, rules, fps, newID, false)
+	r, err := plan(root, rules, fps, newID, false, key)
 	if err != nil {
 		return Result{}, err
 	}
-	return r, Apply(root, r)
+	return r, Apply(root, r, key)
 }
 
 // Apply writes what changed: the lock, then the index. The index holds ids
@@ -79,14 +82,14 @@ func Compile(ctx context.Context, root string, srcs []source.Source, newID func(
 // leaves an index that the next compile rebuilds, never a lost id. A caller
 // that plans and applies should hold the compile lock across both, as
 // Compile and EnsureFresh do.
-func Apply(root string, r Result) error {
+func Apply(root string, r Result, key sign.Key) error {
 	if r.LockChanged {
 		if err := lock.Save(root, r.Lock); err != nil {
 			return err
 		}
 	}
 	if r.IndexChanged {
-		return index.Save(root, r.Index)
+		return index.Save(root, r.Index, key)
 	}
 	return nil
 }
@@ -100,8 +103,8 @@ func Apply(root string, r Result) error {
 // It never reads an external source, so it never drops one's lock entries
 // either: their rules keep their ids for the next stele compile, even when
 // the index no longer holds them.
-func EnsureFresh(ctx context.Context, root string, builtins []source.Source, newID func() string) (index.Index, bool, error) {
-	cur, ok, stale, err := staleness(ctx, root, builtins)
+func EnsureFresh(ctx context.Context, root string, builtins []source.Source, newID func() string, key sign.Key) (index.Index, bool, error) {
+	cur, ok, stale, err := staleness(ctx, root, builtins, key)
 	if err != nil || (ok && len(stale) == 0) {
 		return cur, false, err
 	}
@@ -112,7 +115,7 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, new
 	}
 	defer unlock()
 	// Another process may have rebuilt while this one waited for the lock.
-	cur, ok, stale, err = staleness(ctx, root, builtins)
+	cur, ok, stale, err = staleness(ctx, root, builtins, key)
 	if err != nil || (ok && len(stale) == 0) {
 		return cur, false, err
 	}
@@ -144,17 +147,17 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, new
 		}
 	}
 
-	r, err := plan(root, rules, fps, newID, true)
+	r, err := plan(root, rules, fps, newID, true, key)
 	if err != nil {
 		return index.Index{}, false, err
 	}
-	return r.Index, true, Apply(root, r)
+	return r.Index, true, Apply(root, r, key)
 }
 
 // staleness loads the index and says which builtins changed since it was
 // built. ok is false when there is no usable index; cur is then empty.
-func staleness(ctx context.Context, root string, builtins []source.Source) (cur index.Index, ok bool, stale map[string]bool, err error) {
-	cur, err = index.Load(root)
+func staleness(ctx context.Context, root string, builtins []source.Source, key sign.Key) (cur index.Index, ok bool, stale map[string]bool, err error) {
+	cur, err = index.Load(root, key)
 	if errors.Is(err, index.ErrNoIndex) {
 		return index.Index{}, false, nil, nil
 	}
@@ -214,7 +217,7 @@ func read(ctx context.Context, root string, s source.Source) ([]source.Rule, str
 // plan reconciles rules against stele.lock and builds the index. keepUnread
 // keeps the lock entries of sources that were not read, so a rebuild from the
 // builtins alone does not cost external rules their ids.
-func plan(root string, rules []source.Rule, fps map[string]string, newID func() string, keepUnread bool) (Result, error) {
+func plan(root string, rules []source.Rule, fps map[string]string, newID func() string, keepUnread bool, key sign.Key) (Result, error) {
 	prev, err := lock.Load(root)
 	if err != nil {
 		return Result{}, err
@@ -256,7 +259,7 @@ func plan(root string, rules []source.Rule, fps map[string]string, newID func() 
 		}
 	}
 
-	cur, err := index.Load(root)
+	cur, err := index.Load(root, key)
 	if err != nil && !errors.Is(err, index.ErrNoIndex) {
 		return Result{}, err
 	}
