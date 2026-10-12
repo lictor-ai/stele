@@ -2,7 +2,7 @@
 
 * Status: accepted
 * Date: 2026-10-12
-* Amends: the v1 spec, §2.1, §4 and §5
+* Amends: the v1 spec, §1, §2.1, §2.3, §3 (`scope`), §4, §5, §6 and §7
 
 ## Context and Problem Statement
 
@@ -62,9 +62,48 @@ Chosen option: **Option 2**.
 * **Install.** `stele init` registers the two hooks and creates `stele.md` and
   `.stele/` (#12). There is no MCP server and no subagent to register.
 
-Everything already built stays and is used as designed: the parser, stable ids
-in `stele.lock`, the index and `EnsureFresh`, session state, the trust rule for
-`.stele/`, and signed generated files (D57).
+Everything already built stays: the parser, stable ids in `stele.lock`, the
+index and `EnsureFresh`, session state, the trust rule for `.stele/`, and signed
+generated files (D57). Two of them change role, below.
+
+### How the hook works, in detail
+
+* **Which files.** The project root is found from the written file's own path,
+  walking up as architecture §6 describes, not from the payload's `cwd`, so a
+  file in a subproject with its own `stele.md` gets that subproject's rules. A
+  file outside any root gets no rules. Paths are matched against `scope` relative
+  to the root, with `/` separators on every platform.
+* **Keeping the index fresh.** With no `request`, the hook itself calls
+  `compile.EnsureFresh` with the built-in sources only (D45), so an edit to
+  `stele.md` takes effect on the next write without a manual `stele compile`. The
+  hook therefore does read rule content, unlike the spec's §5 hook.
+* **"Shown" is per session, per agent, per turn.** The hook applies to subagents
+  too: there is no matcher subagent to stand aside for. A subagent has its own
+  context, so rules shown to the main agent do not count as shown to a subagent,
+  or the other way round. The record is keyed by `session_id` and `agent_id`
+  (empty for the main agent), and reset by a new `prompt_id`. A missing
+  `prompt_id` simply widens "turn" to the whole session.
+* **Parallel writes.** The agent often issues several writes in one message, and
+  their hooks run before it reads any deny reason. So for a short window after a
+  deny (a few seconds, shorter than any model round trip), every write that needs
+  the same rules is denied too. The agent reads the rules once and retries the
+  whole batch.
+* **Save before deny.** The record of rules shown is saved before the deny is
+  returned. If it cannot be saved, the hook follows `block_on_error` rather than
+  deny the same write forever; there is no circuit breaker to stop such a loop.
+* **A broken `stele.md`.** When `stele.md` stops parsing, the hook keeps using
+  the last good index, which is still signed and still verified, and tells the
+  agent that `stele.md` has an error at line N. Rules stay enforced while the
+  file is being edited. With no good index at all, the failure policy below
+  applies.
+* **After a write, only the agent's changes.** For an Edit, only violations in
+  the lines its new text covers are sent back. For a Write, the whole file is the
+  agent's. Older violations elsewhere in the file are left to `stele check`, so
+  the agent is not pushed into rewriting code outside its task.
+* **Session state** gains the record of rules shown, per agent. `Armed`,
+  `Touched` and `Blocks` belonged to the arm-and-fetch exchange and go; there is
+  no re-arming per directory, since a write into a new directory brings that
+  directory's scoped rules anyway.
 
 ### What moves to the "team" milestone
 
@@ -78,17 +117,23 @@ design for that milestone, and nothing in v1 closes it off.
 The hook no longer arms on a turn and disarms on `fetch`; there is no `fetch`. It
 blocks a write that would bring rules not yet shown this turn. The three-blocks
 circuit breaker is gone with it: the agent completes the exchange by reading the
-block reason and retrying, which needs no cooperation beyond that. `backstop` and
-`block_on_error` keep their meaning: `backstop` off means the hook never blocks,
-and `block_on_error` decides whether a failure of stele itself blocks or lets the
-write through with a warning.
+block reason and retrying, which needs no cooperation beyond that. The hook also
+no longer stands aside inside subagents, and it reads rule content (above).
+
+`backstop` keeps its meaning: off, the hook never blocks. `block_on_error` changes
+meaning: in the spec it covers the matcher failing and the exchange not
+completing; in v1 it covers stele itself failing with no good index to fall back
+on (no key, a session that cannot be saved, `stele.md` broken before it ever
+parsed). Off, the default, lets the write through with a warning; on, blocks and
+says why. A broken `stele.md` with a good index behind it is not a failure: the
+last good rules apply.
 
 ### Positive Consequences
 
 * No model call and no network on any path: the hook reads a local, signed
   index. It is fast and deterministic, and testable from recorded hook input.
-* The agent cannot skip the exchange: the rules arrive in the deny reason of the
-  very write that needs them.
+* For a Write or Edit, the agent cannot skip the exchange: the rules arrive in
+  the deny reason of the very write that needs them, batch included.
 * Violations of checkable rules are caught at the write, not only in CI.
 * v1 loses its two hardest deliverables, the matcher prompt and the three-call
   exchange, without closing the door on them.
@@ -103,6 +148,12 @@ write through with a warning.
   migration written as `.sql`. Model-driven selection fixes this, for teams.
 * The agent is shown the rules and told about violations, but can still ignore
   what a regex cannot catch.
+* The hooks see Write and Edit only. A file written through Bash (`cat > f`,
+  `sed -i`) or NotebookEdit gets no rules and no check; `stele check` in CI is the
+  only catch there. A model denied a Write may fall back to Bash.
+* `scope` changes meaning: in the spec it is "a hint to the matcher, not a hard
+  filter". In v1 it is the filter, so a broad scope shows a rule more often and a
+  narrow one hides it. §3 says so.
 
 ## Rejected options
 
