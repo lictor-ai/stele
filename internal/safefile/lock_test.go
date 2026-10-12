@@ -12,10 +12,10 @@ import (
 
 func TestCreate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".gitignore")
-	if err := Create(path, []byte("*\n")); err != nil {
+	if err := Create(path, []byte("*\n"), 0o644); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := Create(path, []byte("other\n")); !errors.Is(err, fs.ErrExist) {
+	if err := Create(path, []byte("other\n"), 0o644); !errors.Is(err, fs.ErrExist) {
 		t.Errorf("second Create: err = %v, want ErrExist", err)
 	}
 	got, err := os.ReadFile(path)

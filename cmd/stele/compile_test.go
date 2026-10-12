@@ -23,6 +23,11 @@ func project(t *testing.T, steleMD string) string {
 		}
 	}
 	t.Chdir(root)
+	// Never touch the real user's key.
+	dir := t.TempDir()
+	old := keyDir
+	keyDir = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { keyDir = old })
 	return root
 }
 

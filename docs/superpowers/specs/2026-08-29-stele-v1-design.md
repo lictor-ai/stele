@@ -738,6 +738,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D54 | `stele status --format json` describes the install. `describe` reports the plugin's version. | — |
 | D55 | Org-wide rules reach a repository only through a source plugin. | — |
 | D56 | `stele.md` follows Markdown where it can: a `---` inside a fenced code block or an HTML comment does not separate rules, and HTML comments before a rule's metadata are skipped. | — |
+| D57 | stele trusts only the generated files it wrote on this machine. `index.json` and session state carry an HMAC-SHA256 made with a per-user key kept outside every repository (the user config directory, owner-only); a file that does not verify is rebuilt or started afresh. `stele.lock` is shared on purpose and not signed. Malware running as the user is out of scope. | follows from D24 and D45: `.stele/` is not covered by the repository's `.gitignore`, so a repository could otherwise commit an index the agent is served |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 

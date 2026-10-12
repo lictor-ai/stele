@@ -34,6 +34,7 @@ internal/source/      the Source slot: Rule, the Source interface
   stelemd/            the built-in stele.md source: read, hash, parse
 internal/lock/        stele.lock: identity, reconciliation
 internal/safefile/    crash-safe replace, create-if-absent, lock files, safe dirs and bounded reads (§7)
+internal/sign/        the per-machine key that signs generated files (D57)
 internal/index/       index.json: load, save
 internal/compile/     the one place that turns sources into an index
 internal/session/     state/<session>.json: arm state, touched dirs
@@ -279,8 +280,8 @@ type Entry struct {
     BodyHash                      string
 }
 
-func Load(root string) (Index, error) // ErrNoIndex. never ErrStale — see internal/source
-func Save(root string, idx Index) error // crash-safe replace, §7
+func Load(root string, key sign.Key) (Index, error) // ErrNoIndex, also when not signed with key. never ErrStale
+func Save(root string, idx Index, key sign.Key) error // signed, crash-safe replace, §7
 func Equal(a, b Index) bool
 ```
 
@@ -316,14 +317,15 @@ type Result struct {
 }
 
 // Plan reads every source and writes nothing.
+// It holds no key, so IndexChanged is always true: stele check never serves the index.
 func Plan(ctx context.Context, root string, srcs []source.Source, newID func() string) (Result, error)
 // Compile is stele compile: read every source, then Plan and Apply under the compile lock.
-func Compile(ctx context.Context, root string, srcs []source.Source, newID func() string) (Result, error)
+func Compile(ctx context.Context, root string, srcs []source.Source, newID func() string, key sign.Key) (Result, error)
 // Apply writes the lock and the index, each only when it changed, lock first.
-func Apply(root string, r Result) error
+func Apply(root string, r Result, key sign.Key) error
 // EnsureFresh re-reads only builtins, and only those whose fingerprint changed.
 // Rules from every other source are carried over from the current index.
-func EnsureFresh(ctx context.Context, root string, builtins []source.Source, newID func() string) (index.Index, bool, error)
+func EnsureFresh(ctx context.Context, root string, builtins []source.Source, newID func() string, key sign.Key) (index.Index, bool, error)
 ```
 
 The `Plan`/`Apply` split is what makes `stele check` possible: CI runs `Plan`,
@@ -367,8 +369,8 @@ type State struct {
     UpdatedAt time.Time
 }
 
-func Load(root, id string) (State, error)  // no file yet: a zero State carrying id
-func Update(root, id string, now time.Time, fn func(*State) error) (State, error)
+func Load(root, id string, key sign.Key) (State, error) // no file yet: a zero State carrying id
+func Update(root, id string, now time.Time, key sign.Key, fn func(*State) error) (State, error)
 func SetCurrent(root, id string) error     // the hook, on every block
 func Current(root string) (string, error)  // request; "" when no session has blocked
 ```
@@ -941,8 +943,25 @@ whatever the extension.
 
 The shape check stops files that would crash or hang stele. It says nothing about
 who wrote a well-formed file: a committed `index.json` with a matching fingerprint
-would still be trusted. Signing generated files with a per-machine key closes that
-(#27).
+would still be trusted. **So generated files are signed** (D57, `internal/sign`):
+
+- On first use stele creates a random 32-byte key in the user's config directory
+  (`os.UserConfigDir()/stele/key`, 0600), outside every repository. Two processes
+  creating it at once agree on one. A key that cannot be read is an error, never a
+  reason to trust unsigned files.
+- `index.json` and `state/<id>.json` start with a line `stele-hmac-sha256 <hex>`,
+  an HMAC-SHA256 over a purpose (`index`, `session:<id>`) and the body. The
+  purpose stops a signed file passing for another kind, or another session's.
+- A file that does not verify was not written by stele on this machine: an index
+  is `ErrNoIndex` and rebuilt from the sources, so its rules are never served; a
+  session state starts afresh.
+- `stele check` loads no key: `Plan` never serves the index, so CI creates none.
+- `stele.lock` is shared on purpose and is not signed. It holds no rule text, and
+  changes to it show in review. `state/current` is not signed either: it only
+  names a session, whose state must verify.
+
+Malware already running as the user can read the key; nothing file-based stops
+that, as for git or any local tool.
 
 **`journal.Append` opens with `O_APPEND`** and writes one line per call. Short
 appends are atomic on POSIX. Windows offers no equivalent guarantee, so the writer

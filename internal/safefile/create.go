@@ -2,6 +2,7 @@ package safefile
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -10,13 +11,14 @@ import (
 // error satisfying errors.Is(err, fs.ErrExist) if it does. The file appears
 // whole or not at all: the content goes to a temp file that is then hard
 // linked into place, and a link fails rather than replace an existing file.
-func Create(path string, data []byte) error {
+// perm is the file's mode, such as 0644, or 0600 for a secret.
+func Create(path string, data []byte, perm fs.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if err := tmp.Chmod(0o644); err != nil {
+	if err := tmp.Chmod(perm); err != nil {
 		tmp.Close()
 		return err
 	}

@@ -4,6 +4,11 @@
 // (D40). The index is generated and gitignored (D24), so its format carries no
 // compatibility promise: a Version mismatch reads as no index, and the caller
 // rebuilds it.
+//
+// The index is signed with this machine's key (internal/sign). A repository
+// can commit an index.json whose fingerprint matches stele.md and whose rules
+// do not; it never verifies here, so it reads as no index and is rebuilt
+// from the sources, and its rules are never served.
 package index
 
 import (
@@ -15,12 +20,15 @@ import (
 	"path/filepath"
 
 	"github.com/lictor-ai/stele/internal/safefile"
+	"github.com/lictor-ai/stele/internal/sign"
 )
 
 const (
 	// Dir is stele's working directory under the root. All of it is generated.
 	Dir      = ".stele"
 	fileName = "index.json"
+	// purpose is what the index is signed as.
+	purpose = "index"
 	// Version is the index format this stele reads and writes.
 	Version = 1
 	// maxSize caps the index. Thousands of rules fit in a few megabytes.
@@ -60,8 +68,11 @@ func Path(root string) string { return filepath.Join(root, Dir, fileName) }
 // clone can commit a directory or a symlink to /dev/zero there, and the
 // index is cheap to rebuild. It never reports staleness: only a source can
 // say whether it changed (architecture §3).
-func Load(root string) (Index, error) {
-	data, err := safefile.ReadRegular(Path(root), maxSize)
+//
+// An index not signed with key, including any index when key is nil, is
+// ErrNoIndex too.
+func Load(root string, key sign.Key) (Index, error) {
+	sealed, err := safefile.ReadRegular(Path(root), maxSize)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Index{}, ErrNoIndex
 	}
@@ -70,6 +81,10 @@ func Load(root string) (Index, error) {
 	}
 	if err != nil {
 		return Index{}, err
+	}
+	data, err := key.Open(purpose, sealed)
+	if err != nil {
+		return Index{}, fmt.Errorf("%w: %s: %v", ErrNoIndex, fileName, err)
 	}
 	var idx Index
 	if err := json.Unmarshal(data, &idx); err != nil {
@@ -82,8 +97,12 @@ func Load(root string) (Index, error) {
 }
 
 // Save writes the index under root, creating .stele/ and its .gitignore when
-// they are missing. The old index is never truncated (architecture §7).
-func Save(root string, idx Index) error {
+// they are missing, and signs it with key. The old index is never truncated
+// (architecture §7).
+func Save(root string, idx Index, key sign.Key) error {
+	if len(key) == 0 {
+		return errors.New("index: no key to sign with")
+	}
 	if err := EnsureDir(root); err != nil {
 		return err
 	}
@@ -91,7 +110,7 @@ func Save(root string, idx Index) error {
 	if err != nil {
 		return err
 	}
-	return safefile.Replace(Path(root), data)
+	return safefile.Replace(Path(root), key.Seal(purpose, data))
 }
 
 // EnsureDir creates .stele/ under root and its .gitignore when they are
@@ -108,7 +127,7 @@ func EnsureDir(root string) error {
 	// Nothing in .stele/ is committed, so one "*" covers it and the
 	// repository's own .gitignore is never touched (spec §2.3). It is
 	// created whole or not at all, and the first of two processes wins.
-	err := safefile.Create(filepath.Join(dir, ".gitignore"), []byte("*\n"))
+	err := safefile.Create(filepath.Join(dir, ".gitignore"), []byte("*\n"), 0o644)
 	if errors.Is(err, fs.ErrExist) {
 		return nil
 	}

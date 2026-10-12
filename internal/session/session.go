@@ -23,6 +23,7 @@ import (
 
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/safefile"
+	"github.com/lictor-ai/stele/internal/sign"
 )
 
 const (
@@ -70,17 +71,20 @@ type State struct {
 }
 
 // errUnreadable is a state file that exists but holds no usable state: not
-// JSON, not a regular file, or too large. Update starts that session afresh.
+// signed by stele on this machine, not JSON, not a regular file, or too
+// large. Update starts that session afresh.
 var errUnreadable = errors.New("unreadable session state")
 
 // Load reads a session's state. A session with no file yet is a zero State
 // carrying its id, not an error. It reads only a regular file of bounded
-// size, so a planted symlink or device cannot hang it.
-func Load(root, id string) (State, error) {
+// size, so a planted symlink or device cannot hang it, and only one signed
+// with key for this session (internal/sign), so a planted file is never
+// believed.
+func Load(root, id string, key sign.Key) (State, error) {
 	if !validID(id) {
 		return State{}, fmt.Errorf("%w %q", ErrBadSessionID, id)
 	}
-	data, err := safefile.ReadRegular(path(root, id), maxSize)
+	sealed, err := safefile.ReadRegular(path(root, id), maxSize)
 	if errors.Is(err, fs.ErrNotExist) {
 		return State{SessionID: id}, nil
 	}
@@ -89,6 +93,10 @@ func Load(root, id string) (State, error) {
 	}
 	if err != nil {
 		return State{}, err
+	}
+	data, err := key.Open(purpose(id), sealed)
+	if err != nil {
+		return State{}, fmt.Errorf("session %s: %w: %v", id, errUnreadable, err)
 	}
 	var st State
 	if err := json.Unmarshal(data, &st); err != nil {
@@ -104,7 +112,10 @@ func Load(root, id string) (State, error) {
 // that cannot be read is replaced by a fresh state rather than failing every
 // update of the session. Afterwards, session files older than 24 hours are
 // removed.
-func Update(root, id string, now time.Time, fn func(*State) error) (State, error) {
+func Update(root, id string, now time.Time, key sign.Key, fn func(*State) error) (State, error) {
+	if len(key) == 0 {
+		return State{}, errors.New("session: no key to sign with")
+	}
 	if !validID(id) {
 		return State{}, fmt.Errorf("%w %q", ErrBadSessionID, id)
 	}
@@ -122,7 +133,7 @@ func Update(root, id string, now time.Time, fn func(*State) error) (State, error
 	}
 	defer unlock()
 
-	st, err := Load(root, id)
+	st, err := Load(root, id, key)
 	if errors.Is(err, errUnreadable) {
 		st, err = State{SessionID: id}, nil
 	}
@@ -138,7 +149,7 @@ func Update(root, id string, now time.Time, fn func(*State) error) (State, error
 	if err != nil {
 		return State{}, err
 	}
-	if err := safefile.Replace(path(root, id), append(data, '\n')); err != nil {
+	if err := safefile.Replace(path(root, id), key.Seal(purpose(id), append(data, '\n'))); err != nil {
 		return State{}, err
 	}
 	cleanup(dir, id, now)
@@ -180,6 +191,10 @@ func Current(root string) (string, error) {
 	}
 	return id, nil
 }
+
+// purpose is what a session's state is signed as, so one session's file
+// cannot pass for another's.
+func purpose(id string) string { return "session:" + id }
 
 func path(root, id string) string {
 	return filepath.Join(root, index.Dir, stateDir, id+".json")
