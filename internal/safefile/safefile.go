@@ -34,17 +34,22 @@ func Replace(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	backoff := 10 * time.Millisecond
-	for attempt := 0; ; attempt++ {
+	// A reader with the target open makes the rename fail on Windows until
+	// it closes the file, so retry for as long as ReadRegular would.
+	deadline := time.Now().Add(transientWait)
+	backoff := time.Millisecond
+	for {
 		err = os.Rename(tmp.Name(), path)
 		if err == nil {
 			return nil
 		}
-		if attempt == 4 {
+		if time.Now().After(deadline) {
 			return fmt.Errorf("replace %s: %w (an editor, antivirus or search indexer may hold it open)",
 				filepath.Base(path), err)
 		}
 		time.Sleep(backoff)
-		backoff *= 2
+		if backoff < 50*time.Millisecond {
+			backoff *= 2
+		}
 	}
 }

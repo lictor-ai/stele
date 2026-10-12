@@ -895,20 +895,36 @@ atomic operation."* The property that still holds everywhere is the one that
 matters — the target is never truncated, because the temp file holds the complete
 new content until the swap. What Windows adds is a failure mode: the rename can be
 refused outright when another process holds the target open, which an editor,
-antivirus, or the search indexer will do. So the rename retries a few times with a
-short backoff, and on final failure reports the likely cause rather than an
-opaque `*LinkError`.
+antivirus, or the search indexer will do — or stele itself, reading the file in
+another process. So the rename retries for up to 2 seconds, and on final failure
+reports the likely cause rather than an opaque `*LinkError`. Reads retry the same
+way: on Windows a read that meets another process's rename fails with a sharing
+violation or access denied, which `safefile.ReadRegular` retries rather than
+reporting.
+
+**Files a cloned repository can plant are read defensively.** Nothing under
+`.stele/` is covered by the repository's own `.gitignore`, so a repository can
+commit anything there. Reads of state go through `safefile.ReadRegular`: a regular
+file only, never through a symlink, never a device, and capped in size, so a link
+to `/dev/zero` cannot hang stele or exhaust its memory. Writes refuse a symlinked
+`.stele/` or `.stele/state`, and session ids that are Windows device names (`CON`,
+`NUL`, …) are rejected, since `CON.json` is the console whatever the extension.
 
 **`journal.Append` opens with `O_APPEND`** and writes one line per call. Short
 appends are atomic on POSIX. Windows offers no equivalent guarantee, so the writer
 takes a lock file for the duration of the append.
 
-**Session state needs no locking** across sessions, because each session owns its
-own file. Within a session the hook and the MCP process can write concurrently, so
-both use the same crash-safe replace.
+**Session state is locked per session**, not across sessions, because each session
+owns its own file. Within a session the hook and the MCP process both
+read-modify-write one record, so `session.Update` holds that session's lock file
+for the duration (§3). A state file that cannot be read is replaced by a fresh
+state, so one corrupt file never blocks a session.
 
 **Stale state is cleaned on write:** any `state/*.json` older than 24 hours is
-removed. Nothing tells stele that a session ended.
+removed, under that session's lock and only if it is still old once the lock is
+held, so an update landing meanwhile is never deleted. Lock, temp and `.stale`
+files older than 24 hours, which only a crash leaves, go too. Nothing tells stele
+that a session ended.
 
 ---
 

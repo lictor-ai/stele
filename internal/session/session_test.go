@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -221,7 +222,7 @@ func TestCurrent(t *testing.T) {
 // .stele/state.
 func TestBadSessionID(t *testing.T) {
 	root := t.TempDir()
-	for _, id := range []string{"", "../escape", `a\b`, "a/b", "..", "a.b"} {
+	for _, id := range []string{"", "../escape", `a\b`, "a/b", "..", "a.b", "CON", "nul", "Com1", "LPT9"} {
 		if _, err := Load(root, id); !errors.Is(err, ErrBadSessionID) {
 			t.Errorf("Load(%q): err = %v, want ErrBadSessionID", id, err)
 		}
@@ -286,5 +287,147 @@ func TestCleanupKeepsFreshLock(t *testing.T) {
 	}
 	if _, err := os.Stat(lockFile); err != nil {
 		t.Errorf("cleanup removed a fresh lock: %v", err)
+	}
+	// The lock is held, so the session is not idle and its file stays.
+	if _, err := os.Stat(path(root, "old")); err != nil {
+		t.Errorf("cleanup removed a session file whose lock is held: %v", err)
+	}
+}
+
+// A state file that is not JSON fails Load, but Update starts the session
+// afresh rather than failing every update for a day.
+func TestUpdateRecoversUnreadableState(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path(root, "s1"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(root, "s1"); err == nil {
+		t.Error("Load of a corrupt file succeeded")
+	}
+	st, err := Update(root, "s1", t0, func(s *State) error {
+		s.Armed = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Update over a corrupt file: %v", err)
+	}
+	if !st.Armed {
+		t.Error("Update did not apply fn")
+	}
+	if _, err := Load(root, "s1"); err != nil {
+		t.Errorf("Load after recovery: %v", err)
+	}
+}
+
+// A planted symlink to a device must not hang or exhaust memory.
+func TestReadsRefuseSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no /dev/zero on Windows")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, ".stele", "state")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/zero", filepath.Join(dir, "current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/zero", path(root, "s1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Current(root); err == nil {
+		t.Error("Current through a symlink succeeded")
+	}
+	if _, err := Load(root, "s1"); err == nil {
+		t.Error("Load through a symlink succeeded")
+	}
+	// Update replaces the link with a real file instead of reading through it.
+	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+		t.Errorf("Update over a symlinked state file: %v", err)
+	}
+}
+
+func TestLoadTooLarge(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path(root, "s1"), make([]byte, maxSize+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(root, "s1"); err == nil {
+		t.Error("Load of an oversized file succeeded")
+	}
+}
+
+// Leftovers from crashes are cleaned up once old: an orphaned lock, a temp
+// file from Replace, a stale lock moved aside.
+func TestCleanupLeftovers(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, ".stele", "state")
+	now := time.Now()
+	past := now.Add(-25 * time.Hour)
+	leftovers := []string{"gone.json.lock", ".s1.json.123.tmp", "x.json.lock.abc.stale"}
+	for _, name := range leftovers {
+		f := filepath.Join(dir, name)
+		if err := os.WriteFile(f, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(f, past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Update(root, "s1", now, func(*State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range leftovers {
+		if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s left behind: %v", name, err)
+		}
+	}
+}
+
+// stele mcp reads state outside the lock while the hook updates it. On
+// Windows a read that meets the rename must retry, not fail, and the rename
+// must outlast the read.
+func TestLoadDuringUpdates(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Update(root, "s1", t0, func(*State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	readErrs := make(chan error, 1)
+	go func() {
+		defer close(readErrs)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if _, err := Load(root, "s1"); err != nil {
+				readErrs <- err
+				return
+			}
+		}
+	}()
+	for i := range 200 {
+		if _, err := Update(root, "s1", t0, func(s *State) error {
+			s.Blocks = i
+			return nil
+		}); err != nil {
+			close(done)
+			t.Fatalf("Update %d: %v", i, err)
+		}
+	}
+	close(done)
+	if err := <-readErrs; err != nil {
+		t.Errorf("Load during updates: %v", err)
 	}
 }

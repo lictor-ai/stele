@@ -37,14 +37,26 @@ const (
 	// staleLock is the age past which a lock file is taken to be left by a
 	// crashed process. A lock is held for milliseconds.
 	staleLock = 10 * time.Second
+	// maxSize caps a state file. A real one is a few hundred bytes; the cap
+	// stops a planted file from exhausting memory.
+	maxSize = 1 << 20
 )
 
 // ErrBadSessionID is a session id that cannot name a file. The id comes from
-// the host agent and becomes part of a path, so it is checked.
+// the host agent, or from .stele/state/current, which a cloned repository can
+// commit, and becomes part of a path, so it is checked.
 var ErrBadSessionID = errors.New("bad session id")
 
-// validID is what a session id may hold. Claude Code's are UUIDs.
-var validID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+// idChars is what a session id may hold. Claude Code's are UUIDs.
+var idChars = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// reserved holds the Windows device names. CON.json is the console whatever
+// the extension, and reading it blocks forever.
+var reserved = regexp.MustCompile(`(?i)^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$`)
+
+func validID(id string) bool {
+	return idChars.MatchString(id) && !reserved.MatchString(id)
+}
 
 // State is one session's shared state.
 type State struct {
@@ -57,22 +69,30 @@ type State struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// errUnreadable is a state file that exists but holds no usable state: not
+// JSON, not a regular file, or too large. Update starts that session afresh.
+var errUnreadable = errors.New("unreadable session state")
+
 // Load reads a session's state. A session with no file yet is a zero State
-// carrying its id, not an error.
+// carrying its id, not an error. It reads only a regular file of bounded
+// size, so a planted symlink or device cannot hang it.
 func Load(root, id string) (State, error) {
-	if !validID.MatchString(id) {
+	if !validID(id) {
 		return State{}, fmt.Errorf("%w %q", ErrBadSessionID, id)
 	}
-	data, err := os.ReadFile(path(root, id))
+	data, err := safefile.ReadRegular(path(root, id), maxSize)
 	if errors.Is(err, fs.ErrNotExist) {
 		return State{SessionID: id}, nil
+	}
+	if errors.Is(err, safefile.ErrNotRegular) || errors.Is(err, safefile.ErrTooLarge) {
+		return State{}, fmt.Errorf("session %s: %w: %v", id, errUnreadable, err)
 	}
 	if err != nil {
 		return State{}, err
 	}
 	var st State
 	if err := json.Unmarshal(data, &st); err != nil {
-		return State{}, fmt.Errorf("session %s: %w", id, err)
+		return State{}, fmt.Errorf("session %s: %w: %v", id, errUnreadable, err)
 	}
 	st.SessionID = id
 	return st, nil
@@ -80,10 +100,12 @@ func Load(root, id string) (State, error) {
 
 // Update applies fn to a session's state and saves it, under the session's
 // lock file so the hook and stele mcp never lose each other's changes. now
-// stamps UpdatedAt. If fn returns an error nothing is saved. Afterwards,
-// session files older than 24 hours are removed.
+// stamps UpdatedAt. If fn returns an error nothing is saved. A state file
+// that cannot be read is replaced by a fresh state rather than failing every
+// update of the session. Afterwards, session files older than 24 hours are
+// removed.
 func Update(root, id string, now time.Time, fn func(*State) error) (State, error) {
-	if !validID.MatchString(id) {
+	if !validID(id) {
 		return State{}, fmt.Errorf("%w %q", ErrBadSessionID, id)
 	}
 	if err := index.EnsureDir(root); err != nil {
@@ -101,6 +123,9 @@ func Update(root, id string, now time.Time, fn func(*State) error) (State, error
 	defer unlock()
 
 	st, err := Load(root, id)
+	if errors.Is(err, errUnreadable) {
+		st, err = State{SessionID: id}, nil
+	}
 	if err != nil {
 		return State{}, err
 	}
@@ -123,7 +148,7 @@ func Update(root, id string, now time.Time, fn func(*State) error) (State, error
 // SetCurrent records id as the session that last blocked. The hook calls it on
 // every block, and request reads it to learn which session it serves.
 func SetCurrent(root, id string) error {
-	if !validID.MatchString(id) {
+	if !validID(id) {
 		return fmt.Errorf("%w %q", ErrBadSessionID, id)
 	}
 	if err := index.EnsureDir(root); err != nil {
@@ -136,9 +161,11 @@ func SetCurrent(root, id string) error {
 	return safefile.Replace(filepath.Join(dir, currentFile), []byte(id+"\n"))
 }
 
-// Current returns the session that last blocked, or "" when none has.
+// Current returns the session that last blocked, or "" when none has. The
+// file may have been committed by a cloned repository, so it is read like a
+// state file and its id checked the same way.
 func Current(root string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(root, index.Dir, stateDir, currentFile))
+	data, err := safefile.ReadRegular(filepath.Join(root, index.Dir, stateDir, currentFile), 1024)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil
 	}
@@ -146,7 +173,7 @@ func Current(root string) (string, error) {
 		return "", err
 	}
 	id := strings.TrimSpace(string(data))
-	if !validID.MatchString(id) {
+	if !validID(id) {
 		return "", fmt.Errorf("%s: %w %q", currentFile, ErrBadSessionID, id)
 	}
 	return id, nil
@@ -156,9 +183,14 @@ func path(root, id string) string {
 	return filepath.Join(root, index.Dir, stateDir, id+".json")
 }
 
-// cleanup removes session files and their lock files that have not been
-// updated for maxAge. It is best effort: a file it cannot remove is retried
-// on the next update. keep is the session just written.
+// cleanup removes what has not changed for maxAge: session files, and the
+// lock, .tmp and .stale files a crash can leave behind. It is best effort: a
+// file it cannot remove is retried on the next update. keep is the session
+// just written.
+//
+// A session file goes only under that session's lock, and only if it is
+// still old once the lock is held, so an update that lands meanwhile is
+// never deleted.
 func cleanup(dir, keep string, now time.Time) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -166,20 +198,28 @@ func cleanup(dir, keep string, now time.Time) {
 	}
 	for _, e := range entries {
 		name := e.Name()
-		id, ok := strings.CutSuffix(name, ".json")
-		if !ok || id == keep {
-			continue
-		}
 		info, err := e.Info()
 		if err != nil || now.Sub(info.ModTime()) <= maxAge {
 			continue
 		}
-		os.Remove(filepath.Join(dir, name))
-		// The lock goes only if it is old too: a fresh one belongs to an
-		// update of this session in progress.
-		lockFile := filepath.Join(dir, name+".lock")
-		if li, err := os.Stat(lockFile); err == nil && now.Sub(li.ModTime()) > maxAge {
-			os.Remove(lockFile)
+		id, isState := strings.CutSuffix(name, ".json")
+		switch {
+		case isState && id != keep:
+			removeIdle(filepath.Join(dir, name), now)
+		case strings.HasSuffix(name, ".lock"), strings.HasSuffix(name, ".tmp"), strings.HasSuffix(name, ".stale"):
+			os.Remove(filepath.Join(dir, name))
 		}
+	}
+}
+
+// removeIdle removes a session file under its lock, without waiting for it.
+func removeIdle(file string, now time.Time) {
+	unlock, err := safefile.Lock(file+".lock", 0, staleLock)
+	if err != nil {
+		return // in use: it is not idle
+	}
+	defer unlock()
+	if info, err := os.Lstat(file); err == nil && now.Sub(info.ModTime()) > maxAge {
+		os.Remove(file)
 	}
 }
