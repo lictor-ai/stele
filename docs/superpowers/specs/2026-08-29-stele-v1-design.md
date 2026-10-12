@@ -450,8 +450,9 @@ or the matcher will invent relevance to look useful (`O-EMPTY`).
 
 > **Amended by ADR-0004 (D58).** In v1 the hook does not arm and wait for
 > `fetch`. It denies a write that brings rules not yet shown this turn, with the
-> rules as the reason, and a `PostToolUse` hook checks each write. `backstop` and
-> `block_on_error` keep their meaning; the three-blocks circuit breaker goes.
+> rules as the reason, and a `PostToolUse` hook checks each write. It reads rule
+> content and covers subagents. `backstop` keeps its meaning; `block_on_error`
+> changes meaning (see Failure behaviour); the three-blocks circuit breaker goes.
 
 A `PreToolUse` hook on `Write` and `Edit`.
 
@@ -648,6 +649,10 @@ until there is data.
 ---
 
 ## 8. Checking code: `stele check`
+
+> **Amended by ADR-0004 (D58).** In v1 the hooks, not MCP tools, put rules in
+> front of the agent, and there is no log or sink: `--push` is in the "team"
+> milestone. The rest of this section is v1.
 
 The hook and the MCP tools put rules in front of the agent before it writes.
 `stele check` is the other half: it checks code against those rules in CI, after
