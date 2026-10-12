@@ -78,23 +78,35 @@ func Load(root string) (Index, error) {
 // Save writes the index under root, creating .stele/ and its .gitignore when
 // they are missing. The old index is never truncated (architecture §7).
 func Save(root string, idx Index) error {
-	dir := filepath.Join(root, Dir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := EnsureDir(root); err != nil {
 		return err
-	}
-	// Nothing in .stele/ is committed, so one "*" covers it and the
-	// repository's own .gitignore is never touched (spec §2.3).
-	ignore := filepath.Join(dir, ".gitignore")
-	if _, err := os.Stat(ignore); errors.Is(err, fs.ErrNotExist) {
-		if err := safefile.Replace(ignore, []byte("*\n")); err != nil {
-			return err
-		}
 	}
 	data, err := encode(idx)
 	if err != nil {
 		return err
 	}
 	return safefile.Replace(Path(root), data)
+}
+
+// EnsureDir creates .stele/ under root and its .gitignore when they are
+// missing. Every package that writes under .stele/ calls it first.
+//
+// .stele/ must be a real directory: the repository's .gitignore does not
+// cover it, so a cloned repository could commit it as a symlink, and stele
+// would write and delete files wherever it points.
+func EnsureDir(root string) error {
+	dir := filepath.Join(root, Dir)
+	if err := safefile.Dir(dir); err != nil {
+		return err
+	}
+	// Nothing in .stele/ is committed, so one "*" covers it and the
+	// repository's own .gitignore is never touched (spec §2.3). It is
+	// created whole or not at all, and the first of two processes wins.
+	err := safefile.Create(filepath.Join(dir, ".gitignore"), []byte("*\n"))
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+	return err
 }
 
 // Equal reports whether a and b would be saved as the same file.

@@ -1,9 +1,10 @@
-// Package safefile replaces files so a crash never leaves one half-written.
+// Package safefile writes files so a crash never leaves one half-written,
+// and provides the lock files and directory checks that go with that.
 //
-// The new content goes to a temp file in the same directory, which is then
-// renamed over the target. The target is never truncated. On Windows the
-// rename is not atomic and is refused while another process holds the target
-// open, so it is retried a few times (architecture §7).
+// Replace writes the new content to a temp file in the same directory, which
+// is then renamed over the target. The target is never truncated. On Windows
+// the rename is not atomic and is refused while another process holds the
+// target open, so it is retried a few times (architecture §7).
 package safefile
 
 import (

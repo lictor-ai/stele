@@ -114,3 +114,20 @@ func TestEqual(t *testing.T) {
 		t.Error("indexes with different fingerprints are equal")
 	}
 }
+
+// A .stele committed as a symlink is refused, so stele never writes where it
+// points.
+func TestSaveRefusesSymlinkedDir(t *testing.T) {
+	root := t.TempDir()
+	elsewhere := t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(root, Dir)); err != nil {
+		t.Skipf("cannot make a symlink here: %v", err)
+	}
+	if err := Save(root, sample()); err == nil {
+		t.Fatal("Save through a symlinked .stele succeeded")
+	}
+	entries, _ := os.ReadDir(elsewhere)
+	if len(entries) != 0 {
+		t.Errorf("Save wrote %d files where the symlink points", len(entries))
+	}
+}

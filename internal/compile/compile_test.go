@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -325,5 +326,90 @@ func TestEnsureFresh(t *testing.T) {
 
 	if org.calls != 0 {
 		t.Errorf("the external source was called %d times, want never (D45)", org.calls)
+	}
+}
+
+// The review's scenario: the index is lost, rebuilt from builtins alone, then
+// stele.md is edited. The external rule must keep its lock entry through both
+// rebuilds, and stele compile must give it back its old id.
+func TestEnsureFreshKeepsExternalIDs(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	writeRules(t, root, twoRules)
+	org := newFake()
+	org.rules[0].ID = "" // an id the lock minted, not one the source supplies
+	if _, err := Compile(ctx, root, []source.Source{stelemd.New(), org}, ids()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := lock.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orgID := before.Rules[2].ID
+
+	if err := os.Remove(index.Path(root)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, ids()); err != nil {
+		t.Fatal(err)
+	}
+	writeRules(t, root, twoRules+"\n---\n\nPrefer table-driven tests.\n")
+	if _, _, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, func() string { return "new" }); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Compile(ctx, root, []source.Source{stelemd.New(), org}, func() string { return "minted-again" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Index.Rules[3].ID; got != orgID {
+		t.Errorf("external rule id = %q after the rebuilds, want its old id %q", got, orgID)
+	}
+}
+
+// Concurrent rebuilds after a new rule agree: the lock and the index name the
+// same ids, whichever process minted them.
+func TestEnsureFreshConcurrent(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	writeRules(t, root, twoRules)
+	if _, err := Compile(ctx, root, []source.Source{stelemd.New()}, ids()); err != nil {
+		t.Fatal(err)
+	}
+	writeRules(t, root, twoRules+"\n---\n\nPrefer table-driven tests.\n")
+
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, func() string { return fmt.Sprintf("p%d", i) })
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("EnsureFresh: %v", err)
+		}
+	}
+
+	idx, err := index.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lk, err := lock.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lockIDs []string
+	for _, e := range lk.Rules {
+		lockIDs = append(lockIDs, e.ID)
+	}
+	if diff := cmp.Diff(lockIDs, entryIDs(idx)); diff != "" {
+		t.Errorf("lock and index disagree (-lock +index):\n%s", diff)
 	}
 }

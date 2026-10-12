@@ -23,12 +23,8 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return exitCantRun
 	}
-	r, err := compile.Plan(context.Background(), root, sources(), uuid.NewString)
+	r, err := compile.Compile(context.Background(), root, sources(), uuid.NewString)
 	if err != nil {
-		fmt.Fprintf(stderr, "stele compile: %v\n", err)
-		return exitCantRun
-	}
-	if err := compile.Apply(root, r); err != nil {
 		fmt.Fprintf(stderr, "stele compile: %v\n", err)
 		return exitCantRun
 	}

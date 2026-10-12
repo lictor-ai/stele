@@ -33,7 +33,7 @@ cmd/stele/            main, subcommand dispatch, exit codes
 internal/source/      the Source slot: Rule, the Source interface
   stelemd/            the built-in stele.md source: read, hash, parse
 internal/lock/        stele.lock: identity, reconciliation
-internal/safefile/    crash-safe file replace, shared by lock, index and session (§7)
+internal/safefile/    crash-safe replace, create-if-absent, lock files, symlink-refusing dirs (§7)
 internal/index/       index.json: load, save
 internal/compile/     the one place that turns sources into an index
 internal/session/     state/<session>.json: arm state, touched dirs
@@ -288,7 +288,10 @@ Gitignored and regenerated freely (D24), so the format carries no compatibility
 obligation. `Version` exists so a mismatch triggers a rebuild rather than a parse
 error: `Load` returns `ErrNoIndex` for a missing, unparsable or other-version
 index alike. `Save` creates `.stele/` and its `.gitignore` (`*`) when they are
-missing, so a compile before `init` never leaves the index committable.
+missing, so a compile before `init` never leaves the index committable. The
+`.gitignore` is created whole or not at all. `.stele/` must be a real directory:
+the repository's own `.gitignore` does not cover it, so a cloned repository could
+commit it as a symlink, and stele refuses to write through one.
 
 ### `internal/compile` — the orchestration
 
@@ -314,6 +317,8 @@ type Result struct {
 
 // Plan reads every source and writes nothing.
 func Plan(ctx context.Context, root string, srcs []source.Source, newID func() string) (Result, error)
+// Compile is stele compile: read every source, then Plan and Apply under the compile lock.
+func Compile(ctx context.Context, root string, srcs []source.Source, newID func() string) (Result, error)
 // Apply writes the lock and the index, each only when it changed, lock first.
 func Apply(root string, r Result) error
 // EnsureFresh re-reads only builtins, and only those whose fingerprint changed.
@@ -333,7 +338,17 @@ while the agent waits. Its rules stay in the index as they were last compiled. I
 index — none yet, or a `Version` mismatch — `EnsureFresh` builds one from the
 built-ins alone, and external rules come back at the next `stele compile`. That
 rebuild keeps the lock entries of the sources it did not read, so the external
-rules come back with their ids.
+rules come back with their ids. The same holds when the index exists but no
+longer lists an external source: `EnsureFresh` never reads one, so it never drops
+one's lock entries.
+
+**Compiles are serialised** by `.stele/compile.lock`, held across "load the lock →
+reconcile → write the lock → write the index" in `Compile` and `EnsureFresh`.
+Without it two `stele mcp` processes, or one and `stele compile`, can each mint an
+id for the same new rule and leave the lock and the index disagreeing, with
+fingerprints that match so nothing repairs it. Source reads stay outside the lock,
+so a slow external source never holds it. `Plan` takes no lock: it writes nothing,
+and every file it reads is replaced whole.
 
 `compile` never resolves plugins itself. `cmd/` asks `internal/plugin` for the
 sources and passes them in, which keeps `compile` free of `PATH`, executables and
