@@ -233,3 +233,58 @@ func TestBadSessionID(t *testing.T) {
 		}
 	}
 }
+
+// A .stele/state committed as a symlink is refused: otherwise session files
+// would be written, and old *.json files deleted, wherever it points.
+func TestUpdateRefusesSymlinkedState(t *testing.T) {
+	root := t.TempDir()
+	elsewhere := t.TempDir()
+	victim := filepath.Join(elsewhere, "credentials.json")
+	if err := os.WriteFile(victim, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(victim, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".stele"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(root, ".stele", "state")); err != nil {
+		t.Skipf("cannot make a symlink here: %v", err)
+	}
+	if _, err := Update(root, "s1", time.Now(), func(*State) error { return nil }); err == nil {
+		t.Error("Update through a symlinked .stele/state succeeded")
+	}
+	if err := SetCurrent(root, "s1"); err == nil {
+		t.Error("SetCurrent through a symlinked .stele/state succeeded")
+	}
+	entries, _ := os.ReadDir(elsewhere)
+	if len(entries) != 1 {
+		t.Errorf("the symlink's target holds %d files, want only the untouched victim", len(entries))
+	}
+}
+
+// Cleanup removes an old session's lock only if the lock is old too.
+func TestCleanupKeepsFreshLock(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Update(root, "old", t0, func(*State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	past := now.Add(-25 * time.Hour)
+	if err := os.Chtimes(path(root, "old"), past, past); err != nil {
+		t.Fatal(err)
+	}
+	// An update of "old" is in progress and holds its lock.
+	lockFile := path(root, "old") + ".lock"
+	if err := os.WriteFile(lockFile, []byte("token"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Update(root, "writer", now, func(*State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(lockFile); err != nil {
+		t.Errorf("cleanup removed a fresh lock: %v", err)
+	}
+}

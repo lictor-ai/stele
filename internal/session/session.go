@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 
@@ -91,11 +90,11 @@ func Update(root, id string, now time.Time, fn func(*State) error) (State, error
 		return State{}, err
 	}
 	dir := filepath.Join(root, index.Dir, stateDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := safefile.Dir(dir); err != nil {
 		return State{}, err
 	}
 
-	unlock, err := lock(path(root, id) + ".lock")
+	unlock, err := safefile.Lock(path(root, id)+".lock", lockWait, staleLock)
 	if err != nil {
 		return State{}, err
 	}
@@ -131,7 +130,7 @@ func SetCurrent(root, id string) error {
 		return err
 	}
 	dir := filepath.Join(root, index.Dir, stateDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := safefile.Dir(dir); err != nil {
 		return err
 	}
 	return safefile.Replace(filepath.Join(dir, currentFile), []byte(id+"\n"))
@@ -157,41 +156,6 @@ func path(root, id string) string {
 	return filepath.Join(root, index.Dir, stateDir, id+".json")
 }
 
-// lock takes a lock file by creating it exclusively, which works alike on
-// every platform. It waits up to lockWait for another holder, and takes over
-// a lock older than staleLock, which a crashed process left behind.
-func lock(name string) (unlock func(), err error) {
-	deadline := time.Now().Add(lockWait)
-	backoff := time.Millisecond
-	for {
-		f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-		if err == nil {
-			f.Close()
-			return func() { os.Remove(name) }, nil
-		}
-		switch {
-		case errors.Is(err, fs.ErrExist):
-			if info, err := os.Stat(name); err == nil && time.Since(info.ModTime()) > staleLock {
-				os.Remove(name)
-				continue
-			}
-		case errors.Is(err, fs.ErrPermission) && runtime.GOOS == "windows":
-			// A lock file just removed while another process still has it
-			// open is "delete pending" on Windows, and creating it fails
-			// with access denied until that handle closes.
-		default:
-			return nil, err
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s is held by another stele process: %w", filepath.Base(name), err)
-		}
-		time.Sleep(backoff)
-		if backoff < 50*time.Millisecond {
-			backoff *= 2
-		}
-	}
-}
-
 // cleanup removes session files and their lock files that have not been
 // updated for maxAge. It is best effort: a file it cannot remove is retried
 // on the next update. keep is the session just written.
@@ -211,6 +175,11 @@ func cleanup(dir, keep string, now time.Time) {
 			continue
 		}
 		os.Remove(filepath.Join(dir, name))
-		os.Remove(filepath.Join(dir, name+".lock"))
+		// The lock goes only if it is old too: a fresh one belongs to an
+		// update of this session in progress.
+		lockFile := filepath.Join(dir, name+".lock")
+		if li, err := os.Stat(lockFile); err == nil && now.Sub(li.ModTime()) > maxAge {
+			os.Remove(lockFile)
+		}
 	}
 }

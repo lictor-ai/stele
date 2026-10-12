@@ -401,14 +401,24 @@ read-modify-write, so state writes take a lock file for the duration — the sam
 treatment as `journal.Append` in §7. In practice they rarely overlap, since the
 agent does one thing at a time. "Rarely" is not a concurrency design.
 
-`Update` is that read-modify-write: it takes `state/<id>.json.lock` by creating it
-exclusively, which works alike everywhere, loads, applies `fn`, saves through the
-crash-safe replace, and removes the lock. It waits at most 2 seconds for another
-holder, since the hook runs on every write, and takes over a lock older than 10
-seconds as left by a crashed process. On Windows, creating a lock file that was
-just removed while another process still has it open fails with access denied,
-so that also counts as held. After saving, `Update` removes session files not
-updated for 24 hours.
+`Update` is that read-modify-write: it takes `state/<id>.json.lock` with
+`safefile.Lock`, loads, applies `fn`, saves through the crash-safe replace, and
+releases the lock. It waits at most 2 seconds for another holder, since the hook
+runs on every write, and takes over a lock older than 10 seconds as left by a
+crashed process.
+
+`safefile.Lock` creates the lock file exclusively, which works alike everywhere,
+and writes a token unique to its holder into it. Unlocking removes the file only
+while it still holds that token, so a holder that was taken over never removes its
+successor's lock. A stale lock is taken over by renaming it away, which only one
+of several racing processes can do. On Windows, creating a lock file that was just
+removed while another process still has it open fails with access denied, so that
+also counts as held.
+
+After saving, `Update` removes session files not updated for 24 hours, and their
+lock files only if those are old too. `.stele/state` must be a real directory, as
+`.stele/` must: a committed symlink would otherwise make stele write, and delete
+old `*.json` files, wherever it points.
 
 ### `internal/enforce` — policy
 
