@@ -47,13 +47,14 @@ func Lock(name string, wait, stale time.Duration) (unlock func(), err error) {
 			}
 		case lerr == nil:
 			// Held by a live process: wait.
-		case errors.Is(err, fs.ErrPermission) && runtime.GOOS == "windows":
-			// A lock file just removed while another process still has it
-			// open is "delete pending" on Windows, and creating it fails
-			// with access denied until that handle closes.
 		case errors.Is(err, fs.ErrExist) && errors.Is(lerr, fs.ErrNotExist):
 			// Removed by its holder between the two calls: try again.
 			continue
+		case errors.Is(err, fs.ErrExist), errors.Is(err, fs.ErrPermission) && runtime.GOOS == "windows":
+			// It exists but cannot be inspected, or cannot be created: on
+			// Windows a lock file just removed while another process still
+			// has it open is "delete pending", and both creating and
+			// inspecting it fail until that handle closes. Wait.
 		default:
 			return nil, err
 		}
@@ -94,17 +95,19 @@ func release(name, token string) {
 // rename succeeds for only one of several processes racing to take the same
 // lock over, so only one of them removes it. If what it moved turns out to be
 // a fresh lock file, another process had already taken over, and the lock is
-// linked back. force skips that check, for something that is not a lock file
-// at all; if it is a non-empty directory it stays, moved aside.
+// linked back. That check runs even when force says the lock looked like no
+// lock at all: between the look and the rename, a racing process may have
+// moved the non-file aside and created a real lock. A non-empty directory
+// moved aside stays, renamed.
 func takeOver(name, token string, stale time.Duration, force bool) bool {
 	grave := name + "." + token + ".stale"
 	if err := os.Rename(name, grave); err != nil {
 		return false
 	}
-	if !force {
-		if info, err := os.Lstat(grave); err == nil && time.Since(info.ModTime()) <= stale {
-			os.Link(grave, name) // fails if a new lock already exists; then both are live, the narrowest case
-		}
+	if info, err := os.Lstat(grave); err == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) <= stale {
+		os.Link(grave, name) // fails if a new lock already exists; then both are live, the narrowest case
+		os.Remove(grave)
+		return !force // a forced takeover that moved a live lock took nothing over
 	}
 	os.Remove(grave)
 	return true

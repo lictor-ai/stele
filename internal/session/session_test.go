@@ -432,8 +432,8 @@ func TestLoadDuringUpdates(t *testing.T) {
 	}
 }
 
-// A committed directory at current names no session, and SetCurrent fails
-// at once with a reason rather than waiting.
+// A committed directory at current names no session, and SetCurrent moves it
+// aside at once and records the session.
 func TestCurrentNotAFile(t *testing.T) {
 	root := t.TempDir()
 	cur := filepath.Join(root, ".stele", "state", "current")
@@ -445,10 +445,13 @@ func TestCurrentNotAFile(t *testing.T) {
 		t.Errorf("Current = %q, %v; want no session", id, err)
 	}
 	start := time.Now()
-	if err := SetCurrent(root, "s1"); err == nil {
-		t.Error("SetCurrent over a directory succeeded")
+	if err := SetCurrent(root, "s1"); err != nil {
+		t.Fatalf("SetCurrent over a directory: %v", err)
 	}
 	if d := time.Since(start); d > 500*time.Millisecond {
-		t.Errorf("SetCurrent failed after %v, want at once", d)
+		t.Errorf("SetCurrent took %v, want no wait", d)
+	}
+	if id, err := Current(root); err != nil || id != "s1" {
+		t.Errorf("Current = %q, %v; want s1", id, err)
 	}
 }

@@ -287,7 +287,7 @@ func Equal(a, b Index) bool
 Gitignored and regenerated freely (D24), so the format carries no compatibility
 obligation. `Version` exists so a mismatch triggers a rebuild rather than a parse
 error: `Load` returns `ErrNoIndex` for a missing, unparsable or other-version
-index alike. `Save` creates `.stele/` and its `.gitignore` (`*`) when they are
+index alike, and for one that is not a plain file or is over 64 MiB (§7). `Save` creates `.stele/` and its `.gitignore` (`*`) when they are
 missing, so a compile before `init` never leaves the index committable. The
 `.gitignore` is created whole or not at all. `.stele/` must be a real directory:
 the repository's own `.gitignore` does not cover it, so a cloned repository could
@@ -430,7 +430,7 @@ that session's lock and only if it is still old once the lock is held. Lock, tem
 and `.stale` files older than 24 hours go too, checked again just before removal.
 `.stele/state` must be a real directory, as `.stele/` must: a committed symlink
 would otherwise make stele write, and delete old `*.json` files, wherever it
-points. A directory where a file belongs makes the write fail at once, saying so.
+points. A directory or link where a file belongs is moved aside by the write (§7).
 
 ### `internal/enforce` — policy
 
@@ -915,13 +915,32 @@ way: on Windows a read that meets another process's rename fails with a sharing
 violation or access denied, which `safefile.ReadRegular` retries rather than
 reporting.
 
-**Files a cloned repository can plant are read defensively.** Nothing under
-`.stele/` is covered by the repository's own `.gitignore`, so a repository can
-commit anything there. Reads of state go through `safefile.ReadRegular`: a regular
-file only, never through a symlink, never a device, and capped in size, so a link
-to `/dev/zero` cannot hang stele or exhaust its memory. Writes refuse a symlinked
-`.stele/` or `.stele/state`, and session ids that are Windows device names (`CON`,
-`NUL`, …) are rejected, since `CON.json` is the console whatever the extension.
+**stele trusts only what it would have written itself.** Nothing under `.stele/`
+is covered by the repository's own `.gitignore`, so a repository can commit
+anything there, and `stele.lock` is committed by design. Every file stele uses has
+an expected shape, and anything else gets one of two outcomes:
+
+| Path | Expected | Otherwise |
+| :-- | :-- | :-- |
+| `.stele/`, `.stele/state/` | real directories | refused: "delete it, stele recreates it" |
+| `stele.lock` | plain file, ≤ 16 MiB | refused, `ErrInvalid`: restore it, or delete it and compile |
+| `.stele/index.json` | plain file, ≤ 64 MiB | `ErrNoIndex`: rebuilt, and the write moves it aside |
+| `state/<id>.json`, `state/current` | plain file, small | a fresh state / no session; the write moves it aside |
+| `*.lock` | plain file holding a token | moved aside at once |
+
+Every read goes through `safefile.ReadRegular`: a regular file only, never through
+a symlink, never a device, capped in size, so a link to `/dev/zero` cannot hang
+stele or exhaust its memory. `safefile.Replace` moves anything but a plain file
+out of its way before the rename, which callers rely on only for files stele can
+regenerate or has just read as a plain file. A non-empty directory moved aside
+stays, renamed `*.stale`; nothing reads it again. Session ids that are Windows
+device names (`CON`, `NUL`, …) are rejected, since `CON.json` is the console
+whatever the extension.
+
+The shape check stops files that would crash or hang stele. It says nothing about
+who wrote a well-formed file: a committed `index.json` with a matching fingerprint
+would still be trusted. Signing generated files with a per-machine key closes that
+(#27).
 
 **`journal.Append` opens with `O_APPEND`** and writes one line per call. Short
 appends are atomic on POSIX. Windows offers no equivalent guarantee, so the writer

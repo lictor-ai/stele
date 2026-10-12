@@ -20,11 +20,13 @@ import (
 // Replace writes data to path. The file ends up 0644 whatever the umask did
 // to the temp file, because stele's files are read by other users and CI.
 func Replace(path string, data []byte) error {
-	// A directory where the file belongs is never stele's: .stele/ is not
-	// covered by the repository's .gitignore, so a clone can commit one.
-	// The rename would fail anyway; say why, and at once.
-	if info, err := os.Lstat(path); err == nil && info.IsDir() {
-		return fmt.Errorf("%s is a directory, not a file stele wrote: remove it", path)
+	// Anything but a plain file where the file belongs (a directory, a
+	// symlink, a junction) is never stele's: .stele/ is not covered by the
+	// repository's .gitignore, so a clone can commit one. Move it aside so
+	// the rename puts a real file there. Callers only write files stele can
+	// regenerate, or that it has just read as a plain file.
+	if err := moveAsideNonFile(path); err != nil {
+		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
@@ -65,4 +67,24 @@ func Replace(path string, data []byte) error {
 			backoff *= 2
 		}
 	}
+}
+
+// moveAsideNonFile renames whatever is at path out of the way, unless it is
+// a plain file or missing. A non-empty directory moved aside stays, renamed;
+// nothing reads it again.
+func moveAsideNonFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode().IsRegular() {
+		return nil
+	}
+	token, err := newToken()
+	if err != nil {
+		return err
+	}
+	aside := path + "." + token + ".stale"
+	if err := os.Rename(path, aside); err != nil {
+		return fmt.Errorf("%s is not a file stele wrote, and moving it aside failed: delete it (%w)", path, err)
+	}
+	os.Remove(aside) // a link or an empty directory goes; anything else stays aside
+	return nil
 }

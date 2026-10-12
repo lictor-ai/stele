@@ -131,3 +131,21 @@ func TestSaveRefusesSymlinkedDir(t *testing.T) {
 		t.Errorf("Save wrote %d files where the symlink points", len(entries))
 	}
 }
+
+// A committed directory at index.json is no index: callers rebuild, and Save
+// moves it aside.
+func TestIndexNotAFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(Path(root), "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(root); !errors.Is(err, ErrNoIndex) {
+		t.Fatalf("Load: err = %v, want ErrNoIndex", err)
+	}
+	if err := Save(root, sample()); err != nil {
+		t.Fatalf("Save over a directory: %v", err)
+	}
+	if _, err := Load(root); err != nil {
+		t.Errorf("Load after Save: %v", err)
+	}
+}

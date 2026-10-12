@@ -179,19 +179,39 @@ func TestLockMissingDir(t *testing.T) {
 	}
 }
 
-// Replace fails at once, and says why, when a directory sits where the file
-// belongs; it does not spend the Windows retry budget on it.
+// A directory where the file belongs was committed by a clone, not written
+// by stele: Replace moves it aside at once and writes a real file.
 func TestReplaceOntoDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "current")
 	if err := os.MkdirAll(filepath.Join(path, "inside"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	err := Replace(path, []byte("x"))
-	if err == nil {
-		t.Fatal("Replace onto a directory succeeded")
+	if err := Replace(path, []byte("x")); err != nil {
+		t.Fatalf("Replace onto a directory: %v", err)
 	}
 	if d := time.Since(start); d > 500*time.Millisecond {
-		t.Errorf("failed after %v, want at once", d)
+		t.Errorf("took %v, want no wait", d)
+	}
+	got, err := ReadRegular(path, 10)
+	if err != nil || string(got) != "x" {
+		t.Errorf("after Replace: %q, %v; want a plain file holding x", got, err)
+	}
+}
+
+// A forced takeover, for a lock that looked like no lock at all, must not
+// remove a live lock that a racing process created in its place.
+func TestForcedTakeOverKeepsLiveLock(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "x.lock")
+	unlock, err := Lock(name, time.Second, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	if takeOver(name, "racer", time.Hour, true) {
+		t.Error("forced takeover of a live lock reported success")
+	}
+	if info, err := os.Lstat(name); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("live lock gone after a forced takeover: %v", err)
 	}
 }
