@@ -112,8 +112,8 @@ func TestLoadErrors(t *testing.T) {
 		is      error
 		substr  string
 	}{
-		{name: "not JSON", content: "{", substr: FileName},
-		{name: "unknown version", content: `{"version": 2, "project": "p", "rules": []}`, substr: "version 2"},
+		{name: "not JSON", content: "{", is: ErrInvalid, substr: FileName},
+		{name: "unknown version", content: `{"version": 2, "project": "p", "rules": []}`, is: ErrInvalid, substr: "version 2"},
 		{
 			// A bad merge duplicated an entry.
 			name: "duplicate id",
@@ -127,6 +127,7 @@ func TestLoadErrors(t *testing.T) {
 			name: "empty id",
 			content: `{"version": 1, "project": "p", "rules": [
 				{"id": "", "source": "stelemd", "hash": "h1", "position": 0}]}`,
+			is:     ErrInvalid,
 			substr: "rule 1 (stelemd position 0) has no id",
 		},
 		{
@@ -134,6 +135,7 @@ func TestLoadErrors(t *testing.T) {
 			// the repository's history across two project ids.
 			name:    "no project",
 			content: `{"version": 1, "rules": []}`,
+			is:      ErrInvalid,
 			substr:  "no project id",
 		},
 	}
@@ -154,5 +156,23 @@ func TestLoadErrors(t *testing.T) {
 				t.Errorf("err = %q, want it to mention %q", err, tt.substr)
 			}
 		})
+	}
+}
+
+func TestEqual(t *testing.T) {
+	a := lockOf([]string{"a"}, md(0, sql))
+	if !Equal(File{Version: 1, Project: "p"}, File{Version: 1, Project: "p", Rules: []Entry{}}) {
+		t.Error("nil and empty rules differ, want equal: both save as []")
+	}
+	if !Equal(a, lockOf([]string{"a"}, md(0, sql))) {
+		t.Error("identical locks differ")
+	}
+	b := a
+	b.Project = "other"
+	if Equal(a, b) {
+		t.Error("locks with different projects are equal")
+	}
+	if Equal(a, lockOf([]string{"x"}, md(0, sql))) {
+		t.Error("locks with different ids are equal")
 	}
 }

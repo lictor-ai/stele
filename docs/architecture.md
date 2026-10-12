@@ -33,6 +33,7 @@ cmd/stele/            main, subcommand dispatch, exit codes
 internal/source/      the Source slot: Rule, the Source interface
   stelemd/            the built-in stele.md source: read, hash, parse
 internal/lock/        stele.lock: identity, reconciliation
+internal/safefile/    crash-safe file replace, shared by lock, index and session (§7)
 internal/index/       index.json: load, save
 internal/compile/     the one place that turns sources into an index
 internal/session/     state/<session>.json: arm state, touched dirs
@@ -222,7 +223,8 @@ type Rekey struct{ Old, New string }
 
 func Load(root string) (File, error)
 func Save(root string, f File) error
-func Validate(f File) error // ErrDuplicateID
+func Validate(f File) error // ErrDuplicateID, ErrInvalid
+func Equal(a, b File) bool  // would save identically: a lock on disk not Equal to the planned one is out of date
 
 // Reconcile is pure. newID is injected so it stays testable.
 func Reconcile(rules []source.Rule, prev File, newID func() string) (ids []string, next File, rep Report, err error)
@@ -254,7 +256,10 @@ when `prev` has none; once set, `Reconcile` never changes it.
 **`Validate`** returns `ErrDuplicateID` when two entries share an id. That cannot
 happen from `Reconcile`, which mints fresh UUIDs, but it can happen from a merge
 that duplicated an entry. It runs on every load, because two rules silently
-sharing a history is worse than a loud failure.
+sharing a history is worse than a loud failure. It also rejects an entry with no
+id and a lock with no `project` as `ErrInvalid`, as `Load` does for bad JSON or
+another version: only a hand edit produces them, and accepting them would let one
+rule claim two entries or mint a second project id.
 
 ### `internal/index` — the build artifact
 
@@ -268,18 +273,22 @@ type Index struct {
 
 type Entry struct {
     ID, Source, Description, Body string
+    Position                      int // within its source, so EnsureFresh can carry the rule over
     Tags, Scope                   []string
     Meta                          map[string]string
     BodyHash                      string
 }
 
-func Load(dir string) (Index, error) // ErrNoIndex. never ErrStale — see internal/source
-func Save(dir string, idx Index) error // crash-safe replace, §7
+func Load(root string) (Index, error) // ErrNoIndex. never ErrStale — see internal/source
+func Save(root string, idx Index) error // crash-safe replace, §7
+func Equal(a, b Index) bool
 ```
 
 Gitignored and regenerated freely (D24), so the format carries no compatibility
 obligation. `Version` exists so a mismatch triggers a rebuild rather than a parse
-error.
+error: `Load` returns `ErrNoIndex` for a missing, unparsable or other-version
+index alike. `Save` creates `.stele/` and its `.gitignore` (`*`) when they are
+missing, so a compile before `init` never leaves the index committable.
 
 ### `internal/compile` — the orchestration
 
@@ -299,11 +308,13 @@ type Result struct {
     Index  index.Index
     Lock   lock.File
     Report lock.Report
+    LockChanged  bool // the planned lock differs from stele.lock: for check, out of date
+    IndexChanged bool // the planned index differs from the one on disk, or there is none
 }
 
 // Plan reads every source and writes nothing.
 func Plan(ctx context.Context, root string, srcs []source.Source, newID func() string) (Result, error)
-// Apply writes the lock and the index.
+// Apply writes the lock and the index, each only when it changed, lock first.
 func Apply(root string, r Result) error
 // EnsureFresh re-reads only builtins, and only those whose fingerprint changed.
 // Rules from every other source are carried over from the current index.
@@ -320,7 +331,9 @@ whether it recompiled, so the caller can log it.
 network call to Confluence; it runs at `stele compile` and `stele check`, never
 while the agent waits. Its rules stay in the index as they were last compiled. If there is no usable
 index — none yet, or a `Version` mismatch — `EnsureFresh` builds one from the
-built-ins alone, and external rules come back at the next `stele compile`.
+built-ins alone, and external rules come back at the next `stele compile`. That
+rebuild keeps the lock entries of the sources it did not read, so the external
+rules come back with their ids.
 
 `compile` never resolves plugins itself. `cmd/` asks `internal/plugin` for the
 sources and passes them in, which keeps `compile` free of `PATH`, executables and
@@ -868,6 +881,7 @@ Following Code Review Comments and the style guide.
 var (
     ErrNoIndex        = errors.New("no index")             // index
     ErrDuplicateID    = errors.New("duplicate rule id")    // lock
+    ErrInvalid        = errors.New("invalid")              // lock: bad JSON, version, project or id
     ErrPluginNotFound = errors.New("plugin not found")     // plugin
     ErrPluginRefused  = errors.New("plugin refused")       // plugin: inside the repo, bad name
     ErrProtocol       = errors.New("plugin protocol error") // plugin

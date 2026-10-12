@@ -6,13 +6,15 @@
 package lock
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"time"
+
+	"github.com/lictor-ai/stele/internal/safefile"
 )
 
 // FileName is the lock's name at the repository root.
@@ -21,9 +23,14 @@ const FileName = "stele.lock"
 // version is the lock format this stele reads and writes.
 const version = 1
 
-// ErrDuplicateID is two rules sharing an id: a merge that duplicated an entry,
-// or two rules whose source supplied the same id.
-var ErrDuplicateID = errors.New("duplicate rule id")
+var (
+	// ErrDuplicateID is two rules sharing an id: a merge that duplicated an
+	// entry, or two rules whose source supplied the same id.
+	ErrDuplicateID = errors.New("duplicate rule id")
+	// ErrInvalid is a stele.lock stele cannot use: not JSON, another version,
+	// no project, or an entry with no id. A bad merge or a hand edit.
+	ErrInvalid = errors.New("invalid")
+)
 
 // Entry is one rule's identity.
 type Entry struct {
@@ -52,10 +59,10 @@ func Load(root string) (File, error) {
 	}
 	var f File
 	if err := json.Unmarshal(data, &f); err != nil {
-		return File{}, fmt.Errorf("%s: %w", FileName, err)
+		return File{}, fmt.Errorf("%s: %w: %v", FileName, ErrInvalid, err)
 	}
 	if f.Version != version {
-		return File{}, fmt.Errorf("%s: version %d, this stele reads version %d", FileName, f.Version, version)
+		return File{}, fmt.Errorf("%s: %w: version %d, this stele reads version %d", FileName, ErrInvalid, f.Version, version)
 	}
 	if err := Validate(f); err != nil {
 		return File{}, err
@@ -69,12 +76,12 @@ func Load(root string) (File, error) {
 // would mint a second project id or let one rule claim two entries.
 func Validate(f File) error {
 	if f.Project == "" {
-		return fmt.Errorf("%s: no project id", FileName)
+		return fmt.Errorf("%s: %w: no project id", FileName, ErrInvalid)
 	}
 	seen := make(map[string]int, len(f.Rules))
 	for i, e := range f.Rules {
 		if e.ID == "" {
-			return fmt.Errorf("%s: rule %d (%s position %d) has no id", FileName, i+1, e.Source, e.Position)
+			return fmt.Errorf("%s: %w: rule %d (%s position %d) has no id", FileName, ErrInvalid, i+1, e.Source, e.Position)
 		}
 		if j, ok := seen[e.ID]; ok {
 			return fmt.Errorf("%s: %w %s: rules %d and %d (%s position %d, %s position %d)",
@@ -86,53 +93,32 @@ func Validate(f File) error {
 	return nil
 }
 
+// Equal reports whether a and b would be saved as the same stele.lock. A lock
+// on disk that is not Equal to the one compile plans is out of date.
+func Equal(a, b File) bool {
+	x, errX := encode(a)
+	y, errY := encode(b)
+	return errX == nil && errY == nil && bytes.Equal(x, y)
+}
+
 // Save writes stele.lock under root. The old lock is never truncated: the new
 // content goes to a temp file in the same directory, which then replaces it.
 func Save(root string, f File) error {
+	data, err := encode(f)
+	if err != nil {
+		return err
+	}
+	return safefile.Replace(filepath.Join(root, FileName), data)
+}
+
+// encode is the bytes Save writes. An empty lock has "rules": [], not null.
+func encode(f File) ([]byte, error) {
 	if f.Rules == nil {
 		f.Rules = []Entry{}
 	}
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	data = append(data, '\n')
-	return replaceFile(filepath.Join(root, FileName), data)
-}
-
-// replaceFile writes data to path through a temp file and a rename. On Windows
-// the rename is refused while another process holds the target open, so it
-// retries a few times before giving up.
-func replaceFile(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name()) // fails harmlessly once renamed
-	// CreateTemp makes the file 0600, and the rename would carry that over to
-	// a committed file that other users and CI must read.
-	if err := tmp.Chmod(0o644); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	backoff := 10 * time.Millisecond
-	for attempt := 0; ; attempt++ {
-		err = os.Rename(tmp.Name(), path)
-		if err == nil {
-			return nil
-		}
-		if attempt == 4 {
-			return fmt.Errorf("replace %s: %w (an editor, antivirus or search indexer may hold it open)",
-				filepath.Base(path), err)
-		}
-		time.Sleep(backoff)
-		backoff *= 2
-	}
+	return append(data, '\n'), nil
 }
