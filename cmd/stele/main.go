@@ -23,8 +23,8 @@ type command struct {
 var commands = map[string]command{
 	"init":      {"install the five artifacts", notImplemented("init")},
 	"uninstall": {"remove exactly what init wrote", notImplemented("uninstall")},
-	"compile":   {"compile every source into the index", notImplemented("compile")},
-	"check":     {"validate the rules and run checkers on changed files", notImplemented("check")},
+	"compile":   {"compile every source into the index", runCompile},
+	"check":     {"validate the rules and run checkers on changed files", runCheck},
 	"status":    {"describe the install", notImplemented("status")},
 	"push":      {"send new log entries to every listed sink", notImplemented("push")},
 	"mcp":       {"run the MCP server on stdio", notImplemented("mcp")},

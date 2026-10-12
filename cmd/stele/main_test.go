@@ -31,7 +31,7 @@ func TestRun(t *testing.T) {
 		{name: "no args", args: nil, wantCode: exitCantRun, wantStderr: "usage: stele"},
 		{name: "help", args: []string{"help"}, wantCode: exitOK, wantStdout: "usage: stele"},
 		{name: "unknown", args: []string{"nope"}, wantCode: exitCantRun, wantStderr: `unknown command "nope"`},
-		{name: "stub", args: []string{"compile"}, wantCode: exitCantRun, wantStderr: "not implemented"},
+		{name: "stub", args: []string{"init"}, wantCode: exitCantRun, wantStderr: "not implemented"},
 		{name: "hook allows silently", args: []string{"hook"}, wantCode: exitOK},
 	}
 	for _, tt := range tests {
