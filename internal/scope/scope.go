@@ -8,20 +8,30 @@
 //   - *, ?, [a-z]  match within one path segment, as path.Match does
 //   - {a,b}  matches either alternative: "src/**/*.{go,ts}"
 //   - a pattern with no / matches the file's name at any depth: "*.go"
+//   - a leading / or ./ anchors it at the root: "/*.go" is root files only
 //   - a pattern ending in / matches everything under that directory: "docs/"
-//   - a leading / or ./ anchors at the root, which every pattern is anyway
 //
-// A malformed pattern matches nothing.
+// On Windows and macOS, whose file systems ignore case, so does matching: an
+// agent that writes Internal/x.go writes into internal/.
+//
+// A malformed pattern, or one that expands to more than 256 alternatives,
+// matches nothing. Matching takes time proportional to the pattern's length
+// times the path's, whatever the pattern: stele.md comes from the repository,
+// and the hook runs on every write.
 package scope
 
 import (
 	"path"
+	"runtime"
 	"strings"
 )
 
-// maxAlternatives caps brace expansion, so a pattern like {a,b}{c,d}... cannot
-// make matching expensive.
+// maxAlternatives caps brace expansion.
 const maxAlternatives = 256
+
+// foldCase is whether matching ignores case, as the platform's file system
+// does. Tests set it.
+var foldCase = runtime.GOOS == "windows" || runtime.GOOS == "darwin"
 
 // Applies reports whether a rule with these scope patterns applies to file. A
 // rule with no scope applies everywhere.
@@ -40,7 +50,14 @@ func Applies(patterns []string, file string) bool {
 // Match reports whether file matches the glob pattern.
 func Match(pattern, file string) bool {
 	file = strings.TrimPrefix(path.Clean("/"+file), "/")
-	for _, p := range expand(pattern) {
+	if foldCase {
+		pattern, file = strings.ToLower(pattern), strings.ToLower(file)
+	}
+	alts, ok := expand(pattern)
+	if !ok {
+		return false
+	}
+	for _, p := range alts {
 		if match(p, file) {
 			return true
 		}
@@ -49,15 +66,15 @@ func Match(pattern, file string) bool {
 }
 
 func match(pattern, file string) bool {
-	pattern = strings.TrimPrefix(pattern, "./")
-	pattern = strings.TrimPrefix(pattern, "/")
+	anchored := strings.HasPrefix(pattern, "/") || strings.HasPrefix(pattern, "./")
+	pattern = strings.TrimPrefix(strings.TrimPrefix(pattern, "./"), "/")
 	if strings.HasSuffix(pattern, "/") {
 		pattern += "**"
 	}
 	if pattern == "" {
 		return false
 	}
-	if !strings.Contains(pattern, "/") {
+	if !anchored && !strings.Contains(pattern, "/") {
 		ok, err := path.Match(pattern, path.Base(file))
 		return err == nil && ok
 	}
@@ -65,54 +82,98 @@ func match(pattern, file string) bool {
 }
 
 // segments matches pattern segments against path segments, ** spanning any
-// number of path segments.
+// number of path segments. Each (pattern, path) position is computed once,
+// so many ** cannot make it backtrack exponentially.
 func segments(pat, file []string) bool {
-	for len(pat) > 0 {
-		if pat[0] == "**" {
-			rest := pat[1:]
-			for len(rest) > 0 && rest[0] == "**" {
-				rest = rest[1:]
-			}
-			if len(rest) == 0 {
-				return true
-			}
-			for i := range file {
-				if segments(rest, file[i:]) {
-					return true
-				}
-			}
-			return false
+	n, m := len(pat), len(file)
+	const (
+		unknown = iota
+		yes
+		no
+	)
+	memo := make([]uint8, (n+1)*(m+1))
+	var at func(i, j int) bool
+	at = func(i, j int) bool {
+		k := i*(m+1) + j
+		if memo[k] != unknown {
+			return memo[k] == yes
 		}
-		if len(file) == 0 {
-			return false
+		var r bool
+		switch {
+		case i == n:
+			r = j == m
+		case pat[i] == "**":
+			r = at(i+1, j) || (j < m && at(i, j+1))
+		case j == m:
+			r = false
+		default:
+			ok, err := path.Match(pat[i], file[j])
+			r = err == nil && ok && at(i+1, j+1)
 		}
-		ok, err := path.Match(pat[0], file[0])
-		if err != nil || !ok {
-			return false
+		memo[k] = no
+		if r {
+			memo[k] = yes
 		}
-		pat, file = pat[1:], file[1:]
+		return r
 	}
-	return len(file) == 0
+	return at(0, 0)
 }
 
-// expand returns the pattern with every {a,b} group expanded, innermost
-// alternatives included. An unbalanced brace leaves the pattern as it is, and
-// path.Match then treats the brace literally.
-func expand(pattern string) []string {
-	open := strings.IndexByte(pattern, '{')
-	if open < 0 {
-		return []string{pattern}
+// expand returns the pattern with every {a,b} group expanded, nested groups
+// included, or false when that would make more than maxAlternatives. It
+// builds left to right and stops as soon as the cap is passed, so the work is
+// bounded too, not only the result. An unbalanced brace is left as it is.
+func expand(pattern string) ([]string, bool) {
+	out := []string{""}
+	for pattern != "" {
+		open := strings.IndexByte(pattern, '{')
+		close, commas := group(pattern, open)
+		if open < 0 || close < 0 {
+			for i := range out {
+				out[i] += pattern
+			}
+			return out, true
+		}
+		literal := pattern[:open]
+		var alts []string
+		start := open + 1
+		for _, c := range append(commas, close) {
+			sub, ok := expand(pattern[start:c])
+			if !ok {
+				return nil, false
+			}
+			alts = append(alts, sub...)
+			start = c + 1
+		}
+		if len(out)*len(alts) > maxAlternatives {
+			return nil, false
+		}
+		next := make([]string, 0, len(out)*len(alts))
+		for _, prefix := range out {
+			for _, a := range alts {
+				next = append(next, prefix+literal+a)
+			}
+		}
+		out, pattern = next, pattern[close+1:]
 	}
-	depth, close := 0, -1
-	var commas []int
-	for i := open; i < len(pattern) && close < 0; i++ {
+	return out, true
+}
+
+// group finds the } closing the { at open, and the commas at its own depth.
+// close is -1 when there is no group or it never closes.
+func group(pattern string, open int) (close int, commas []int) {
+	if open < 0 {
+		return -1, nil
+	}
+	depth := 0
+	for i := open; i < len(pattern); i++ {
 		switch pattern[i] {
 		case '{':
 			depth++
 		case '}':
 			depth--
 			if depth == 0 {
-				close = i
+				return i, commas
 			}
 		case ',':
 			if depth == 1 {
@@ -120,24 +181,5 @@ func expand(pattern string) []string {
 			}
 		}
 	}
-	if close < 0 {
-		return []string{pattern}
-	}
-	prefix, suffix := pattern[:open], pattern[close+1:]
-	var alts []string
-	start := open + 1
-	for _, c := range append(commas, close) {
-		alts = append(alts, pattern[start:c])
-		start = c + 1
-	}
-	var out []string
-	for _, a := range alts {
-		for _, e := range expand(prefix + a + suffix) {
-			if len(out) == maxAlternatives {
-				return out
-			}
-			out = append(out, e)
-		}
-	}
-	return out
+	return -1, nil
 }

@@ -1,13 +1,14 @@
-// Package session stores per-session state: arm state and touched directories.
+// Package session stores per-session state: which rules each agent has been
+// shown this turn.
 //
-// stele hook and stele mcp are separate processes, so they share a session
-// through files (spec §2.3): .stele/state/<session>.json, one per Claude Code
-// session (D37), and .stele/state/current, naming the session that last
-// blocked. Two sessions on one repository each have their own file and never
-// touch each other's.
+// Every hook call is a separate process, and the agent often writes several
+// files at once, so the state is shared through files (spec §2.3):
+// .stele/state/<session>.json, one per Claude Code session (D37). Two sessions
+// on one repository each have their own file and never touch each other's.
 //
-// Both processes update the same record, so every update is read-modify-write
-// under a lock file (architecture §3, §7).
+// Parallel hook calls update the same record, so every update is
+// read-modify-write under a lock file (architecture §3, §7). The file is
+// signed with this machine's key (D57).
 package session
 
 import (
@@ -156,8 +157,8 @@ func Update(root, id string, now time.Time, key sign.Key, fn func(*State) error)
 	return st, nil
 }
 
-// SetCurrent records id as the session that last blocked. The hook calls it on
-// every block, and request reads it to learn which session it serves.
+// SetCurrent records id as the session that last blocked, for the team
+// milestone's request to learn which session it serves. Unused in v1.
 func SetCurrent(root, id string) error {
 	if !validID(id) {
 		return fmt.Errorf("%w %q", ErrBadSessionID, id)

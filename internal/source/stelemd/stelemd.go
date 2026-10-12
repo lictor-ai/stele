@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -68,20 +69,40 @@ func (stelemd) Fingerprint(ctx context.Context, root string) (string, error) {
 	return fingerprint(src), nil
 }
 
+// maxSize caps stele.md. It is read on every write, by the hook.
+const maxSize = 4 << 20
+
 // readFile returns nil, nil when stele.md does not exist.
+//
+// A symlink is followed, since a user may link stele.md on purpose, but it
+// must end at a regular file of bounded size: a repository could commit
+// stele.md as a link to /dev/zero, and the hook reads it on every write.
 func readFile(ctx context.Context, root string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	src, err := os.ReadFile(filepath.Join(root, fileName))
+	path := filepath.Join(root, fileName)
+	info, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if src == nil {
-		src = []byte{}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", fileName)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	src, err := io.ReadAll(io.LimitReader(f, maxSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(src) > maxSize {
+		return nil, fmt.Errorf("%s is over %d bytes", fileName, maxSize)
 	}
 	return src, nil
 }

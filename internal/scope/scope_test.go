@@ -1,8 +1,22 @@
 package scope
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+// caseSensitive runs a test with case folding off, so results do not depend on
+// the platform.
+func caseSensitive(t *testing.T) {
+	t.Helper()
+	old := foldCase
+	foldCase = false
+	t.Cleanup(func() { foldCase = old })
+}
 
 func TestMatch(t *testing.T) {
+	caseSensitive(t)
 	tests := []struct {
 		pattern, file string
 		want          bool
@@ -33,6 +47,11 @@ func TestMatch(t *testing.T) {
 		{"docs/", "src/docs.go", false},
 		{"/cmd/**", "cmd/x.go", true},
 		{"./cmd/**", "cmd/x.go", true},
+		// A leading / or ./ anchors at the root, even with no other slash.
+		{"/*.go", "main.go", true},
+		{"/*.go", "sub/x.go", false},
+		{"./*.go", "sub/x.go", false},
+		{"/Makefile", "sub/Makefile", false},
 		// Classes and ?.
 		{"v[0-9].txt", "v1.txt", true},
 		{"v?.txt", "v12.txt", false},
@@ -61,13 +80,44 @@ func TestApplies(t *testing.T) {
 	}
 }
 
-// Brace expansion is capped, so a hostile pattern stays cheap.
+// A pattern expanding to too many alternatives matches nothing.
 func TestExpandCapped(t *testing.T) {
-	p := ""
-	for range 20 {
-		p += "{a,b}"
+	if _, ok := expand(strings.Repeat("{a,b}", 9)); ok {
+		t.Error("512 alternatives accepted, want the pattern refused")
 	}
-	if n := len(expand(p)); n > maxAlternatives {
-		t.Errorf("expanded to %d alternatives, want at most %d", n, maxAlternatives)
+	if alts, ok := expand(strings.Repeat("{a,b}", 8)); !ok || len(alts) != 256 {
+		t.Errorf("256 alternatives: %d, %v", len(alts), ok)
+	}
+}
+
+// stele.md comes from the repository and the hook runs on every write, so no
+// pattern may make matching slow.
+func TestMatchStaysFast(t *testing.T) {
+	deep := strings.TrimSuffix(strings.Repeat("a/", 40), "/")
+	patterns := []string{
+		strings.Repeat("{a,b}", 30),       // brace bomb
+		strings.Repeat("**/a/", 20) + "b", // backtracking bomb
+		"{" + strings.Repeat("x,", 200) + "x}/" + strings.Repeat("**/a/", 10) + "b",
+	}
+	for _, p := range patterns {
+		start := time.Now()
+		Match(p, deep)
+		if d := time.Since(start); d > 200*time.Millisecond {
+			t.Errorf("Match(%.30q...) took %v", p, d)
+		}
+	}
+}
+
+func TestFoldCase(t *testing.T) {
+	old := foldCase
+	t.Cleanup(func() { foldCase = old })
+
+	foldCase = true
+	if !Match("internal/**", "Internal/X.go") {
+		t.Error("with case folding, Internal/X.go should match internal/**")
+	}
+	foldCase = false
+	if Match("internal/**", "Internal/X.go") {
+		t.Error("without case folding, Internal/X.go should not match internal/**")
 	}
 }
