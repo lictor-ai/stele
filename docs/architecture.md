@@ -213,24 +213,28 @@ type File struct {
 }
 
 type Report struct {
-    ByHash, ByPosition, Minted, Dropped int
+    Supplied, ByHash, ByPosition, Minted, Dropped int
     Guessed []string // ids matched by position — reported, because they are inferences
+    Rekeyed []Rekey  // lock ids replaced because the source started supplying one
 }
+
+type Rekey struct{ Old, New string }
 
 func Load(root string) (File, error)
 func Save(root string, f File) error
 func Validate(f File) error // ErrDuplicateID
 
 // Reconcile is pure. newID is injected so it stays testable.
-func Reconcile(rules []source.Rule, prev File, newID func() string) (ids []string, next File, rep Report)
+func Reconcile(rules []source.Rule, prev File, newID func() string) (ids []string, next File, rep Report, err error)
 ```
 
 `Reconcile` is the identity core, and it runs in three passes after one step
 that is not a guess:
 
 0. **Supplied id** → the rule keeps the id its source gave it (D52). A supplied
-   id that clashes with another rule's is `ErrDuplicateID`. A rule whose id
-   changes because its source started supplying one is reported.
+   id that clashes with another rule's is `ErrDuplicateID`, returned as `err`.
+   A rule whose id changes because its source started supplying one is
+   reported in `Report.Rekeyed`.
 1. **Exact hash match** → same rule. Survives reordering, and a rule moving to
    another source.
 2. **Remaining rules, matched by source and position** → same rule. Survives
