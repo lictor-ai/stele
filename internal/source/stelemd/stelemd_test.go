@@ -175,6 +175,44 @@ Never put credentials in source code.
 			src:  "<!-- the header -->\ntags: [x]\n\nBody.\n",
 			want: []source.Rule{rule(0, 2, source.Rule{Tags: []string{"x"}, Body: "Body."})},
 		},
+		{
+			name: "separator inside a comment does not split",
+			src:  "<!--\nRules are separated by\n---\non its own line.\n-->\n\nbody one\n",
+			want: []source.Rule{rule(0, 7, source.Rule{Body: "body one"})},
+		},
+		{
+			name: "fence inside a comment is not a fence",
+			src:  "<!--\n```\n-->\n\nBody.\n",
+			want: []source.Rule{rule(0, 5, source.Rule{Body: "Body."})},
+		},
+		{
+			name: "text after a comment on the same line is the rule",
+			src:  "<!-- note --> Never do X.\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Body: "Never do X."})},
+		},
+		{
+			name: "metadata after a multi-line comment on its closing line",
+			src:  "<!--\nheader\n--> tags: [a]\n\nBody.\n",
+			want: []source.Rule{rule(0, 3, source.Rule{Tags: []string{"a"}, Body: "Body."})},
+		},
+		{
+			name: "inline code in triple backticks is not a fence",
+			src:  "```fmt.Println``` is banned.\n\n---\n\nSecond rule.\n",
+			want: []source.Rule{
+				rule(0, 1, source.Rule{Body: "```fmt.Println``` is banned."}),
+				rule(1, 5, source.Rule{Body: "Second rule."}),
+			},
+		},
+		{
+			name: "tilde fence may have backticks in its info string",
+			src:  "~~~ `go`\n---\n~~~\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Body: "~~~ `go`\n---\n~~~"})},
+		},
+		{
+			name: "apostrophe inside a list item",
+			src:  "tags: [don't-care, b]\n\nBody.\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Tags: []string{"don't-care", "b"}, Body: "Body."})},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -207,6 +245,12 @@ func TestParseErrors(t *testing.T) {
 		{name: "empty list item", src: "tags: [a,,b]\n\nBody.\n", wantMsg: `stele.md:1: tags: empty list item`},
 		{name: "unclosed code block", src: "One.\n---\nSee:\n```go\n---\nTwo.\n", wantMsg: "stele.md:4: unclosed code block"},
 		{name: "unclosed comment", src: "<!-- never closed\n\nBody.\n", wantMsg: "stele.md:1: unclosed comment"},
+		{
+			name:    "unclosed comment swallows separators",
+			src:     "One.\n---\n<!-- never closed\n---\nTwo.\n",
+			wantMsg: "stele.md:3: unclosed comment",
+		},
+		{name: "unclosed quote in a list", src: "tags: [\"a, b]\n\nBody.\n", wantMsg: "stele.md:1: tags: unclosed quote"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
