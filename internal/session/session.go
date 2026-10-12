@@ -61,13 +61,13 @@ func validID(id string) bool {
 
 // State is one session's shared state.
 type State struct {
-	SessionID string    `json:"session_id"`
-	PromptID  string    `json:"prompt_id"`            // the current turn
-	Armed     bool      `json:"armed"`                // the hook arms, fetch disarms
-	Touched   []string  `json:"touched,omitempty"`    // directories written to this turn
-	Blocks    int       `json:"blocks"`               // consecutive blocks with no fetch: the circuit breaker
-	LastError string    `json:"last_error,omitempty"` // written by stele mcp when an exchange step fails
-	UpdatedAt time.Time `json:"updated_at"`
+	SessionID string `json:"session_id"`
+	PromptID  string `json:"prompt_id"` // the turn Shown belongs to
+	// Shown records the rules shown to each agent this turn: agent id ("" for
+	// the main agent) to rule id to when it was shown. A subagent has its own
+	// context, so it has its own entry (ADR-0004).
+	Shown     map[string]map[string]time.Time `json:"shown,omitempty"`
+	UpdatedAt time.Time                       `json:"updated_at"`
 }
 
 // errUnreadable is a state file that exists but holds no usable state: not

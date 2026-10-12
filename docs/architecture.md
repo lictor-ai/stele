@@ -34,6 +34,7 @@ internal/source/      the Source slot: Rule, the Source interface
   stelemd/            the built-in stele.md source: read, hash, parse
 internal/lock/        stele.lock: identity, reconciliation
 internal/safefile/    crash-safe replace, create-if-absent, lock files, safe dirs and bounded reads (§7)
+internal/scope/       scope globs: which rules apply to a file
 internal/sign/        the per-machine key that signs generated files (D57)
 internal/index/       index.json: load, save
 internal/compile/     the one place that turns sources into an index
@@ -361,18 +362,15 @@ sources and passes them in, which keeps `compile` free of `PATH`, executables an
 ```go
 type State struct {
     SessionID string
-    PromptID  string    // the current turn
-    Armed     bool
-    Touched   []string  // directories written to this turn
-    Blocks    int       // consecutive blocks with no fetch — the circuit breaker
-    LastError string    // written by stele mcp when an exchange step fails
+    PromptID  string                          // the turn Shown belongs to
+    Shown     map[string]map[string]time.Time // agent id ("" = main) → rule id → when shown
     UpdatedAt time.Time
 }
 
 func Load(root, id string, key sign.Key) (State, error) // no file yet: a zero State carrying id
 func Update(root, id string, now time.Time, key sign.Key, fn func(*State) error) (State, error)
-func SetCurrent(root, id string) error     // the hook, on every block
-func Current(root string) (string, error)  // request; "" when no session has blocked
+func SetCurrent(root, id string) error     // for the team milestone's request; unused in v1
+func Current(root string) (string, error)  // "" when no session has blocked; unused in v1
 ```
 
 One file per session, `state/<session-id>.json`, per D37. The id comes from the
@@ -387,27 +385,16 @@ names no session. A state file that cannot be read — not JSON, not a regular f
 too large — fails `Load`, and `Update` replaces it with a fresh state rather than
 fail every update of that session.
 
-**`LastError` and `Blocks` exist because the hook is a new process every time.**
-When `request` fails, `stele mcp` knows — but the hook that runs two seconds later
-started from nothing and can see only this file. With nowhere to write the failure
-down, the hook cannot tell a broken matcher from an agent ignoring the redirect,
-and `block_on_error = false` becomes unreachable.
+**`Shown` is what the hook needs to show each rule once per turn** (ADR-0004).
+It is keyed by agent because a subagent has its own context: rules shown to the
+main agent do not count as shown to a subagent, or the other way round. A new
+`prompt_id` empties it. Each entry keeps when it was shown, which is what lets the
+hook deny a whole batch of parallel writes (`backstop.Window`). In v1 only `stele
+hook` writes session state; the arm-and-fetch fields of the spec (`Armed`,
+`Touched`, `Blocks`, `LastError`) belonged to the MCP exchange and are gone.
 
-`LastError` covers failures that produce an error. `Blocks` covers the ones that do
-not — the agent that never dispatches the subagent, the subagent that returns
-nonsense. Nothing fails in those, so nothing can be recorded; all the hook ever
-sees is an exchange that did not complete.
-
-Both reset on a successful `fetch` and at the start of a new turn.
-
-| Field | Written by |
-| :-- | :-- |
-| `PromptID`, `Touched`, `Blocks` | `stele hook` |
-| `Armed` | both — the hook arms, `fetch` disarms |
-| `LastError` | `stele mcp` |
-
-Two processes updating different fields of one record makes every update
-read-modify-write, so state writes take a lock file for the duration — the same
+Hook calls run in parallel when the agent writes several files at once, so every
+update is read-modify-write, and state writes take a lock file for the duration — the same
 treatment as `journal.Append` in §7. In practice they rarely overlap, since the
 agent does one thing at a time. "Rarely" is not a concurrency design.
 
@@ -502,51 +489,61 @@ UUID alone is unreadable later and a deleted rule resolves to nothing (spec §7)
 Pure, as in §2.
 
 ```go
+type Rule struct{ ID, Text string }
+
 type Input struct {
-    PromptID  string
-    AgentType string  // non-empty inside a subagent
-    Path      string  // the file about to be written
-    HasRules  bool    // the index exists and is non-empty
+    PromptID string    // the turn
+    AgentID  string    // "" for the main agent
+    Rules    []Rule    // every rule that applies to the file, by scope
+    Now      time.Time
 }
 
-func Decide(in Input, st session.State, p enforce.Policy) Decision
+type Decision struct {
+    Deny  bool
+    Rules []Rule // when denying, the rules to show
+}
+
+const Window = 3 * time.Second
+
+func Decide(in Input, st session.State, p enforce.Policy) (Decision, session.State)
 ```
 
-`Input` is stele's assembled view, not the raw hook payload. `cmd/` builds it from
-what Claude Code sent plus one cheap `index.Load`. `HasRules` is deliberately a
-single bit — **existence, not freshness.** The hook runs on every write and never
-reads rule content, so it has no business parsing or recompiling anything.
+`Input` is stele's assembled view, not the raw hook payload. `cmd/` builds it:
+the root from the written file's path (§6), the index kept fresh with
+`compile.EnsureFresh` and the built-in sources, and the rules whose `scope`
+matches the file's root-relative path (`internal/scope`). Unlike the spec's hook,
+v1's reads rule content (ADR-0004).
 
-One function, and its order is the whole behaviour:
+The order is the whole behaviour:
 
 ```
-1. AgentType is "stele-matcher"      → allow      never block our own subagent
-2. !policy.Backstop                  → allow      the backstop is off
-3. !HasRules                         → allow      nothing to deliver
-4. PromptID differs from state       → ARM, reset Touched, Blocks, LastError
-5. disarmed, dir not in Touched      → RE-ARM
-6. disarmed                          → allow, record the directory
-   ── armed from here ──
-7. LastError is set                  → failure path
-8. Blocks >= 3                       → failure path
-9. otherwise                         → BLOCK, Blocks++
-
-failure path:  policy.BlockOnError ? block, naming the error : allow, warn
+1. !policy.Backstop                     → allow
+2. no rules apply to the file           → allow
+3. PromptID differs from the state      → a new turn: forget what was shown
+4. for each rule: not shown to AgentID  → show it, record it at Now
+                  shown < Window ago    → show it again (same batch)
+5. nothing to show                      → allow
+6. otherwise                            → DENY with those rules
 ```
 
-**Step 3 is the first thing a new user hits.** Right after `init` there are no
-rules yet. Blocking a write to demand rules that do not exist would make stele
-look broken on the very first turn.
+`Decide` returns the state to save, and `cmd/` saves it **before** answering:
+`session.Update` runs `Decide` inside its read-modify-write. A deny that was not
+recorded would repeat on every retry, and there is no circuit breaker to stop it,
+so a save that fails goes through the failure policy instead.
 
-Steps 7 and 8 are the two halves of the same problem. **7 handles failures that
-produced an error** — `stele mcp` recorded it, so the hook can act on it.
-**8 handles failures that produced nothing** — the exchange simply stopped, which
-is indistinguishable from an agent ignoring the redirect. The counter does not
-need to know which; it only needs to know the exchange is not completing.
+**The window** exists for parallel writes. The agent often issues several writes
+in one message, and their hooks run before it reads any deny reason; within the
+window every write that needs the same rules is denied too, so the agent reads
+them once and retries the batch. It does not slide: a rule is stamped when first
+shown, and three seconds is shorter than any model round trip.
 
-Three is a placeholder. One would fire on the normal path, where the agent is
-blocked once and complies. Two would fire on a legitimate retry. Three gives two
-real attempts, and §13 of the spec lists it as a number the logs should settle.
+**Failures** — no key, a session that cannot be saved, an invalid `stele.json`,
+`stele.md` broken with no good index behind it — go to `failure`: with
+`block_on_error` off, allow and warn the user (`systemMessage`); with it on, deny
+and tell the agent why. A broken `stele.md` with a good index behind it is not a
+failure: the last good rules apply, and a note in the answer tells the agent what
+is wrong. A repository without `stele.md` or `stele.json` is left alone entirely:
+the hook writes nothing there, even when it finds a `.git/`.
 
 ### `internal/matcher` and `internal/serve`
 
@@ -740,29 +737,31 @@ reviews.
 Everything that knows one agent's shape. Adapters are always compiled in
 (D44): they run on the hot path, so there is nothing to resolve.
 
+`claudecode` is the only one in v1, so there is no `Adapter` interface yet;
+`cmd/` calls it directly. The interface comes with a second agent.
+
 ```go
-type Adapter interface {
-    Name() string
-    Artifacts(version string) []Artifact                    // what init writes for this agent
-    ParseHook(stdin []byte) (backstop.Input, string, error) // the input and the session id
-    RenderDecision(d backstop.Decision) (stdout []byte, exitCode int)
+type Event struct {
+    Name, SessionID, PromptID, AgentID, ToolName string
+    File    string   // absolute path of the file written, or ""
+    NewText []string // Write content, Edit new_string, each MultiEdit new_string
 }
 
-type Artifact struct {
-    Path   string // relative to the root
-    Merge  bool   // a JSON entry merged into an existing file, not a whole file
-    Bytes  []byte
+type Answer struct {
+    Deny    bool
+    Reason  string // what the agent reads when denied
+    Context string // additionalContext: alongside the tool result
+    Warning string // systemMessage: to the user
 }
+
+func Parse(stdin []byte) (Event, error)
+func Render(event string, a Answer) []byte // nil when there is nothing to say
 ```
 
-`Artifact` is defined here, not in `install`, so `install` imports `adapter` and
-never the reverse.
-
-`claudecode` is the only implementation in v1. It owns everything in §4: the
-payload fields, the `hookSpecificOutput` shape, the `.claude/settings.json` hook
-entry, the MCP registration and the matcher subagent file. `backstop.Decide` and
-`install` stay agent-neutral; a Cursor adapter adds a subpackage and touches
-neither.
+It owns everything in §4: the payload fields, the `hookSpecificOutput` shape and,
+with `init` (#12), the `.claude/settings.json` hook entries. `backstop.Decide`
+stays agent-neutral. `Parse` drops a UTF-8 byte order mark first: PowerShell adds
+one when it pipes text, and a Windows wrapper script must not disarm stele.
 
 ### `internal/install`
 
@@ -800,11 +799,17 @@ Verified against the Claude Code documentation rather than assumed.
    "permissionDecisionReason": "<the block message>"}}
 ```
 
-**Configuration** written by `init`:
+**Output to allow** is nothing at all, or, to say something without blocking,
+`additionalContext` (reaches the agent alongside the tool result) and a top-level
+`systemMessage` (reaches the user). stele never answers `permissionDecision:
+"allow"`: that would skip the user's own permission prompts.
+
+**Configuration** written by `init` (#12): the same command on `PreToolUse` and,
+for the post-write check (#29), on `PostToolUse`:
 
 ```json
 {"hooks": {"PreToolUse": [{
-  "matcher": "Write|Edit",
+  "matcher": "Write|Edit|MultiEdit",
   "hooks": [{"type": "command",
              "command": "stele", "args": ["hook"],
              "timeout": 10}]}]}}
@@ -814,22 +819,24 @@ Verified against the Claude Code documentation rather than assumed.
 
 Four things the documentation settles that the spec had to guess at:
 
-**`prompt_id` is a turn identifier.** The spec armed the hook per *session*. The
-design doc §4.2 says the backstop fires on the first write **in a turn**. `prompt_id`
-makes that exact: a new `prompt_id` re-arms and clears `Touched`. See §12.
+**`prompt_id` is a turn identifier.** The design doc §4.2 says the backstop fires
+on the first write **in a turn**. `prompt_id` makes that exact: a new `prompt_id`
+forgets which rules were shown. It is absent before the first prompt, which only
+widens "turn" to the session.
 
 **Exit 127 does not block.** The spec claimed that a missing binary lets the write
 through and that this is not ours to control. Confirmed: non-zero exit codes other
 than 2 are non-blocking for `PreToolUse`. The strict-mode caveat in spec §5 is
 accurate as written.
 
-**`agent_type` identifies subagents.** The matcher subagent must never be blocked
-by our own hook. `Decide` returns allow immediately when `agent_type` is
-`stele-matcher`.
+**`agent_id` identifies subagents.** v1 has no matcher subagent to stand aside
+for, so subagents are covered like the main agent. A subagent has its own context,
+so the rules shown are recorded per `agent_id` (ADR-0004).
 
-**Exit 2 blocks unconditionally**, overriding any JSON. stele uses the JSON path
-with exit 0 so that `permissionDecision: "allow"` is a real answer, and reserves
-exit 2 for nothing.
+**Exit 2 blocks unconditionally**, overriding any JSON. stele always exits 0 and
+answers in JSON, and prints nothing when it has nothing to say. A payload it
+cannot read is answered with nothing: a hook that cannot make sense of its input
+must never stop the agent.
 
 ---
 

@@ -73,10 +73,3 @@ func notImplemented(name string) func([]string, io.Writer, io.Writer) int {
 		return exitCantRun
 	}
 }
-
-// runHook is a stub that lets every write through. It must exit 0: exit 2
-// blocks the write unconditionally, and stdout is the decision, so it prints
-// nothing.
-func runHook(_ []string, _, _ io.Writer) int {
-	return exitOK
-}

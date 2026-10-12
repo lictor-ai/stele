@@ -1,0 +1,62 @@
+// Package enforce holds the enforcement policy.
+//
+// The policy lives in stele.json at the repository root, beside stele.md. The
+// file is optional and committed: the policy is a team decision, reviewed like
+// code. stele reads it and never writes it (D38). The same file will also list
+// plugins; Load reads only the policy keys and ignores the rest.
+package enforce
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+)
+
+// FileName is the policy file at the repository root.
+const FileName = "stele.json"
+
+// Policy is how hard the hook enforces.
+type Policy struct {
+	// Backstop is whether the hook may block a write to show the rules for
+	// it. Off, it never blocks. Default true.
+	Backstop bool
+	// BlockOnError is whether a failure of stele itself blocks the write,
+	// saying why, rather than letting it through with a warning. Default
+	// false (ADR-0004).
+	BlockOnError bool
+}
+
+// Default is the policy when stele.json is absent or does not set a key.
+func Default() Policy { return Policy{Backstop: true} }
+
+// Load reads the policy from stele.json under root. No stele.json is the
+// default policy, not an error; that is the normal case. A stele.json that
+// is not valid JSON is an error, returned with the default policy so a caller
+// can still act on it.
+func Load(root string) (Policy, error) {
+	data, err := os.ReadFile(filepath.Join(root, FileName))
+	if errors.Is(err, fs.ErrNotExist) {
+		return Default(), nil
+	}
+	if err != nil {
+		return Default(), err
+	}
+	var raw struct {
+		Backstop     *bool `json:"backstop"`
+		BlockOnError *bool `json:"block_on_error"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return Default(), fmt.Errorf("%s: %w", FileName, err)
+	}
+	p := Default()
+	if raw.Backstop != nil {
+		p.Backstop = *raw.Backstop
+	}
+	if raw.BlockOnError != nil {
+		p.BlockOnError = *raw.BlockOnError
+	}
+	return p, nil
+}
