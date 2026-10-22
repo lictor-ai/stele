@@ -649,14 +649,23 @@ external source is indistinguishable from `stelemd`.
 type Checker interface {
     Name() string
     Validate(rules []Rule) []Problem                         // settings, before any file is read
-    Check(ctx context.Context, root string, rules []Rule, files []string) ([]Violation, error)
+    Check(ctx context.Context, root string, rules []Rule, files []string) (Result, error)
 }
 
 // ContentChecker checks content it is handed, without reading a file. Built-ins
 // only: the post-write hook (#29) runs these and nothing else (D45).
 type ContentChecker interface {
     Checker
-    CheckContent(rules []Rule, file string, content []byte) []Violation
+    CheckContent(rules []Rule, file string, content []byte) Result
+}
+
+type Result struct {        // what a checker found, and the files it did not check
+    Violations []Violation
+    Skipped    []Skip
+}
+
+type Skip struct {
+    File, Reason string     // "binary", "no longer exists", "larger than 32 MiB"...
 }
 
 type Rule struct {          // what a checker sees of index.Entry
@@ -683,6 +692,8 @@ type Report struct {
     Project    string       `json:"project"` // D51
     Problems   []Problem    // invalid rules: exit 1
     Violations []Finding    // Violation + Blocking + rule excerpt
+    Skipped    []Skip       // reported, never a pass; no effect on the exit code
+    Truncated  int          // violations past 100 for one rule in one file
 }
 
 func Run(ctx context.Context, root string, idx index.Index, files []string, cs map[string]Checker) (Report, error)
@@ -701,7 +712,12 @@ known checker is a `Problem`, not a skip, and so is a `blocking` that is neither
 `blocking` key — default `true` when `check` is set — never from the checker
 (spec §8). Rules that fail `Validate` are left out of `Check`; the others still
 run, so one `stele check` shows every problem. Findings are sorted by file, line,
-column and rule id.
+column and rule id, and at most 100 are kept for one rule in one file; the rest
+are counted in `Truncated`.
+
+A file a checker cannot check — binary, too large, not a regular file, gone — is
+a `Skip`, carried into the report and printed: a skip is never a silent pass. It
+does not change the exit code.
 
 `RunFile` is the same pipeline on one file's content, with no IO: the check
 after a write (#29) uses it. It runs only `ContentChecker`s.
@@ -720,18 +736,22 @@ rule id.
 
 **Choosing files is `cmd/`'s job**, through `git`, run from the root with `-z`:
 
-- by default, `git diff --name-only --relative --diff-filter=ACMR HEAD` plus
+- by default, `git diff --name-only --relative --diff-filter=ACMRT HEAD` plus
   untracked files (`git ls-files --others --exclude-standard`); with no commit
   yet, every tracked and untracked file;
-- `--base <ref>`: `git diff --name-only --relative --diff-filter=ACMR
+- `--base <ref>`: `git diff --name-only --relative --diff-filter=ACMRT
   <ref>...HEAD`, what this branch changed since it left `<ref>`;
 - `--all`: `git ls-files`, every tracked file;
 - or the paths given, which must be files inside the root: no `git` needed.
 
 `--relative` keeps a `stele.md` in a subdirectory of the repository to its own
-files. Files in a nested project — a directory below the root with its own
-`stele.md` or `stele.json` — are left out: the hook gives them that project's
-rules (ADR-0004), so its own `stele check` does. `check` receives a plain list of
+files. Names are taken exactly as git gives them. Files in a nested project — a
+directory below the root with a regular file named `stele.md` or `stele.json` —
+are left out: the hook gives them that project's rules (ADR-0004), so its own
+`stele check` does. Each such subproject is reported (`sub/: skipped N files`,
+and in JSON a `Skip` per file), so adding a `stele.json` cannot hide a directory
+from CI unseen. Text output quotes a file name that holds a control character,
+so a name cannot forge a line of the CI log. `check` receives a plain list of
 paths relative to the root, so it never runs `git` and its tests need no
 repository.
 
@@ -746,8 +766,8 @@ reports a missing or invalid pattern, and one that matches empty text, which
 would match at every position. The pattern runs over the whole content, so `^`
 and `$` match per line only with `(?m)`. `Check` reads each file once through
 `safefile.ReadRegular`, runs every rule that applies to it, and turns each match
-offset into a line and column; a missing, non-regular or over-32 MB file is
-skipped. An optional `message` key replaces the default message. Binary files —
+offset into a line and column; a missing, non-regular or over-32 MiB file is
+skipped and reported as a `Skip`. An optional `message` key replaces the default message. Binary files —
 a NUL in the first 8 KB — are skipped.
 
 ### `internal/status` — `stele status`

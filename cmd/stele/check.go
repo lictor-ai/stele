@@ -13,12 +13,15 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 
 	"github.com/lictor-ai/stele/internal/check"
 	"github.com/lictor-ai/stele/internal/compile"
+	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/source"
@@ -82,16 +85,22 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return cantRun("%v", err)
 	}
-	files = ownedFiles(root, files)
+	files, subs := ownedFiles(root, files)
 	rep, err := check.Run(context.Background(), root, r.Index, files, plugin.BuiltinCheckers())
 	if err != nil {
 		return cantRun("%v", err)
 	}
 
 	if *format == "json" {
+		for _, sp := range subs {
+			for _, f := range sp.files {
+				rep.Skipped = append(rep.Skipped, check.Skip{File: f, Reason: "in subproject " + sp.dir + "/"})
+			}
+		}
+		sort.SliceStable(rep.Skipped, func(i, j int) bool { return rep.Skipped[i].File < rep.Skipped[j].File })
 		printJSON(stdout, rep)
 	} else {
-		printCheck(stdout, r.Lock, rep, len(r.Index.Rules), len(files))
+		printCheck(stdout, r.Lock, rep, subs, len(r.Index.Rules), len(files))
 	}
 	return rep.ExitCode()
 }
@@ -111,27 +120,72 @@ func ruleFileProblem(root, format, msg string, stdout, stderr io.Writer) int {
 	return exitFailed
 }
 
-// ownedFiles drops stele's own files, and files that belong to a subproject
-// with its own stele.md or stele.json: the hook gives those the subproject's
-// rules (ADR-0004), so CI does too, from the subproject.
-func ownedFiles(root string, files []string) []string {
-	nested := map[string]bool{".": false}
-	var inNested func(dir string) bool
-	inNested = func(dir string) bool {
-		if v, ok := nested[dir]; ok {
-			return v
+// subproject is a directory below the root with its own stele.md or
+// stele.json, and the selected files in it.
+type subproject struct {
+	dir   string // relative to the root, with / separators
+	has   string // the rule file that makes it one
+	files []string
+}
+
+// ownedFiles drops stele's own files, and files that belong to a subproject:
+// the hook gives those the subproject's rules (ADR-0004), so CI does too,
+// from the subproject. Each subproject is returned, so the skip is reported:
+// adding a stele.json must not hide a directory from CI unseen.
+func ownedFiles(root string, files []string) ([]string, []subproject) {
+	owner := map[string]string{".": ""} // directory → the subproject it is in, or ""
+	has := map[string]string{}
+	var ownerOf func(dir string) string
+	ownerOf = func(dir string) string {
+		if o, ok := owner[dir]; ok {
+			return o
 		}
-		v := inNested(path.Dir(dir)) || usesStele(filepath.Join(root, filepath.FromSlash(dir)))
-		nested[dir] = v
-		return v
+		o := ownerOf(path.Dir(dir))
+		if o == "" {
+			if name := ruleFile(filepath.Join(root, filepath.FromSlash(dir))); name != "" {
+				o, has[dir] = dir, name
+			}
+		}
+		owner[dir] = o
+		return o
 	}
 	var out []string
+	bySub := map[string]*subproject{}
+	var subs []subproject
 	for _, f := range files {
-		if !check.Own(f) && !inNested(path.Dir(f)) {
+		if check.Own(f) {
+			continue
+		}
+		o := ownerOf(path.Dir(f))
+		if o == "" {
 			out = append(out, f)
+			continue
+		}
+		sp, ok := bySub[o]
+		if !ok {
+			sp = &subproject{dir: o, has: has[o]}
+			bySub[o] = sp
+		}
+		sp.files = append(sp.files, f)
+	}
+	for _, sp := range bySub {
+		subs = append(subs, *sp)
+	}
+	sort.Slice(subs, func(i, j int) bool { return subs[i].dir < subs[j].dir })
+	return out, subs
+}
+
+// ruleFile names the stele.md or stele.json in dir that makes it a
+// subproject, or "". Unlike usesStele, it counts only a regular file: a
+// directory or a symlink named stele.json cannot hide files from CI.
+func ruleFile(dir string) string {
+	var found []string
+	for _, name := range []string{"stele.md", enforce.FileName} {
+		if info, err := os.Lstat(filepath.Join(dir, name)); err == nil && info.Mode().IsRegular() {
+			found = append(found, name)
 		}
 	}
-	return out
+	return strings.Join(found, " and ")
 }
 
 // explicitFiles turns paths given on the command line into paths relative to
@@ -176,7 +230,7 @@ func gitFiles(root, base string, all bool) ([]string, error) {
 		if _, err := git(root, "rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
 			return nil, fmt.Errorf("--base %s: unknown ref", base)
 		}
-		files, err := git(root, "diff", "--name-only", "-z", "--relative", "--diff-filter=ACMR", base+"...HEAD", "--")
+		files, err := git(root, "diff", "--name-only", "-z", "--relative", "--diff-filter=ACMRT", base+"...HEAD", "--")
 		if err != nil && strings.Contains(err.Error(), "no merge base") {
 			return nil, fmt.Errorf("%v (in CI, a shallow clone has no history: fetch with fetch-depth: 0)", err)
 		}
@@ -186,7 +240,7 @@ func gitFiles(root, base string, all bool) ([]string, error) {
 		// No commit yet, or not a repository: then ls-files says which.
 		return git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	}
-	changed, err := git(root, "diff", "--name-only", "-z", "--relative", "--diff-filter=ACMR", "HEAD", "--")
+	changed, err := git(root, "diff", "--name-only", "-z", "--relative", "--diff-filter=ACMRT", "HEAD", "--")
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +266,7 @@ func git(root string, args ...string) ([]string, error) {
 	}
 	var files []string
 	for _, f := range strings.Split(string(out), "\x00") {
-		if f = strings.TrimSpace(f); f != "" {
+		if f != "" {
 			files = append(files, f)
 		}
 	}
@@ -232,7 +286,7 @@ func dedupe(files []string) []string {
 
 // printCheck prints the report for a person: the rule problems, one line per
 // violation, then a summary.
-func printCheck(w io.Writer, lf lock.File, rep check.Report, rules, files int) {
+func printCheck(w io.Writer, lf lock.File, rep check.Report, subs []subproject, rules, files int) {
 	for _, p := range rep.Problems {
 		fmt.Fprintf(w, "invalid rule %s \"%s\"%s: %s\n", p.RuleID, p.Excerpt, where(lf, p.RuleID), p.Message)
 	}
@@ -245,12 +299,24 @@ func printCheck(w io.Writer, lf lock.File, rep check.Report, rules, files int) {
 			level = "warning"
 			warns++
 		}
-		fmt.Fprintf(w, "%s:%d:%d: %s %s \"%s\"", f.File, f.Line, f.Column, level, f.RuleID, f.Excerpt)
+		fmt.Fprintf(w, "%s:%d:%d: %s %s \"%s\"", showPath(f.File), f.Line, f.Column, level, f.RuleID, f.Excerpt)
 		if f.Message != f.Excerpt {
 			fmt.Fprintf(w, ": %s", f.Message)
 		}
 		fmt.Fprintln(w)
 	}
+	if rep.Truncated > 0 {
+		fmt.Fprintf(w, "... %s not shown (at most 100 per rule and file)\n", more(rep.Truncated))
+	}
+	skipped := map[string]bool{}
+	for _, s := range rep.Skipped {
+		fmt.Fprintf(w, "%s: skipped: %s\n", showPath(s.File), s.Reason)
+		skipped[s.File] = true
+	}
+	for _, sp := range subs {
+		fmt.Fprintf(w, "%s/: skipped %s, it has its own %s\n", showPath(sp.dir), plural(len(sp.files), "file"), sp.has)
+	}
+	files -= len(skipped)
 
 	if len(rep.Problems) == 0 {
 		fmt.Fprintf(w, "%s valid\n", plural(rules, "rule"))
@@ -258,7 +324,7 @@ func printCheck(w io.Writer, lf lock.File, rep check.Report, rules, files int) {
 		fmt.Fprintf(w, "%s in the rules\n", plural(len(rep.Problems), "problem"))
 	}
 	switch {
-	case files == 0:
+	case files == 0 && len(skipped) == 0:
 		fmt.Fprintln(w, "no files to check")
 	case errs+warns == 0:
 		fmt.Fprintf(w, "checked %s: no violations\n", plural(files, "file"))
@@ -282,6 +348,23 @@ func where(lf lock.File, id string) string {
 		}
 	}
 	return ""
+}
+
+// more is "1 more violation" or "N more violations".
+func more(n int) string {
+	if n == 1 {
+		return "1 more violation"
+	}
+	return fmt.Sprintf("%d more violations", n)
+}
+
+// showPath prints a file name as is, or quoted when it holds a control
+// character: a newline in a name must not forge a line of the CI log.
+func showPath(name string) string {
+	if strings.ContainsFunc(name, unicode.IsControl) {
+		return strconv.Quote(name)
+	}
+	return name
 }
 
 func printJSON(w io.Writer, rep check.Report) {

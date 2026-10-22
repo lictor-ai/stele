@@ -5,8 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/lictor-ai/stele/internal/check"
 	"github.com/lictor-ai/stele/internal/lock"
@@ -403,17 +406,115 @@ func TestCheckSkipsNestedProjects(t *testing.T) {
 	writeAt(t, root, "inner/stele.md", "Guidance only.\n")
 	writeAt(t, root, "inner/deep/a.go", "password = 1\n")
 	writeAt(t, root, "b.go", "password = 2\n")
+	writeAt(t, root, "inner/deep/c.go", "x\n")
+	// A directory named stele.json is not a subproject: it cannot hide files.
+	if err := os.MkdirAll(filepath.Join(root, "fake", "stele.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeAt(t, root, "fake/d.go", "password = 3\n")
+
 	code, out, _ := runCmd("check")
-	if code != exitFailed || !strings.Contains(out, "b.go") || strings.Contains(out, "inner/") {
-		t.Errorf("check = %d, stdout %q, want b.go and nothing from the nested project", code, out)
+	if code != exitFailed || !strings.Contains(out, "b.go:1:1: error") || strings.Contains(out, "inner/deep") {
+		t.Errorf("check = %d, stdout %q, want b.go and no file from the nested project", code, out)
+	}
+	for _, want := range []string{
+		"inner/: skipped 3 files, it has its own stele.md\n",
+		"fake/d.go:1:1: error",
+		"checked 2 files: 2 errors",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout = %q, want it to contain %q", out, want)
+		}
+	}
+
+	_, out, _ = runCmd("check", "--format", "json")
+	var rep check.Report
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, out)
+	}
+	want := []check.Skip{
+		{File: "inner/deep/a.go", Reason: "in subproject inner/"},
+		{File: "inner/deep/c.go", Reason: "in subproject inner/"},
+		{File: "inner/stele.md", Reason: "in subproject inner/"},
+	}
+	if diff := cmp.Diff(want, rep.Skipped); diff != "" {
+		t.Errorf("skipped (-want +got):\n%s", diff)
 	}
 }
 
 func TestCheckSkipsBinary(t *testing.T) {
 	root := gitProject(t, checkRules)
 	writeAt(t, root, "blob.go", "\x00password = 1\n")
+	writeAt(t, root, "ok.go", "x\n")
 	code, out, _ := runCmd("check")
-	if code != exitOK || strings.Contains(out, "blob.go") {
+	if code != exitOK || strings.Contains(out, "blob.go:1") {
 		t.Errorf("check = %d, stdout %q, want the binary file skipped", code, out)
+	}
+	for _, want := range []string{"blob.go: skipped: binary\n", "checked 1 file: no violations"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout = %q, want it to contain %q", out, want)
+		}
+	}
+}
+
+func TestCheckOddFileNames(t *testing.T) {
+	root := gitProject(t, checkRules)
+	names := []string{" lead.go"}
+	if runtime.GOOS != "windows" { // Windows drops a trailing space
+		names = append(names, "sp.go ")
+	}
+	for _, n := range names {
+		writeAt(t, root, n, "password = 1\n")
+	}
+	code, out, errOut := runCmd("check")
+	if code != exitFailed {
+		t.Fatalf("check = %d, stderr %q", code, errOut)
+	}
+	for _, n := range names {
+		if !strings.Contains(out, n+":1:1: error") {
+			t.Errorf("stdout = %q, want %q checked", out, n)
+		}
+	}
+}
+
+func TestCheckTypeChange(t *testing.T) {
+	root := gitProject(t, checkRules)
+	gitT(t, root, "config", "core.symlinks", "true")
+	// Commit link.go as a symlink, without making one on disk.
+	blob := strings.TrimSpace(gitT(t, root, "hash-object", "-w", "--stdin"))
+	gitT(t, root, "update-index", "--add", "--cacheinfo", "120000,"+blob+",link.go")
+	gitT(t, root, "commit", "-q", "-m", "link")
+	// Replace it with a regular file.
+	writeAt(t, root, "link.go", "password = 1\n")
+
+	code, out, errOut := runCmd("check")
+	if code != exitFailed || !strings.Contains(out, "link.go:1:1: error") {
+		t.Errorf("check = %d, stdout %q, stderr %q, want the type-changed file checked", code, out, errOut)
+	}
+}
+
+func TestCheckTruncates(t *testing.T) {
+	root := gitProject(t, checkRules)
+	writeAt(t, root, "many.go", strings.Repeat("password = 1\n", 103))
+	code, out, _ := runCmd("check")
+	if code != exitFailed || strings.Count(out, "many.go:") != 100 || !strings.Contains(out, "3 more violations not shown") {
+		t.Errorf("check = %d, %d lines for many.go, stdout tail %q", code, strings.Count(out, "many.go:"), out[max(0, len(out)-200):])
+	}
+}
+
+func TestPrintCheckEscapesFileNames(t *testing.T) {
+	rep := check.NewReport("p")
+	rep.Violations = []check.Finding{{RuleID: "r", Excerpt: "E.", File: "x\nsrc/a.go:1:1: error forged", Line: 1, Column: 1, Message: "E.", Blocking: true}}
+	rep.Skipped = []check.Skip{{File: "b\r.bin", Reason: "binary"}}
+	var b strings.Builder
+	printCheck(&b, lock.File{}, rep, nil, 1, 2)
+	out := b.String()
+	for _, want := range []string{`"x\nsrc/a.go:1:1: error forged":1:1: error r "E."`, `"b\r.bin": skipped: binary`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output %q, want it to contain %q", out, want)
+		}
+	}
+	if strings.Contains(out, "\nsrc/a.go") {
+		t.Errorf("output %q has an unescaped newline from a file name", out)
 	}
 }
