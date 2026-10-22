@@ -19,6 +19,13 @@ format.
 
 ## 1. What v1 is
 
+> **Amended by ADR-0004 (D58).** v1 is for one developer. Rules are chosen by
+> their `scope`, not by a model: a `PreToolUse` hook shows the rules for a file
+> before the agent writes it, and a `PostToolUse` hook checks the write. The MCP
+> server and its tools (§4), the matcher subagent, and the model-driven parts of
+> §2.1 and §5 move to the "team" milestone. Where this spec and ADR-0004 disagree
+> about v1, ADR-0004 wins.
+
 A tool that puts the right project rules in front of a coding agent at the moment
 it is about to write code.
 
@@ -40,6 +47,10 @@ and it removes the model from the cold path entirely.
 ## 2. Architecture
 
 ### 2.1 Hot path
+
+> **Team milestone, not v1** (ADR-0004, D58). In v1 the hot path is the hook
+> alone: it finds the rules for the file by `scope` and denies the write with them
+> as the reason; a `PostToolUse` hook checks the write.
 
 ```
 agent tries to write a file
@@ -108,6 +119,10 @@ stale" a question with exactly one owner per source instead of a concern smeared
 across whichever caller happened to need it.
 
 ### 2.3 Process model and shared state
+
+> **Amended by ADR-0004 (D58).** v1 has no `stele mcp`. The hook runs as two
+> events (`PreToolUse`, `PostToolUse`), still one process per call, sharing state
+> on disk through `.stele/state/`.
 
 Everything runs locally. One binary, two modes, both spawned by the host agent:
 
@@ -293,7 +308,7 @@ A missing `stele.md` is not an error. It gives no rules.
 | :-- | :-- |
 | `description` | What the matcher keys on. Absent means the body is used. Useful only for long rules. |
 | `tags` | Free vocabulary. stele ships none and imposes none. |
-| `scope` | Path globs. A hint to the matcher, not a hard filter — see `O-CORPUS`. For a checker it is a filter (§8). |
+| `scope` | Path globs. In v1, the filter that decides which rules the hook shows for a file (D58); a rule with no `scope` is shown for every file. For the team matcher, a hint, not a hard filter — see `O-CORPUS`. For a checker it is a filter (§8). |
 | `check` | The checker that checks this rule in CI, for example `regex`. Absent means the rule is guidance only. |
 | `blocking` | `true` or `false`: whether a violation fails `stele check`. Default `true` when `check` is set. |
 
@@ -392,6 +407,9 @@ every repo.
 
 ## 4. Tool surface
 
+> **Not in v1** (ADR-0004, D58). The MCP server and its three tools are in the
+> "team" milestone. v1 delivers rules through the hook's deny reason.
+
 Three MCP tools.
 
 ### `stele.request(brief, target_path?) -> { call_id, instruction }`
@@ -429,6 +447,12 @@ or the matcher will invent relevance to look useful (`O-EMPTY`).
 ---
 
 ## 5. The hook
+
+> **Amended by ADR-0004 (D58).** In v1 the hook does not arm and wait for
+> `fetch`. It denies a write that brings rules not yet shown this turn, with the
+> rules as the reason, and a `PostToolUse` hook checks each write. It reads rule
+> content and covers subagents. `backstop` keeps its meaning; `block_on_error`
+> changes meaning (see Failure behaviour); the three-blocks circuit breaker goes.
 
 A `PreToolUse` hook on `Write` and `Edit`.
 
@@ -477,6 +501,10 @@ this instant* — an agent that reaches a write before it understands the task
 should explore further and call then. See §4.2 of the design doc.
 
 ### Failure behaviour
+
+> **Amended by ADR-0004 (D58).** No matcher, no exchange, no three-blocks
+> counter. `block_on_error` covers stele itself failing with no good index to fall
+> back on; a broken `stele.md` keeps the last good rules.
 
 `stele.json`, at the repository root, optional. Absent means defaults.
 
@@ -541,6 +569,10 @@ a guarantee that code never lands without rules, and it should not be sold as on
 
 ## 6. Install
 
+> **Amended by ADR-0004 (D58).** `init` registers two hooks, `PreToolUse` and
+> `PostToolUse` on Write and Edit, and creates `stele.md` and `.stele/`. No MCP
+> server registration and no subagent file.
+
 `stele init` writes five things. Each carries a marker so `stele uninstall`
 removes exactly those and nothing else. Items 1–3 are the Claude Code agent
 adapter's work (§2.4); another adapter writes its own agent's equivalents.
@@ -575,6 +607,8 @@ spawn story changes for them.
 ---
 
 ## 7. Logging
+
+> **Team milestone, not v1** (ADR-0004, D58).
 
 `.stele/log.jsonl`. Append-only, local, gitignored. It never leaves the machine
 unless the user lists a sink and runs `stele push` (§2.4).
@@ -615,6 +649,10 @@ until there is data.
 ---
 
 ## 8. Checking code: `stele check`
+
+> **Amended by ADR-0004 (D58).** In v1 the hooks, not MCP tools, put rules in
+> front of the agent, and there is no log or sink: `--push` is in the "team"
+> milestone. The rest of this section is v1.
 
 The hook and the MCP tools put rules in front of the agent before it writes.
 `stele check` is the other half: it checks code against those rules in CI, after
@@ -687,11 +725,11 @@ New decisions, continuing the design doc's D-series.
 
 | # | Decision | Closes |
 | :-- | :-- | :-- |
-| D12 | The tool returns a matcher prompt; the parent dispatches the subagent. | `O-SPAWN` |
-| D13 | Three calls: `request`, `corpus`, `fetch`. Rule text reaches the parent from `fetch`, as tool output. | M4 |
-| D14 | A `call_id` issued at `request` ties the exchange together. | M1 |
-| D15 | The hook disarms on a successful `fetch`. | M3 |
-| D16 | Two flags: `backstop` (default on), `block_on_error` (default off). | M2 |
+| D12 | **Team milestone, not v1 (D58).** The tool returns a matcher prompt; the parent dispatches the subagent. | `O-SPAWN` |
+| D13 | **Team milestone, not v1 (D58).** Three calls: `request`, `corpus`, `fetch`. Rule text reaches the parent from `fetch`, as tool output. | M4 |
+| D14 | **Team milestone, not v1 (D58).** A `call_id` issued at `request` ties the exchange together. | M1 |
+| D15 | **Team milestone, not v1 (D58).** The hook disarms on a successful `fetch`. | M3 |
+| D16 | **Amended by D58.** Two flags: `backstop` (default on), `block_on_error` (default off). | M2 |
 | D17 | v1: the user supplies the structure. stele infers nothing. Extracting rules from guideline prose comes after v1, as a paid source plugin (ADR-0002). | `O-ENTRY` |
 | D18 | `stele.md`, rules separated by `---`, is the default source. `stele.json` can list more sources. *Amended by ADR-0002; was "one file".* | `O-RULE-LOC` |
 | D19 | The delimiter defines the unit. No splitting. | `O-GRAIN` |
@@ -705,12 +743,12 @@ New decisions, continuing the design doc's D-series.
 | D26 | An empty selection is a first-class, cheap answer. | `O-EMPTY` |
 | D27 | Claude Code first. Cursor second. | `O-AGENTS` |
 | D28 | `init` writes five marked artifacts; `uninstall` removes exactly those. | `O-INSTALL` |
-| D29 | Arm at the start of every turn, keyed on `prompt_id`. Re-arm within a turn on a write into an untouched directory. | `O-REARM` |
-| D30 | `fetch` is capped at 10 rules and reports truncation. | `O-BUDGET` |
+| D29 | **Amended by D58.** Arm at the start of every turn, keyed on `prompt_id`. Re-arm within a turn on a write into an untouched directory. | `O-REARM` |
+| D30 | **Team milestone, not v1 (D58).** `fetch` is capped at 10 rules and reports truncation. | `O-BUDGET` |
 | D31 | Index is a single JSON file, regenerated freely. | M5 |
 | D32 | `init` stamps a version; the hook warns on mismatch. | M6 |
-| D37 | Hook and MCP mode are separate processes sharing state on disk, keyed per session. | M8 |
-| D39 | Failures are recorded in session state so the hook can see them, and a counter applies the failure policy after 3 blocks with no `fetch`. | G1, G2 |
+| D37 | **Amended by D58.** Hook and MCP mode are separate processes sharing state on disk, keyed per session. | M8 |
+| D39 | **Team milestone, not v1 (D58).** Failures are recorded in session state so the hook can see them, and a counter applies the failure policy after 3 blocks with no `fetch`. | G1, G2 |
 | D40 | Only source plugins open rule files, and only to read-and-transform or to answer has-it-changed. Everything else reads `index.json`. *Amended by ADR-0002; was "only one package opens `stele.md`".* | G3 |
 
 From ADR-0002, `docs/adr/0002-engine-and-extension-points.md`:
@@ -739,14 +777,15 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D55 | Org-wide rules reach a repository only through a source plugin. | — |
 | D56 | `stele.md` follows Markdown where it can: a `---` inside a fenced code block or an HTML comment does not separate rules, and HTML comments before a rule's metadata are skipped. | — |
 | D57 | stele trusts only the generated files it wrote on this machine. `index.json` and session state carry an HMAC-SHA256 made with a per-user key kept outside every repository (the user config directory, owner-only); a file that does not verify is rebuilt or started afresh. `stele.lock` is shared on purpose and not signed. Malware running as the user is out of scope. | follows from D24 and D45: `.stele/` is not covered by the repository's `.gitignore`, so a repository could otherwise commit an index the agent is served |
+| D58 | v1 is for one developer. Rules are chosen by `scope`, not by a model: a `PreToolUse` hook denies a write that brings rules not yet shown this turn, with those rules as the reason; a `PostToolUse` hook runs built-in checks on the written file and reports violations. The MCP server, matcher subagent, logging, plugins and sinks move to the "team" milestone, with D12–D15, D30, D33–D35 and D39; D16, D29 and D37 are amended. | ADR-0004 |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 
 | # | Decision | Where argued |
 | :-- | :-- | :-- |
-| D33 | The `O-INPUTS` v1 set is brief plus target path. | §4.3, closing paragraph |
-| D34 | The matcher sees the full corpus, unfiltered. | §5, `O-CORPUS` |
-| D35 | `O-COST` is not stele's cost in v1. The subagent runs on the parent's model and auth; stele's own work is a file read and a parse. | consequence of D12 |
+| D33 | **Team milestone, not v1 (D58).** The `O-INPUTS` v1 set is brief plus target path. | §4.3, closing paragraph |
+| D34 | **Team milestone, not v1 (D58).** The matcher sees the full corpus, unfiltered. | §5, `O-CORPUS` |
+| D35 | **Team milestone, not v1 (D58).** `O-COST` is not stele's cost in v1. The subagent runs on the parent's model and auth; stele's own work is a file read and a parse. | consequence of D12 |
 
 **D8 stands unamended, and an earlier draft of this spec was wrong about it.** That
 draft had compile stamp `id:` lines into `stele.md`, and narrowed D8 to permit it
@@ -880,7 +919,7 @@ is the point.
 | `O-BUDGET` | Cap of 10 rules | Selection sizes in the logs |
 | `O-COST` | Assumed negligible | Measured turn latency |
 | `O-REARM` | New-directory signal | Re-arm frequency vs. whether the second selection differed |
-| D39 | Circuit breaker at 3 blocks | How often it trips, and whether real failures are caught sooner |
+| D39 | **Team milestone, not v1 (D58).** Circuit breaker at 3 blocks | How often it trips, and whether real failures are caught sooner |
 | `O-CORPUS` | Full corpus | The corpus size where match quality falls off |
 | `O-LOG-VOLUME` | Nothing acts on the logs | Enough turns for the counts to mean something |
 
