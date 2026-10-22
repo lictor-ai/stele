@@ -35,7 +35,7 @@ func TestViolationMessage(t *testing.T) {
 	}
 	got := ViolationMessage("internal/db.go", vs, 4, true)
 	for _, want := range []string{
-		"internal/db.go:3:7: rule r1 \"Never put credentials in code.\"\n",
+		"internal/db.go:3:7: rule r1 \"Never put credentials in code.\"",
 		"internal/db.go:9:1: rule r2 \"No TODO comments.\": track it in an issue",
 		"and 4 more",
 		"stele check internal/db.go",

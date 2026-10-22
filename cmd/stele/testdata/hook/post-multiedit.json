@@ -1,0 +1,20 @@
+{
+  "session_id": "abc123",
+  "transcript_path": "/home/user/.claude/projects/proj/abc123.jsonl",
+  "cwd": "/home/user/proj",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "MultiEdit",
+  "tool_input": {
+    "file_path": "/home/user/proj/internal/db.go",
+    "edits": [
+      {"old_string": "a", "new_string": "b"},
+      {"old_string": "c", "new_string": "d"}
+    ]
+  },
+  "tool_response": {
+    "filePath": "/home/user/proj/internal/db.go"
+  },
+  "tool_use_id": "toolu_01ABC125",
+  "duration_ms": 15
+}
