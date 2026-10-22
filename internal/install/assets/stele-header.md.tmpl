@@ -1,0 +1,21 @@
+<!--
+stele.md: this project's rules for coding agents (created by stele init {{.Version}}).
+stele reads this file and never edits it. You may delete this comment.
+
+Rules are separated by a line holding only ---. A rule may start with
+key: value lines, then a blank line, then the rule in plain prose:
+
+  scope: ["**/*.go"]
+  check: regex
+  pattern: fmt\.Print
+  blocking: false
+
+  Log through the shared logger, never fmt.Print.
+
+scope     path globs. Before the agent writes a matching file, it is shown
+          the rule. A rule with no scope is shown for every file: keep few.
+check     regex: stele checks each write, and stele check in CI, for pattern.
+message   what a violation says; the start of the rule by default.
+blocking  true (the default with check) or false: whether a violation
+          blocks the agent and fails stele check.
+-->
