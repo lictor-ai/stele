@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -31,15 +32,13 @@ func TestUpdate(t *testing.T) {
 	root := t.TempDir()
 	st, err := Update(root, "s1", t0, testKey, func(s *State) error {
 		s.PromptID = "p1"
-		s.Armed = true
-		s.Touched = []string{"internal/db"}
-		s.Blocks = 1
+		s.Shown = map[string]map[string]time.Time{"": {"r1": t0}}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	want := State{SessionID: "s1", PromptID: "p1", Armed: true, Touched: []string{"internal/db"}, Blocks: 1, UpdatedAt: t0}
+	want := State{SessionID: "s1", PromptID: "p1", Shown: map[string]map[string]time.Time{"": {"r1": t0}}, UpdatedAt: t0}
 	if diff := cmp.Diff(want, st); diff != "" {
 		t.Errorf("returned state (-want +got):\n%s", diff)
 	}
@@ -53,7 +52,7 @@ func TestUpdate(t *testing.T) {
 
 	// The other process changes another field; the first one's survive.
 	if _, err := Update(root, "s1", t0, testKey, func(s *State) error {
-		s.LastError = "request: no index"
+		s.PromptID = "p2"
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -62,7 +61,7 @@ func TestUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want.LastError = "request: no index"
+	want.PromptID = "p2"
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("after a second update (-want +got):\n%s", diff)
 	}
@@ -80,7 +79,7 @@ func TestUpdateErrorSavesNothing(t *testing.T) {
 	root := t.TempDir()
 	boom := errors.New("boom")
 	_, err := Update(root, "s1", t0, testKey, func(s *State) error {
-		s.Armed = true
+		s.PromptID = "armed"
 		return boom
 	})
 	if !errors.Is(err, boom) {
@@ -90,7 +89,7 @@ func TestUpdateErrorSavesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Armed {
+	if got.PromptID == "armed" {
 		t.Error("state saved although fn failed")
 	}
 }
@@ -100,7 +99,7 @@ func TestSessionsAreSeparate(t *testing.T) {
 	root := t.TempDir()
 	for _, id := range []string{"a", "b"} {
 		if _, err := Update(root, id, t0, testKey, func(s *State) error {
-			s.Armed = true
+			s.PromptID = "armed"
 			return nil
 		}); err != nil {
 			t.Fatal(err)
@@ -108,7 +107,7 @@ func TestSessionsAreSeparate(t *testing.T) {
 	}
 	// a's fetch disarms a only.
 	if _, err := Update(root, "a", t0, testKey, func(s *State) error {
-		s.Armed = false
+		s.PromptID = "disarmed"
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -117,7 +116,7 @@ func TestSessionsAreSeparate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !b.Armed {
+	if b.PromptID != "armed" {
 		t.Error("disarming session a disarmed session b")
 	}
 }
@@ -133,7 +132,7 @@ func TestUpdateConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			_, err := Update(root, "s1", t0, testKey, func(s *State) error {
-				s.Blocks++
+				s.PromptID += "x"
 				return nil
 			})
 			errs <- err
@@ -150,8 +149,8 @@ func TestUpdateConcurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Blocks != n {
-		t.Errorf("Blocks = %d, want %d: an update was lost", got.Blocks, n)
+	if len(got.PromptID) != n {
+		t.Errorf("%d updates applied, want %d: an update was lost", len(got.PromptID), n)
 	}
 }
 
@@ -311,13 +310,13 @@ func TestUpdateRecoversUnreadableState(t *testing.T) {
 		t.Error("Load of a corrupt file succeeded")
 	}
 	st, err := Update(root, "s1", t0, testKey, func(s *State) error {
-		s.Armed = true
+		s.PromptID = "armed"
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("Update over a corrupt file: %v", err)
 	}
-	if !st.Armed {
+	if st.PromptID != "armed" {
 		t.Error("Update did not apply fn")
 	}
 	if _, err := Load(root, "s1", testKey); err != nil {
@@ -423,7 +422,7 @@ func TestLoadDuringUpdates(t *testing.T) {
 	}()
 	for i := range 200 {
 		if _, err := Update(root, "s1", t0, testKey, func(s *State) error {
-			s.Blocks = i
+			s.PromptID = fmt.Sprint(i)
 			return nil
 		}); err != nil {
 			close(done)
@@ -468,7 +467,7 @@ var testKey = sign.Key(bytes.Repeat([]byte{7}, 32))
 func TestPlantedStateIsIgnored(t *testing.T) {
 	root := t.TempDir()
 	if _, err := Update(root, "other", t0, testKey, func(s *State) error {
-		s.Blocks = 2
+		s.PromptID = "planted"
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -477,7 +476,7 @@ func TestPlantedStateIsIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unsigned := []byte(`{"session_id": "s1", "armed": false, "blocks": 99}`)
+	unsigned := []byte(`{"session_id": "s1", "prompt_id": "planted"}`)
 	foreign := sign.Key(bytes.Repeat([]byte{8}, 32)).Seal("session:s1", unsigned)
 
 	for name, content := range map[string][]byte{
@@ -496,8 +495,8 @@ func TestPlantedStateIsIgnored(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if st.Blocks != 0 {
-				t.Errorf("Blocks = %d, want a fresh state", st.Blocks)
+			if st.PromptID != "" {
+				t.Errorf("PromptID = %q, want a fresh state", st.PromptID)
 			}
 		})
 	}

@@ -322,3 +322,36 @@ func TestRead(t *testing.T) {
 		t.Errorf("Read() of bad input returned no error")
 	}
 }
+
+// stele.md is read on every write, so a device or a huge file is refused; a
+// symlink to a real file is still followed.
+func TestReadRefusesNonFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "stele.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := New().Read(context.Background(), root); err == nil {
+		t.Error("Read of a directory named stele.md succeeded")
+	}
+
+	big := t.TempDir()
+	if err := os.WriteFile(filepath.Join(big, "stele.md"), make([]byte, maxSize+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New().Fingerprint(context.Background(), big); err == nil {
+		t.Error("Fingerprint of an oversized stele.md succeeded")
+	}
+
+	linked := t.TempDir()
+	real := filepath.Join(t.TempDir(), "rules.md")
+	if err := os.WriteFile(real, []byte("A rule.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(linked, "stele.md")); err != nil {
+		t.Skipf("cannot make a symlink here: %v", err)
+	}
+	rules, _, err := New().Read(context.Background(), linked)
+	if err != nil || len(rules) != 1 {
+		t.Errorf("Read through a symlink to a file = %d rules, %v; want 1", len(rules), err)
+	}
+}

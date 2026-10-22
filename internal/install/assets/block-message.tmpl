@@ -1,0 +1,11 @@
+stele paused this write to {{.Path}}: this project has rules for it that you have not seen in this turn.
+
+Read them, make sure your change follows them, then retry the same write. It will go through. Each rule is shown once per turn.
+{{- if .Note}}
+
+Note: {{.Note}}
+{{- end}}
+{{range .Rules}}
+---
+{{.Text}}
+{{end -}}

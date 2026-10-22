@@ -1,13 +1,14 @@
-// Package session stores per-session state: arm state and touched directories.
+// Package session stores per-session state: which rules each agent has been
+// shown this turn.
 //
-// stele hook and stele mcp are separate processes, so they share a session
-// through files (spec §2.3): .stele/state/<session>.json, one per Claude Code
-// session (D37), and .stele/state/current, naming the session that last
-// blocked. Two sessions on one repository each have their own file and never
-// touch each other's.
+// Every hook call is a separate process, and the agent often writes several
+// files at once, so the state is shared through files (spec §2.3):
+// .stele/state/<session>.json, one per Claude Code session (D37). Two sessions
+// on one repository each have their own file and never touch each other's.
 //
-// Both processes update the same record, so every update is read-modify-write
-// under a lock file (architecture §3, §7).
+// Parallel hook calls update the same record, so every update is
+// read-modify-write under a lock file (architecture §3, §7). The file is
+// signed with this machine's key (D57).
 package session
 
 import (
@@ -61,13 +62,13 @@ func validID(id string) bool {
 
 // State is one session's shared state.
 type State struct {
-	SessionID string    `json:"session_id"`
-	PromptID  string    `json:"prompt_id"`            // the current turn
-	Armed     bool      `json:"armed"`                // the hook arms, fetch disarms
-	Touched   []string  `json:"touched,omitempty"`    // directories written to this turn
-	Blocks    int       `json:"blocks"`               // consecutive blocks with no fetch: the circuit breaker
-	LastError string    `json:"last_error,omitempty"` // written by stele mcp when an exchange step fails
-	UpdatedAt time.Time `json:"updated_at"`
+	SessionID string `json:"session_id"`
+	PromptID  string `json:"prompt_id"` // the turn Shown belongs to
+	// Shown records the rules shown to each agent this turn: agent id ("" for
+	// the main agent) to rule id to when it was shown. A subagent has its own
+	// context, so it has its own entry (ADR-0004).
+	Shown     map[string]map[string]time.Time `json:"shown,omitempty"`
+	UpdatedAt time.Time                       `json:"updated_at"`
 }
 
 // errUnreadable is a state file that exists but holds no usable state: not
@@ -156,8 +157,8 @@ func Update(root, id string, now time.Time, key sign.Key, fn func(*State) error)
 	return st, nil
 }
 
-// SetCurrent records id as the session that last blocked. The hook calls it on
-// every block, and request reads it to learn which session it serves.
+// SetCurrent records id as the session that last blocked, for the team
+// milestone's request to learn which session it serves. Unused in v1.
 func SetCurrent(root, id string) error {
 	if !validID(id) {
 		return fmt.Errorf("%w %q", ErrBadSessionID, id)
