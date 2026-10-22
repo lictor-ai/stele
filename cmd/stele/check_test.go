@@ -464,14 +464,15 @@ func TestCheckOddFileNames(t *testing.T) {
 		names = append(names, "sp.go ")
 	}
 	for _, n := range names {
-		writeAt(t, root, n, "password = 1\n")
+		writeAt(t, root, n, "password = 1\nTODO\n")
 	}
 	code, out, errOut := runCmd("check")
 	if code != exitFailed {
 		t.Fatalf("check = %d, stderr %q", code, errOut)
 	}
+	// The unscoped TODO rule reaches every name; "sp.go " is outside **/*.go.
 	for _, n := range names {
-		if !strings.Contains(out, n+":1:1: error") {
+		if !strings.Contains(out, n+":2:1: warning") {
 			t.Errorf("stdout = %q, want %q checked", out, n)
 		}
 	}
