@@ -11,9 +11,17 @@ import (
 
 // postHook writes content to rel under root, then runs stele hook on the
 // recorded PostToolUse payload in testdata/hook/<fixture>.json, pointed at
-// that file. newText is what the tool wrote: the new_string of an Edit, one
-// new_string per edit of a MultiEdit. A Write's content is the file's.
+// that file.
 func postHook(t *testing.T, root, fixture, rel, content string, newText ...string) (hookOutput, string) {
+	t.Helper()
+	return hook(t, postPayload(t, root, fixture, rel, content, newText...))
+}
+
+// postPayload writes content to rel under root and returns the payload in
+// testdata/hook/<fixture>.json, pointed at that file. newText is what the
+// tool wrote: the new_string of an Edit, one new_string per edit of a
+// MultiEdit; none keeps the fixture's. A Write's content is the file's.
+func postPayload(t *testing.T, root, fixture, rel, content string, newText ...string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(testdata, "hook", fixture+".json"))
 	if err != nil {
@@ -33,19 +41,20 @@ func postHook(t *testing.T, root, fixture, rel, content string, newText ...strin
 	payload["cwd"] = root
 	in := payload["tool_input"].(map[string]any)
 	in["file_path"] = file
-	switch payload["tool_name"] {
-	case "Write":
+	switch {
+	case payload["tool_name"] == "Write":
 		in["content"] = content
-	case "Edit":
+	case len(newText) == 0:
+	case payload["tool_name"] == "Edit":
 		in["new_string"] = newText[0]
-	case "MultiEdit":
+	case payload["tool_name"] == "MultiEdit":
 		var edits []map[string]any
 		for _, s := range newText {
 			edits = append(edits, map[string]any{"old_string": "?", "new_string": s})
 		}
 		in["edits"] = edits
 	}
-	return hook(t, payload)
+	return payload
 }
 
 // testdata is the absolute path of this package's testdata: project moves
@@ -96,9 +105,43 @@ func TestHookAfterWrite(t *testing.T) {
 	})
 	t.Run("an edit with replace_all", func(t *testing.T) {
 		root := project(t, checkRules)
-		o, _ := postHook(t, root, "post-edit", "db.go", "a\npassword = 1\nb\npassword = 1\n", "password = 1")
+		p := postPayload(t, root, "post-edit", "db.go", "a\npassword = 1\nb\npassword = 1\n", "password = 1")
+		p["tool_input"].(map[string]any)["replace_all"] = true
+		o, _ := hook(t, p)
 		if !strings.Contains(o.Reason, "db.go:2:1:") || !strings.Contains(o.Reason, "db.go:4:1:") {
 			t.Errorf("want both replaced lines:\n%s", o.Reason)
+		}
+	})
+	t.Run("an edit found twice, without replace_all, is not attributed", func(t *testing.T) {
+		root := project(t, checkRules)
+		if _, out := postHook(t, root, "post-edit", "db.go", "a\npassword = 1\nb\npassword = 1\n", "password = 1"); out != "" {
+			t.Errorf("stdout %q, want nothing: which occurrence was written cannot be told", out)
+		}
+	})
+	t.Run("an edit starting with a newline", func(t *testing.T) {
+		root := project(t, checkRules)
+		o, _ := postHook(t, root, "post-edit", "db.go", "password = 0\npassword = 1\n", "\npassword = 1")
+		if !strings.Contains(o.Reason, "db.go:2:1:") || strings.Contains(o.Reason, "db.go:1:") {
+			t.Errorf("want line 2 only:\n%s", o.Reason)
+		}
+	})
+	t.Run("an edit with Claude Code's patch: exact lines", func(t *testing.T) {
+		root := project(t, checkRules)
+		// The new text is also on line 7, so without the patch it would be
+		// ambiguous.
+		content := "package db\n\nfunc q() {\n\tpassword = 1\n}\n\nvar password = 1\n"
+		o, _ := postHook(t, root, "post-edit-patch", "db.go", content)
+		if !strings.Contains(o.Reason, "db.go:4:2:") || strings.Contains(o.Reason, "db.go:7:") {
+			t.Errorf("want line 4 only:\n%s", o.Reason)
+		}
+	})
+	t.Run("a multiedit with Claude Code's patch: a later edit rewrote an earlier one", func(t *testing.T) {
+		root := project(t, checkRules)
+		// The first edit's new text is no longer in the file.
+		content := "package db\n\nfunc q() {\n\tpassword = 1\n\taudit(x)\n}\n"
+		o, _ := postHook(t, root, "post-multiedit-patch", "db.go", content)
+		if !strings.Contains(o.Reason, "db.go:4:2:") {
+			t.Errorf("want line 4:\n%s", o.Reason)
 		}
 	})
 	t.Run("an edit that deletes text", func(t *testing.T) {

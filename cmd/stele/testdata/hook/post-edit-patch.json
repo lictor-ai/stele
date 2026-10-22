@@ -1,0 +1,42 @@
+{
+  "session_id": "abc123",
+  "transcript_path": "/home/user/.claude/projects/proj/abc123.jsonl",
+  "cwd": "/home/user/proj",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/home/user/proj/db.go",
+    "old_string": "password = 0",
+    "new_string": "password = 1",
+    "replace_all": false
+  },
+  "tool_response": {
+    "filePath": "/home/user/proj/db.go",
+    "oldString": "password = 0",
+    "newString": "password = 1",
+    "originalFile": "package db\n\nfunc q() {\n\tpassword = 0\n}\n\nvar password = 1\n",
+    "structuredPatch": [
+      {
+        "oldStart": 1,
+        "oldLines": 7,
+        "newStart": 1,
+        "newLines": 7,
+        "lines": [
+          " package db",
+          " ",
+          " func q() {",
+          "-\tpassword = 0",
+          "+\tpassword = 1",
+          " }",
+          " ",
+          " var password = 1"
+        ]
+      }
+    ],
+    "userModified": false,
+    "replaceAll": false
+  },
+  "tool_use_id": "toolu_01ABC126",
+  "duration_ms": 8
+}

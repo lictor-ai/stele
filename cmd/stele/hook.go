@@ -221,9 +221,9 @@ func afterWrite(ev claudecode.Event) claudecode.Answer {
 	// Only the agent's lines count: older violations are left to stele check.
 	var keep func(int) bool
 	if ev.ToolName != "Write" {
-		spans := check.Spans(content, ev.NewText)
+		spans := written(ev, content)
 		if len(spans) == 0 {
-			return claudecode.Answer{Context: note} // a deletion, or text since changed
+			return claudecode.Answer{Context: note} // a deletion, or text not found
 		}
 		keep = func(line int) bool { return check.Contain(spans, line) }
 	}
@@ -263,6 +263,23 @@ func afterWrite(ev claudecode.Event) claudecode.Answer {
 	// With backstop off the hook never blocks (ADR-0004): the agent is told.
 	a.Context = joinNotes(append([]string{hardMsg, softMsg}, notes...)...)
 	return a
+}
+
+// written returns the lines an Edit or MultiEdit wrote: exactly, from
+// Claude Code's patch, or else from where its new text is in the file.
+func written(ev claudecode.Event, content []byte) []check.Span {
+	if ev.Patched {
+		spans := make([]check.Span, len(ev.Added))
+		for i, l := range ev.Added {
+			spans[i] = check.Span{First: l.First, Last: l.Last}
+		}
+		return check.Merge(spans)
+	}
+	fs := make([]check.Fragment, len(ev.NewText))
+	for i, t := range ev.NewText {
+		fs[i] = check.Fragment{Text: t, ReplaceAll: i < len(ev.ReplaceAll) && ev.ReplaceAll[i]}
+	}
+	return check.Spans(content, fs)
 }
 
 // unchecked is the note for a file the post-write check could not read.
