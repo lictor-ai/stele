@@ -30,15 +30,15 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "PostToolUse", "session_id": "s1", "agent_id": "a1", "cwd": cwd,
 				"tool_name": "Edit", "tool_input": map[string]any{"file_path": "internal/db.go", "old_string": "x", "new_string": "y"},
 			},
-			want: Event{Name: "PostToolUse", SessionID: "s1", AgentID: "a1", ToolName: "Edit", File: abs, NewText: []string{"y"}},
+			want: Event{Name: "PostToolUse", SessionID: "s1", AgentID: "a1", ToolName: "Edit", File: abs, NewText: []string{"y"}, ReplaceAll: []bool{false}},
 		},
 		{
 			name: "multiedit",
 			payload: map[string]any{
 				"hook_event_name": "PreToolUse", "tool_name": "MultiEdit",
-				"tool_input": map[string]any{"file_path": abs, "edits": []map[string]string{{"new_string": "a"}, {"new_string": "b"}}},
+				"tool_input": map[string]any{"file_path": abs, "edits": []map[string]any{{"new_string": "a"}, {"new_string": "b", "replace_all": true}}},
 			},
-			want: Event{Name: "PreToolUse", ToolName: "MultiEdit", File: abs, NewText: []string{"a", "b"}},
+			want: Event{Name: "PreToolUse", ToolName: "MultiEdit", File: abs, NewText: []string{"a", "b"}, ReplaceAll: []bool{false, true}},
 		},
 		{
 			name: "post-write, with the tool's response",
@@ -57,6 +57,52 @@ func TestParse(t *testing.T) {
 				"tool_input": map[string]any{"file_path": abs, "old_string": "x", "new_string": ""},
 			},
 			want: Event{Name: "PostToolUse", ToolName: "Edit", File: abs},
+		},
+		{
+			name: "edit with replace_all and Claude Code's patch",
+			payload: map[string]any{
+				"hook_event_name": "PostToolUse", "tool_name": "Edit",
+				"tool_input": map[string]any{"file_path": abs, "old_string": "c", "new_string": "C\nD", "replace_all": true},
+				"tool_response": map[string]any{"filePath": abs, "structuredPatch": []map[string]any{
+					{"oldStart": 3, "oldLines": 5, "newStart": 3, "newLines": 6, "lines": []string{" a", " b", "-c", "+C", "+D", " e", " f"}},
+					{"oldStart": 20, "oldLines": 1, "newStart": 21, "newLines": 2, "lines": []string{" g", "+h", `\ No newline at end of file`}},
+				}},
+			},
+			want: Event{
+				Name: "PostToolUse", ToolName: "Edit", File: abs, NewText: []string{"C\nD"}, ReplaceAll: []bool{true},
+				Added: []Lines{{5, 6}, {22, 22}}, Patched: true,
+			},
+		},
+		{
+			name: "a patch that only removes lines",
+			payload: map[string]any{
+				"hook_event_name": "PostToolUse", "tool_name": "MultiEdit",
+				"tool_input": map[string]any{"file_path": abs, "edits": []map[string]any{{"new_string": ""}}},
+				"tool_response": map[string]any{"structuredPatch": []map[string]any{
+					{"oldStart": 1, "oldLines": 2, "newStart": 1, "newLines": 1, "lines": []string{" a", "-b"}},
+				}},
+			},
+			want: Event{Name: "PostToolUse", ToolName: "MultiEdit", File: abs, NewText: []string{""}, ReplaceAll: []bool{false}, Patched: true},
+		},
+		{
+			name: "a patch whose counts are wrong is not used",
+			payload: map[string]any{
+				"hook_event_name": "PostToolUse", "tool_name": "Edit",
+				"tool_input": map[string]any{"file_path": abs, "new_string": "x"},
+				"tool_response": map[string]any{"structuredPatch": []map[string]any{
+					{"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 5, "lines": []string{"-a", "+x"}},
+				}},
+			},
+			want: Event{Name: "PostToolUse", ToolName: "Edit", File: abs, NewText: []string{"x"}, ReplaceAll: []bool{false}},
+		},
+		{
+			name: "a response that is not an object",
+			payload: map[string]any{
+				"hook_event_name": "PostToolUse", "tool_name": "Edit",
+				"tool_input":    map[string]any{"file_path": abs, "new_string": "x"},
+				"tool_response": "edited",
+			},
+			want: Event{Name: "PostToolUse", ToolName: "Edit", File: abs, NewText: []string{"x"}, ReplaceAll: []bool{false}},
 		},
 		{
 			name: "a tool with no file",

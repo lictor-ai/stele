@@ -11,6 +11,11 @@
 //   - A PostToolUse hook runs after the tool. A top-level decision "block"
 //     cannot undo it: it adds reason next to the tool result, for Claude.
 //     PostToolUse fires concurrently when Claude makes parallel tool calls.
+//   - After an Edit or MultiEdit, tool_response carries a structuredPatch:
+//     hunks of lines prefixed ' ', '-' or '+', numbered from newStart in the
+//     file as written. The hooks documentation does not describe it, so a
+//     patch that does not add up is ignored and stele falls back on the
+//     tool's new_string.
 //   - additionalContext reaches Claude alongside the tool result; systemMessage
 //     reaches the user.
 //   - Exit code 0 with JSON on stdout is the only path stele uses. Exit 2
@@ -37,6 +42,65 @@ type Event struct {
 	// NewText is what the tool puts in the file: the content of a Write, the
 	// new_string of an Edit, or each edit's new_string of a MultiEdit.
 	NewText []string
+	// ReplaceAll is, for each NewText of an Edit or MultiEdit, its
+	// replace_all.
+	ReplaceAll []bool
+	// Added is the lines of the file as written that the tool added, read
+	// from the structuredPatch in Claude Code's response to an Edit or
+	// MultiEdit. Patched is false when the response carries no patch stele
+	// can trust; Added then means nothing.
+	Added   []Lines
+	Patched bool
+}
+
+// Lines is lines First to Last of a file, 1-based and inclusive.
+type Lines struct{ First, Last int }
+
+// hunk is one hunk of a structuredPatch. Each line starts with ' ' for
+// context, '-' for a line removed or '+' for a line added.
+type hunk struct {
+	OldStart int      `json:"oldStart"`
+	OldLines int      `json:"oldLines"`
+	NewStart int      `json:"newStart"`
+	NewLines int      `json:"newLines"`
+	Lines    []string `json:"lines"`
+}
+
+// added returns the lines the hunks add, numbered in the new file. ok is
+// false when a hunk does not add up: its counts disagree with its lines, or
+// a line has no known prefix.
+func added(hunks []hunk) (lines []Lines, ok bool) {
+	for _, h := range hunks {
+		n, olds, news := h.NewStart, 0, 0
+		for _, l := range h.Lines {
+			if l == "" {
+				return nil, false
+			}
+			switch l[0] {
+			case ' ':
+				olds++
+				news++
+				n++
+			case '-':
+				olds++
+			case '+':
+				if k := len(lines); k > 0 && lines[k-1].Last == n-1 {
+					lines[k-1].Last = n
+				} else {
+					lines = append(lines, Lines{n, n})
+				}
+				news++
+				n++
+			case '\\': // "\ No newline at end of file"
+			default:
+				return nil, false
+			}
+		}
+		if olds != h.OldLines || news != h.NewLines || (news > 0 && h.NewStart < 1) {
+			return nil, false
+		}
+	}
+	return lines, true
 }
 
 // Parse reads a hook payload.
@@ -49,13 +113,17 @@ func Parse(stdin []byte) (Event, error) {
 		Cwd           string `json:"cwd"`
 		ToolName      string `json:"tool_name"`
 		ToolInput     struct {
-			FilePath  string `json:"file_path"`
-			Content   string `json:"content"`
-			NewString string `json:"new_string"`
-			Edits     []struct {
-				NewString string `json:"new_string"`
+			FilePath   string `json:"file_path"`
+			Content    string `json:"content"`
+			NewString  string `json:"new_string"`
+			ReplaceAll bool   `json:"replace_all"`
+			Edits      []struct {
+				NewString  string `json:"new_string"`
+				ReplaceAll bool   `json:"replace_all"`
 			} `json:"edits"`
 		} `json:"tool_input"`
+		// Raw: tool_response is not an object for every tool.
+		ToolResponse json.RawMessage `json:"tool_response"`
 	}
 	// A UTF-8 byte order mark is not JSON, but Windows tools such as
 	// PowerShell add one when they pipe text; a wrapper must not disarm stele.
@@ -84,9 +152,17 @@ func Parse(stdin []byte) (Event, error) {
 		e.NewText = []string{p.ToolInput.Content}
 	case p.ToolInput.NewString != "":
 		e.NewText = []string{p.ToolInput.NewString}
+		e.ReplaceAll = []bool{p.ToolInput.ReplaceAll}
 	}
 	for _, ed := range p.ToolInput.Edits {
 		e.NewText = append(e.NewText, ed.NewString)
+		e.ReplaceAll = append(e.ReplaceAll, ed.ReplaceAll)
+	}
+	var resp struct {
+		StructuredPatch *[]hunk `json:"structuredPatch"`
+	}
+	if json.Unmarshal(p.ToolResponse, &resp) == nil && resp.StructuredPatch != nil {
+		e.Added, e.Patched = added(*resp.StructuredPatch)
 	}
 	return e, nil
 }
