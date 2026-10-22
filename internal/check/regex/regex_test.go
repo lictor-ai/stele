@@ -81,19 +81,20 @@ func TestCheckContent(t *testing.T) {
 		{RuleID: "plain", File: "a.go", Line: 1, Column: 6},
 		{RuleID: "msg", File: "a.go", Line: 2, Column: 4, Message: "file an issue"},
 	}
-	if diff := cmp.Diff(want, got); diff != "" {
+	if diff := cmp.Diff(check.Result{Violations: want}, got); diff != "" {
 		t.Errorf("CheckContent (-want +got):\n%s", diff)
 	}
 
-	// Binary: a NUL in the first 8 KB.
+	// Binary: a NUL in the first 8 KB. Skipped, and said so.
 	bin := append([]byte("secret\x00"), "secret"...)
-	if got := New().CheckContent(rules, "a.bin", bin); got != nil {
-		t.Errorf("binary file: %v, want it skipped", got)
+	wantSkip := check.Result{Skipped: []check.Skip{{File: "a.bin", Reason: "binary"}}}
+	if diff := cmp.Diff(wantSkip, New().CheckContent(rules, "a.bin", bin)); diff != "" {
+		t.Errorf("binary file (-want +got):\n%s", diff)
 	}
 	// A NUL after the first 8 KB does not make it binary.
 	late := append(bytes.Repeat([]byte("a"), 8<<10), "\x00secret"...)
-	if got := New().CheckContent(rules[:1], "a.txt", late); len(got) != 1 {
-		t.Errorf("late NUL: %v, want one violation", got)
+	if got := New().CheckContent(rules[:1], "a.txt", late); len(got.Violations) != 1 || got.Skipped != nil {
+		t.Errorf("late NUL: %+v, want one violation", got)
 	}
 }
 
@@ -105,8 +106,10 @@ func TestCheck(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "dir.go"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	linkSkip := check.Skip{File: "link.go", Reason: "not a regular file"}
 	if err := os.Symlink(filepath.Join(root, "a.go"), filepath.Join(root, "link.go")); err != nil {
 		t.Logf("no symlinks here: %v", err)
+		linkSkip.Reason = "no longer exists"
 	}
 	old := maxFile
 	maxFile = 64
@@ -118,12 +121,23 @@ func TestCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []check.Violation{
-		{RuleID: "pw", File: "a.go", Line: 1, Column: 1},
-		{RuleID: "pw", File: "sub/b.go", Line: 2, Column: 1},
+	want := check.Result{
+		Violations: []check.Violation{
+			{RuleID: "pw", File: "a.go", Line: 1, Column: 1},
+			{RuleID: "pw", File: "sub/b.go", Line: 2, Column: 1},
+		},
+		Skipped: []check.Skip{
+			{File: "gone.go", Reason: "no longer exists"},
+			{File: "dir.go", Reason: "not a regular file"},
+			linkSkip,
+			{File: "big.go", Reason: "larger than 64 bytes"},
+		},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("Check (-want +got):\n%s", diff)
+	}
+	if got := size(32 << 20); got != "32 MiB" {
+		t.Errorf("size(32 MiB) = %q", got)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

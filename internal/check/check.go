@@ -29,8 +29,9 @@ type Checker interface {
 	// read. Those rules are left out of Check.
 	Validate(rules []Rule) []Problem
 	// Check runs rules on files: paths relative to root, with / separators.
-	// A file that no longer exists is skipped.
-	Check(ctx context.Context, root string, rules []Rule, files []string) ([]Violation, error)
+	// A file it cannot check, such as one that no longer exists, is skipped
+	// and named in the result.
+	Check(ctx context.Context, root string, rules []Rule, files []string) (Result, error)
 }
 
 // ContentChecker can check content it is handed, without reading a file.
@@ -38,7 +39,21 @@ type Checker interface {
 // and nothing else (D45).
 type ContentChecker interface {
 	Checker
-	CheckContent(rules []Rule, file string, content []byte) []Violation
+	CheckContent(rules []Rule, file string, content []byte) Result
+}
+
+// Result is what a checker found, and the files it did not check.
+type Result struct {
+	Violations []Violation
+	Skipped    []Skip
+}
+
+// Skip is a file that was not checked, and why. A skip is never a pass: it is
+// reported, so a file cannot slip past CI unseen. It does not change the exit
+// code.
+type Skip struct {
+	File   string `json:"file"`
+	Reason string `json:"reason"`
 }
 
 // Rule is what a checker sees of an index.Entry.
@@ -81,6 +96,10 @@ type Report struct {
 	Project    string    `json:"project"` // D51
 	Problems   []Problem `json:"problems"`
 	Violations []Finding `json:"violations"`
+	Skipped    []Skip    `json:"skipped"`
+	// Truncated counts the violations left out past maxPerFile for one rule
+	// in one file.
+	Truncated int `json:"truncated"`
 }
 
 // ReportVersion is the report format's version (D50).
@@ -88,7 +107,7 @@ const ReportVersion = 1
 
 // NewReport is an empty report for project.
 func NewReport(project string) Report {
-	return Report{V: ReportVersion, Project: project, Problems: []Problem{}, Violations: []Finding{}}
+	return Report{V: ReportVersion, Project: project, Problems: []Problem{}, Violations: []Finding{}, Skipped: []Skip{}}
 }
 
 // ExitCode is stele check's exit code for the report: 1 for an invalid rule
@@ -120,11 +139,12 @@ func Run(ctx context.Context, root string, idx index.Index, files []string, cs m
 		if len(mine) == 0 {
 			continue
 		}
-		vs, err := g.checker.Check(ctx, root, g.rules, mine)
+		res, err := g.checker.Check(ctx, root, g.rules, mine)
 		if err != nil {
 			return Report{}, fmt.Errorf("%s: %w", g.checker.Name(), err)
 		}
-		for _, v := range vs {
+		p.report.Skipped = append(p.report.Skipped, res.Skipped...)
+		for _, v := range res.Violations {
 			f, ok := g.finding(v)
 			if !ok {
 				return Report{}, fmt.Errorf("%s: violation of %q, which is not one of its rules", g.checker.Name(), v.RuleID)
@@ -134,7 +154,7 @@ func Run(ctx context.Context, root string, idx index.Index, files []string, cs m
 			}
 		}
 	}
-	sortFindings(p.report.Violations)
+	p.report.finish()
 	return p.report, nil
 }
 
@@ -150,14 +170,47 @@ func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker
 		if !ok || !g.applies(file) {
 			continue
 		}
-		for _, v := range cc.CheckContent(g.rules, file, content) {
+		res := cc.CheckContent(g.rules, file, content)
+		p.report.Skipped = append(p.report.Skipped, res.Skipped...)
+		for _, v := range res.Violations {
 			if f, _ := g.finding(v); f != nil {
 				p.report.Violations = append(p.report.Violations, *f)
 			}
 		}
 	}
-	sortFindings(p.report.Violations)
+	p.report.finish()
 	return p.report
+}
+
+// maxPerFile caps the violations reported for one rule in one file. A
+// pattern that matches every line would otherwise bury everything else.
+const maxPerFile = 100
+
+// finish sorts the findings, keeps the first maxPerFile of each rule in each
+// file, and sorts the skips, each file once per reason.
+func (r *Report) finish() {
+	sortFindings(r.Violations)
+	type key struct{ rule, file string }
+	n := map[key]int{}
+	kept := r.Violations[:0]
+	for _, f := range r.Violations {
+		k := key{f.RuleID, f.File}
+		if n[k]++; n[k] > maxPerFile {
+			r.Truncated++
+			continue
+		}
+		kept = append(kept, f)
+	}
+	r.Violations = kept
+
+	sort.SliceStable(r.Skipped, func(i, j int) bool { return r.Skipped[i].File < r.Skipped[j].File })
+	skipped := r.Skipped[:0]
+	for i, s := range r.Skipped {
+		if i == 0 || s != r.Skipped[i-1] {
+			skipped = append(skipped, s)
+		}
+	}
+	r.Skipped = skipped
 }
 
 // rule is a valid rule with what stele reads of it.

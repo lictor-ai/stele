@@ -18,6 +18,7 @@ type fake struct {
 	name     string
 	problems []Problem
 	found    []Violation
+	skipped  []Skip
 	err      error
 
 	gotRules []string
@@ -28,12 +29,12 @@ func (f *fake) Name() string { return f.name }
 
 func (f *fake) Validate(rules []Rule) []Problem { return f.problems }
 
-func (f *fake) Check(_ context.Context, _ string, rules []Rule, files []string) ([]Violation, error) {
+func (f *fake) Check(_ context.Context, _ string, rules []Rule, files []string) (Result, error) {
 	for _, r := range rules {
 		f.gotRules = append(f.gotRules, r.ID)
 	}
 	f.gotFiles = files
-	return f.found, f.err
+	return Result{Violations: f.found, Skipped: f.skipped}, f.err
 }
 
 // contentFake is a fake that can also check content it is handed.
@@ -42,13 +43,63 @@ type contentFake struct {
 	gotContent string
 }
 
-func (f *contentFake) CheckContent(rules []Rule, file string, content []byte) []Violation {
+func (f *contentFake) CheckContent(rules []Rule, file string, content []byte) Result {
 	for _, r := range rules {
 		f.gotRules = append(f.gotRules, r.ID)
 	}
 	f.gotFiles = []string{file}
 	f.gotContent = string(content)
-	return f.found
+	return Result{Violations: f.found, Skipped: f.skipped}
+}
+
+func TestRunSkipped(t *testing.T) {
+	idx := index.Index{Rules: []index.Entry{entry("a", "A.", nil, map[string]string{"check": "fake"})}}
+	f := &fake{name: "fake", skipped: []Skip{{File: "z.bin", Reason: "binary"}, {File: "big.txt", Reason: "larger than 32 MiB"}}}
+	r, err := Run(context.Background(), "root", idx, []string{"big.txt", "z.bin"}, map[string]Checker{"fake": f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Skip{{File: "big.txt", Reason: "larger than 32 MiB"}, {File: "z.bin", Reason: "binary"}}
+	if diff := cmp.Diff(want, r.Skipped); diff != "" {
+		t.Errorf("skipped (-want +got):\n%s", diff)
+	}
+	if r.ExitCode() != 0 {
+		t.Errorf("ExitCode = %d, want skips not to change it", r.ExitCode())
+	}
+
+	cf := &contentFake{fake: fake{name: "fake", skipped: []Skip{{File: "z.bin", Reason: "binary"}}}}
+	rf := RunFile(idx, "z.bin", []byte("x"), map[string]Checker{"fake": cf})
+	if diff := cmp.Diff([]Skip{{File: "z.bin", Reason: "binary"}}, rf.Skipped); diff != "" {
+		t.Errorf("RunFile skipped (-want +got):\n%s", diff)
+	}
+}
+
+func TestRunTruncates(t *testing.T) {
+	idx := index.Index{Rules: []index.Entry{
+		entry("a", "A.", nil, map[string]string{"check": "fake"}),
+		entry("b", "B.", nil, map[string]string{"check": "fake", "blocking": "false"}),
+	}}
+	var found []Violation
+	for i := 1; i <= maxPerFile+5; i++ {
+		found = append(found, Violation{RuleID: "a", File: "x.go", Line: i, Column: 1})
+	}
+	found = append(found, Violation{RuleID: "a", File: "y.go", Line: 1, Column: 1}) // another file: its own cap
+	for i := 1; i <= maxPerFile+2; i++ {
+		found = append(found, Violation{RuleID: "b", File: "x.go", Line: i, Column: 2})
+	}
+	f := &fake{name: "fake", found: found}
+	r, err := Run(context.Background(), "root", idx, []string{"x.go", "y.go"}, map[string]Checker{"fake": f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Violations) != 2*maxPerFile+1 || r.Truncated != 7 {
+		t.Errorf("violations %d, truncated %d, want %d and 7", len(r.Violations), r.Truncated, 2*maxPerFile+1)
+	}
+	for _, f := range r.Violations {
+		if f.Line > maxPerFile {
+			t.Errorf("kept %+v, want only the first %d matches of each rule kept", f, maxPerFile)
+		}
+	}
 }
 
 func entry(id, body string, scope []string, meta map[string]string) index.Entry {
@@ -263,7 +314,7 @@ func TestReportJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"v":1,"project":"p","problems":[],"violations":[]}`; string(data) != want {
+	if want := `{"v":1,"project":"p","problems":[],"violations":[],"skipped":[],"truncated":0}`; string(data) != want {
 		t.Errorf("empty report = %s, want %s", data, want)
 	}
 
@@ -271,6 +322,10 @@ func TestReportJSON(t *testing.T) {
 	data, _ = json.Marshal(f)
 	if want := `{"rule_id":"a","excerpt":"A.","file":"x.go","line":1,"column":2,"message":"m","blocking":true}`; string(data) != want {
 		t.Errorf("finding = %s, want %s", data, want)
+	}
+	data, _ = json.Marshal(Skip{File: "a.bin", Reason: "binary"})
+	if want := `{"file":"a.bin","reason":"binary"}`; string(data) != want {
+		t.Errorf("skip = %s, want %s", data, want)
 	}
 	data, _ = json.Marshal(Problem{Message: "stele.md:1: rule has no body"})
 	if want := `{"message":"stele.md:1: rule has no body"}`; string(data) != want {

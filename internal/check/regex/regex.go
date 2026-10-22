@@ -74,28 +74,52 @@ func (Checker) Validate(rules []check.Rule) []check.Problem {
 
 // Check reads each file once and runs every rule that applies to it. A file
 // that no longer exists, is not a regular file or is too large is skipped.
-func (c Checker) Check(ctx context.Context, root string, rules []check.Rule, files []string) ([]check.Violation, error) {
+func (c Checker) Check(ctx context.Context, root string, rules []check.Rule, files []string) (check.Result, error) {
 	compiled := compileAll(rules)
-	var vs []check.Violation
+	var res check.Result
 	for _, f := range files {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return check.Result{}, err
 		}
 		content, err := safefile.ReadRegular(filepath.Join(root, filepath.FromSlash(f)), maxFile)
-		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, safefile.ErrNotRegular) || errors.Is(err, safefile.ErrTooLarge) {
+		if reason := skipReason(err); reason != "" {
+			res.Skipped = append(res.Skipped, check.Skip{File: f, Reason: reason})
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return check.Result{}, err
 		}
-		vs = append(vs, checkContent(compiled, f, content)...)
+		r := checkContent(compiled, f, content)
+		res.Violations = append(res.Violations, r.Violations...)
+		res.Skipped = append(res.Skipped, r.Skipped...)
 	}
-	return vs, nil
+	return res, nil
+}
+
+// skipReason says why a file that could not be read is skipped, or "" when
+// the error is a real one.
+func skipReason(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "no longer exists"
+	case errors.Is(err, safefile.ErrNotRegular):
+		return "not a regular file"
+	case errors.Is(err, safefile.ErrTooLarge):
+		return "larger than " + size(maxFile)
+	}
+	return ""
+}
+
+func size(n int64) string {
+	if n >= 1<<20 && n%(1<<20) == 0 {
+		return fmt.Sprintf("%d MiB", n>>20)
+	}
+	return fmt.Sprintf("%d bytes", n)
 }
 
 // CheckContent runs every rule that applies to file on content. A binary file
-// gives nothing.
-func (Checker) CheckContent(rules []check.Rule, file string, content []byte) []check.Violation {
+// is skipped.
+func (Checker) CheckContent(rules []check.Rule, file string, content []byte) check.Result {
 	return checkContent(compileAll(rules), file, content)
 }
 
@@ -131,9 +155,9 @@ func compile(r check.Rule) (*regexp.Regexp, error) {
 	return re, nil
 }
 
-func checkContent(cs []compiled, file string, content []byte) []check.Violation {
+func checkContent(cs []compiled, file string, content []byte) check.Result {
 	if bytes.IndexByte(content[:min(len(content), binaryPrefix)], 0) >= 0 {
-		return nil
+		return check.Result{Skipped: []check.Skip{{File: file, Reason: "binary"}}}
 	}
 	var vs []check.Violation
 	for _, c := range cs {
@@ -144,5 +168,5 @@ func checkContent(cs []compiled, file string, content []byte) []check.Violation 
 			vs = append(vs, check.Violation{RuleID: c.rule.ID, File: file, Line: l.Line, Column: l.Column, Message: c.rule.Meta["message"]})
 		}
 	}
-	return vs
+	return check.Result{Violations: vs}
 }
