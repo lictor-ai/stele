@@ -87,69 +87,6 @@ func TestCompileFindsRootFromSubdir(t *testing.T) {
 	}
 }
 
-func TestCheck(t *testing.T) {
-	tests := []struct {
-		name     string
-		steleMD  string
-		compile  bool   // run stele compile first
-		after    string // stele.md content written after compiling
-		lock     string // stele.lock content written instead of compiling
-		wantCode int
-		wantOut  string
-		wantErr  string
-	}{
-		{name: "valid", steleMD: rules, compile: true, wantCode: exitOK, wantOut: "2 rules valid"},
-		{name: "never compiled", steleMD: rules, wantCode: exitFailed, wantErr: "stele.lock is out of date with the rules: run stele compile"},
-		{name: "rules changed since compile", steleMD: rules, compile: true, after: rules + "\n---\n\nA third rule.\n", wantCode: exitFailed, wantErr: "out of date"},
-		{name: "parse error", steleMD: "tags: [a]\n", wantCode: exitFailed, wantErr: "stele.md:1: rule has no body"},
-		{
-			name:    "duplicate id",
-			steleMD: rules,
-			lock: `{"version": 1, "project": "p", "rules": [
-				{"id": "a", "source": "stelemd", "hash": "h1", "position": 0},
-				{"id": "a", "source": "stelemd", "hash": "h2", "position": 1}]}`,
-			wantCode: exitFailed,
-			wantErr:  "duplicate rule id a",
-		},
-		{name: "invalid lock", steleMD: rules, lock: "{", wantCode: exitFailed, wantErr: "stele.lock: invalid"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root := project(t, tt.steleMD)
-			if tt.compile {
-				if code, _, errOut := runCmd("compile"); code != exitOK {
-					t.Fatalf("compile = %d, stderr %q", code, errOut)
-				}
-			}
-			if tt.after != "" {
-				if err := os.WriteFile(filepath.Join(root, "stele.md"), []byte(tt.after), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if tt.lock != "" {
-				if err := os.WriteFile(filepath.Join(root, "stele.lock"), []byte(tt.lock), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			before := snapshot(t, root)
-
-			code, out, errOut := runCmd("check")
-			if code != tt.wantCode {
-				t.Errorf("check = %d, want %d (stderr %q)", code, tt.wantCode, errOut)
-			}
-			if !contains(out, tt.wantOut) {
-				t.Errorf("stdout = %q, want it to contain %q", out, tt.wantOut)
-			}
-			if tt.wantErr != "" && !strings.Contains(errOut, tt.wantErr) {
-				t.Errorf("stderr = %q, want it to contain %q", errOut, tt.wantErr)
-			}
-			if after := snapshot(t, root); after != before {
-				t.Errorf("check wrote files:\nbefore %s\nafter  %s", before, after)
-			}
-		})
-	}
-}
-
 func TestCompileRejectsArguments(t *testing.T) {
 	project(t, rules)
 	code, _, errOut := runCmd("compile", "extra")

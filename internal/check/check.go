@@ -113,7 +113,7 @@ func Run(ctx context.Context, root string, idx index.Index, files []string, cs m
 	for _, g := range p.groups {
 		var mine []string
 		for _, f := range files {
-			if !ownFile(f) && g.applies(f) {
+			if !Own(f) && g.applies(f) {
 				mine = append(mine, f)
 			}
 		}
@@ -142,7 +142,7 @@ func Run(ctx context.Context, root string, idx index.Index, files []string, cs m
 // after a write (#29). Only ContentCheckers run; others are skipped.
 func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker) Report {
 	p := prepare(idx, cs)
-	if ownFile(file) {
+	if Own(file) {
 		return p.report
 	}
 	for _, g := range p.groups {
@@ -298,7 +298,8 @@ func known(cs map[string]Checker) string {
 // pattern quoted in stele.md would otherwise flag stele.md itself.
 var ownFiles = []string{"/stele.md", "/stele.json", "/stele.lock", "/" + index.Dir + "/"}
 
-func ownFile(file string) bool {
+// Own reports whether file, relative to the root, is one of stele's own.
+func Own(file string) bool {
 	for _, p := range ownFiles {
 		if scope.Match(p, file) {
 			return true

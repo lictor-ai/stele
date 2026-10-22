@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -49,33 +48,6 @@ func loadKey() (sign.Key, error) {
 		return nil, err
 	}
 	return sign.LoadKey(dir)
-}
-
-// runCheck validates the rules and writes nothing. It fails on a rule file
-// that does not parse, an invalid stele.lock, and a lock that is out of date
-// with the rules (spec §8). Running checkers on code comes with #15.
-func runCheck(args []string, stdout, stderr io.Writer) int {
-	root, ok := setup("check", args, stderr)
-	if !ok {
-		return exitCantRun
-	}
-	r, err := compile.Plan(context.Background(), root, sources(), uuid.NewString)
-	if err != nil {
-		fmt.Fprintf(stderr, "stele check: %v\n", err)
-		var pe *source.ParseError
-		if errors.As(err, &pe) || errors.Is(err, lock.ErrDuplicateID) || errors.Is(err, lock.ErrInvalid) {
-			return exitFailed
-		}
-		return exitCantRun
-	}
-	// CI would otherwise report against ids that exist on nobody's machine.
-	if r.LockChanged {
-		fmt.Fprintf(stderr, "stele check: %s is out of date with the rules: run stele compile and commit %s\n",
-			lock.FileName, lock.FileName)
-		return exitFailed
-	}
-	fmt.Fprintf(stdout, "%s valid\n", plural(len(r.Index.Rules), "rule"))
-	return exitOK
 }
 
 // setup parses a command's flags and finds the project root.
