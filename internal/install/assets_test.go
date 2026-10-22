@@ -1,6 +1,7 @@
 package install
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -48,6 +49,25 @@ func TestViolationMessage(t *testing.T) {
 	}
 	if strings.Contains(got, "credentials in code.\": Never") {
 		t.Errorf("a message equal to the excerpt is printed twice:\n%s", got)
+	}
+
+	// A long rule message is cut, and the whole message stays under what
+	// Claude Code passes on in full, cutting whole lines.
+	long := strings.Repeat("m", 480)
+	var many []Violation
+	for i := range 30 {
+		many = append(many, Violation{Line: i + 1, Column: 1, RuleID: "7f3a2b1c-0000-4000-8000-000000003b21", Excerpt: strings.Repeat("e", 60), Message: long})
+	}
+	big := ViolationMessage("internal/some/long/path/file.go", many, 2, true)
+	if len(big) > MaxMessage {
+		t.Errorf("message is %d bytes, want at most %d", len(big), MaxMessage)
+	}
+	if strings.Contains(big, strings.Repeat("m", 201)) || !strings.Contains(big, strings.Repeat("m", 200)+"…") {
+		t.Error("a rule message is not cut at 200 characters")
+	}
+	shown := strings.Count(big, "\ninternal/some/long/path/file.go:")
+	if shown == 30 || !strings.Contains(big, fmt.Sprintf("and %d more", 30-shown+2)) {
+		t.Errorf("%d of 30 shown, want some cut and counted:\n%s", shown, big[len(big)-200:])
 	}
 
 	soft := ViolationMessage("a.go", vs[1:], 0, false)

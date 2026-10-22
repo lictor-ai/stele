@@ -245,22 +245,29 @@ func afterWrite(ev claudecode.Event) claudecode.Answer {
 	// Violations past the cap per rule cannot be told blocking or not; they
 	// are counted with the first message shown.
 	more := r.Truncated
-	message := func(vs []install.Violation, blocking bool) string {
+	message := func(vs []install.Violation, blocking bool, limit int) string {
 		if len(vs) == 0 {
 			return ""
 		}
 		n := more + max(0, len(vs)-maxShown)
 		more = 0
-		return install.ViolationMessage(rel, vs[:min(len(vs), maxShown)], n, blocking)
+		return install.ViolationMessageWithin(rel, vs[:min(len(vs), maxShown)], n, blocking, limit)
 	}
+	// The context holds the notes, the non-blocking violations and, with
+	// backstop off, the blocking ones too: they share one budget.
 	var a claudecode.Answer
-	hardMsg := message(hard, true)
-	softMsg := message(soft, false)
-	if hardMsg != "" && policy.Backstop {
-		a.Deny, a.Reason = true, hardMsg
-		hardMsg = ""
+	budget := install.MaxMessage - len(joinNotes(notes...))
+	if len(hard) > 0 && policy.Backstop {
+		a.Deny, a.Reason = true, message(hard, true, install.MaxMessage)
+		hard = nil
 	}
 	// With backstop off the hook never blocks (ADR-0004): the agent is told.
+	hardBudget := budget
+	if len(soft) > 0 {
+		hardBudget = budget / 2
+	}
+	hardMsg := message(hard, true, hardBudget)
+	softMsg := message(soft, false, budget-len(hardMsg)-4)
 	a.Context = joinNotes(append([]string{hardMsg, softMsg}, notes...)...)
 	return a
 }

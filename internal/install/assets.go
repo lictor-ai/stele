@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"strings"
 	"text/template"
+	"unicode/utf8"
 )
 
 // blockMessage is what the agent reads when the hook pauses a write to show
@@ -51,10 +52,41 @@ type Violation struct {
 	RuleID, Excerpt, Message string
 }
 
+// MaxMessage bounds a violation message, in bytes. Claude Code passes a hook
+// text on in full only up to 10,000 characters; past that Claude sees a
+// preview.
+const MaxMessage = 9000
+
+// maxRuleMessage bounds one rule's message, in characters.
+const maxRuleMessage = 200
+
 // ViolationMessage renders the message for violations found in a write to
 // path. more counts those left out. blocking picks the wording: fix these
-// now, or fix them if they are part of the change.
+// now, or fix them if they are part of the change. A rule's message is cut
+// to maxRuleMessage characters, and violations are left out, counted in
+// more, until the whole fits in MaxMessage.
 func ViolationMessage(path string, vs []Violation, more int, blocking bool) string {
+	return ViolationMessageWithin(path, vs, more, blocking, MaxMessage)
+}
+
+// ViolationMessageWithin is ViolationMessage fitting in limit bytes, for a
+// message that shares its text with others. With no violation left it may
+// still be longer.
+func ViolationMessageWithin(path string, vs []Violation, more int, blocking bool, limit int) string {
+	cut := make([]Violation, len(vs))
+	for i, v := range vs {
+		v.Message = truncate(v.Message, maxRuleMessage)
+		cut[i] = v
+	}
+	for n := len(cut); ; n-- {
+		s := renderViolations(path, cut[:n], more+len(cut)-n, blocking)
+		if len(s) <= limit || n == 0 {
+			return s
+		}
+	}
+}
+
+func renderViolations(path string, vs []Violation, more int, blocking bool) string {
 	var b strings.Builder
 	err := violationTemplate.Execute(&b, struct {
 		Path       string
@@ -66,4 +98,12 @@ func ViolationMessage(path string, vs []Violation, more int, blocking bool) stri
 		panic(err) // the template is compiled in and tested
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// truncate cuts s to n characters, marking the cut with "…".
+func truncate(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n]) + "…"
 }
