@@ -649,7 +649,23 @@ external source is indistinguishable from `stelemd`.
 type Checker interface {
     Name() string
     Validate(rules []Rule) []Problem                         // settings, before any file is read
-    Check(ctx context.Context, root string, rules []Rule, files []string) ([]Violation, error)
+    Check(ctx context.Context, root string, rules []Rule, files []string) (Result, error)
+}
+
+// ContentChecker checks content it is handed, without reading a file. Built-ins
+// only: the post-write hook (#29) runs these and nothing else (D45).
+type ContentChecker interface {
+    Checker
+    CheckContent(rules []Rule, file string, content []byte) Result
+}
+
+type Result struct {        // what a checker found, and the files it did not check
+    Violations []Violation
+    Skipped    []Skip
+}
+
+type Skip struct {
+    File, Reason string     // "binary", "no longer exists", "larger than 32 MiB"...
 }
 
 type Rule struct {          // what a checker sees of index.Entry
@@ -659,14 +675,16 @@ type Rule struct {          // what a checker sees of index.Entry
 }
 
 type Problem struct {
-    RuleID, Message string
+    RuleID  string // empty for a rule file stele cannot use
+    Excerpt string // filled by Run, never by a checker (spec §12)
+    Message string
 }
 
 type Violation struct {
     RuleID       string
     File         string
-    Line, Column int
-    Message      string
+    Line, Column int    // 1-based; Column counts bytes
+    Message      string // empty for the default, the rule's excerpt
 }
 
 type Report struct {
@@ -674,26 +692,68 @@ type Report struct {
     Project    string       `json:"project"` // D51
     Problems   []Problem    // invalid rules: exit 1
     Violations []Finding    // Violation + Blocking + rule excerpt
+    Skipped    []Skip       // reported, never a pass; no effect on the exit code
+    Truncated  int          // violations past 100 for one rule in one file
 }
 
 func Run(ctx context.Context, root string, idx index.Index, files []string, cs map[string]Checker) (Report, error)
+func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker) Report // pure
 func (r Report) ExitCode() int // 0, 1; errors from Run are 2
+func Excerpt(body string) string
+func Own(file string) bool
 ```
 
 `Run` groups rules by their `check` key and calls each checker once, with only
-its own rules and, per rule, only the files that match the rule's `scope`. A rule
-whose `check` names no known checker is a `Problem`, not a skip. Whether a
-violation is blocking is read from the rule's `blocking` key — default `true`
-when `check` is set — never from the checker (spec §8).
+its own rules and only the files that match at least one of their `scope`s; the
+checker applies each rule's scope to each file, and `Run` drops any violation
+outside its rule's scope whatever the checker does. A rule whose `check` names no
+known checker is a `Problem`, not a skip, and so is a `blocking` that is neither
+`true` nor `false`. Whether a violation is blocking is read from the rule's
+`blocking` key — default `true` when `check` is set — never from the checker
+(spec §8). Rules that fail `Validate` are left out of `Check`; the others still
+run, so one `stele check` shows every problem. Findings are sorted by file, line,
+column and rule id, and at most 100 are kept for one rule in one file; the rest
+are counted in `Truncated`.
+
+A file a checker cannot check — binary, too large, not a regular file, gone — is
+a `Skip`, carried into the report and printed: a skip is never a silent pass. It
+does not change the exit code.
+
+`RunFile` is the same pipeline on one file's content, with no IO: the check
+after a write (#29) uses it. It runs only `ContentChecker`s.
+
+stele's own files — `stele.md`, `stele.json`, `stele.lock` and `.stele/` — are
+never checked (`Own`): a pattern quoted in a rule's body would flag `stele.md`.
+
+`Excerpt` is a rule body's first paragraph, whitespace collapsed, cut to 60
+characters. Every human-facing id is printed beside one (spec §12).
 
 `Run` takes an `index.Index`, not rule files: `cmd/` calls `compile.Plan` first
-and hands over the planned index (D40). `Plan`'s `Report` also tells `cmd/`
-whether the lock is out of date, which is a `Problem` too.
+and hands over the planned index (D40). A rule file that does not parse, an
+invalid lock or a lock out of date with the rules stops `stele check` before any
+checker runs: exit 1, on stderr, or in `--format json` as a `Problem` with no
+rule id.
 
-**Choosing files is `cmd/`'s job**, through `git`: `git diff --name-only
---diff-filter=ACMR` against `HEAD` or `<base>...HEAD`, `git ls-files` for
-`--all`, or the paths given. `check` receives a plain list of paths relative to
-the root, so it never runs `git` and its tests need no repository.
+**Choosing files is `cmd/`'s job**, through `git`, run from the root with `-z`:
+
+- by default, `git diff --name-only --relative --diff-filter=ACMRT HEAD` plus
+  untracked files (`git ls-files --others --exclude-standard`); with no commit
+  yet, every tracked and untracked file;
+- `--base <ref>`: `git diff --name-only --relative --diff-filter=ACMRT
+  <ref>...HEAD`, what this branch changed since it left `<ref>`;
+- `--all`: `git ls-files`, every tracked file;
+- or the paths given, which must be files inside the root: no `git` needed.
+
+`--relative` keeps a `stele.md` in a subdirectory of the repository to its own
+files. Names are taken exactly as git gives them. Files in a nested project — a
+directory below the root with a regular file named `stele.md` or `stele.json` —
+are left out: the hook gives them that project's rules (ADR-0004), so its own
+`stele check` does. Each such subproject is reported (`sub/: skipped N files`,
+and in JSON a `Skip` per file), so adding a `stele.json` cannot hide a directory
+from CI unseen. Text output quotes a file name that holds a control character,
+so a name cannot forge a line of the CI log. `check` receives a plain list of
+paths relative to the root, so it never runs `git` and its tests need no
+repository.
 
 #### `internal/check/regex` — the built-in checker
 
@@ -702,10 +762,13 @@ func Match(pattern *regexp.Regexp, content []byte) []Location // pure
 ```
 
 Reads `pattern` from `Meta` and compiles it with Go's `regexp` (RE2). `Validate`
-reports a missing or invalid pattern. `Check` reads each file once, runs every
-rule's pattern over the whole content, and turns each match offset into a line
-and column. An optional `message` key replaces the default message. Binary
-files — a NUL in the first 8 KB — are skipped.
+reports a missing or invalid pattern, and one that matches empty text, which
+would match at every position. The pattern runs over the whole content, so `^`
+and `$` match per line only with `(?m)`. `Check` reads each file once through
+`safefile.ReadRegular`, runs every rule that applies to it, and turns each match
+offset into a line and column; a missing, non-regular or over-32 MiB file is
+skipped and reported as a `Skip`. An optional `message` key replaces the default message. Binary files —
+a NUL in the first 8 KB — are skipped.
 
 ### `internal/status` — `stele status`
 
@@ -1096,7 +1159,7 @@ stele init         install the five artifacts
 stele uninstall    remove exactly what init wrote
 stele compile      every source, then compile.Plan + compile.Apply; prints the reconcile report
 stele check        validate the rules, run checkers on changed files; writes nothing (for CI)
-                     [--base <ref>] [--all] [--format text|json] [--push] [path...]
+                     [--base <ref> | --all] [--format text|json] [path...]
 stele status       describe the install [--format text|json]
 stele push         send new log entries to every listed sink
 stele mcp          run the MCP server on stdio
@@ -1111,7 +1174,9 @@ plugins. `mcp` and `hook` never do (D45).
 
 `check` exits 0 when the rules are valid and nothing blocking was found, 1 for an
 invalid rule or a blocking violation, and 2 when stele or a plugin could not run
-(spec §8). It needs `git` on `PATH` unless explicit paths are given.
+(spec §8). It needs `git` on `PATH` unless explicit paths are given. In v1 it
+runs only the built-in `regex` checker and has no `--push`: plugins and sinks are
+in the team milestone (ADR-0004).
 
 **Dependencies: two.** `github.com/modelcontextprotocol/go-sdk` and
 `github.com/google/uuid`, plus `go-cmp` in tests. Config is JSON rather than TOML
