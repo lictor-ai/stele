@@ -1,0 +1,19 @@
+{
+  "session_id": "abc123",
+  "transcript_path": "/home/user/.claude/projects/proj/abc123.jsonl",
+  "cwd": "/home/user/proj",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/home/user/proj/internal/db.go",
+    "old_string": "x",
+    "new_string": "y",
+    "replace_all": false
+  },
+  "tool_response": {
+    "filePath": "/home/user/proj/internal/db.go"
+  },
+  "tool_use_id": "toolu_01ABC124",
+  "duration_ms": 9
+}

@@ -95,11 +95,15 @@ func TestCompileRejectsArguments(t *testing.T) {
 	}
 }
 
-// snapshot lists every file under root with its content.
+// snapshot lists every file under root with its content, leaving out .git:
+// git refreshes its own index when stele asks it what changed.
 func snapshot(t *testing.T, root string) string {
 	t.Helper()
 	var b strings.Builder
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
 		if err != nil || d.IsDir() {
 			return err
 		}

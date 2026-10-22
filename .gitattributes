@@ -1,0 +1,2 @@
+# Templates are embedded as checked out: keep them LF everywhere.
+*.tmpl text eol=lf

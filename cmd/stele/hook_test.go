@@ -22,6 +22,8 @@ Log through the shared logger.
 
 // hookOutput is Claude Code's view of the hook's stdout.
 type hookOutput struct {
+	Decision           string `json:"decision"`
+	Reason             string `json:"reason"`
 	HookSpecificOutput struct {
 		PermissionDecision       string `json:"permissionDecision"`
 		PermissionDecisionReason string `json:"permissionDecisionReason"`

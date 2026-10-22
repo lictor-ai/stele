@@ -1,0 +1,11 @@
+{{if .Blocking -}}
+stele checked your write to {{.Path}}: it breaks these project rules. The write was saved; fix these lines now, without changing code outside your task.
+{{- else -}}
+stele checked your write to {{.Path}}: these non-blocking rules flag it; fix them if they are part of your change.
+{{- end}}
+{{range .Violations}}
+{{$.Path}}:{{.Line}}:{{.Column}}: rule {{.RuleID}} "{{.Excerpt}}"{{if ne .Message .Excerpt}}: {{.Message}}{{end}}
+{{- end}}
+{{- if .More}}
+and {{.More}} more: run `stele check {{.Path}}` to see them all.
+{{- end}}

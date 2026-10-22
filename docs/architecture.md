@@ -698,7 +698,14 @@ type Report struct {
 
 func Run(ctx context.Context, root string, idx index.Index, files []string, cs map[string]Checker) (Report, error)
 func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker) Report // pure
+func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) Report
 func (r Report) ExitCode() int // 0, 1; errors from Run are 2
+
+type Span struct{ First, Last int }       // lines, 1-based, inclusive
+type Fragment struct{ Text string; ReplaceAll bool }
+func Spans(content []byte, fragments []Fragment) []Span // sorted and merged
+func Merge(spans []Span) []Span
+func Contain(spans []Span, line int) bool // binary search over merged spans
 func Excerpt(body string) string
 func Own(file string) bool
 ```
@@ -719,8 +726,20 @@ A file a checker cannot check — binary, too large, not a regular file, gone �
 a `Skip`, carried into the report and printed: a skip is never a silent pass. It
 does not change the exit code.
 
-`RunFile` is the same pipeline on one file's content, with no IO: the check
-after a write (#29) uses it. It runs only `ContentChecker`s.
+`RunFile` is the same pipeline on one file's content, with no IO. It runs only
+`ContentChecker`s. `RunFileLines` also keeps only the violations that start on
+a line `keep` accepts, and filters before the cap of 100, so a file that already
+breaks a rule many times still shows the agent's own violation: the check after
+a write (#29) uses it. `Spans` is the fallback for an Edit when Claude Code gave
+no usable patch (§4): it finds a `new_string` in the file as written, from the
+line of its first byte to the line of its last, leaving out line ends at either
+end, so `"\nx"` covers only the line of `x`. In a CRLF file an LF `new_string`
+is looked for with CRLF too. Without `replace_all`, a `new_string` found more
+than once covers nothing: which occurrence was written cannot be told, and
+`stele check` still sees the file. With it, the first 1,000 occurrences count.
+One that is empty or no longer in the file covers none. Lines are numbered in
+one pass over the sorted offsets, and the spans are merged once so `Contain` is
+a binary search.
 
 stele's own files — `stele.md`, `stele.json`, `stele.lock` and `.stele/` — are
 never checked (`Own`): a pattern quoted in a rule's body would flag `stele.md`.
@@ -808,10 +827,15 @@ type Event struct {
     Name, SessionID, PromptID, AgentID, ToolName string
     File    string   // absolute path of the file written, or ""
     NewText []string // Write content, Edit new_string, each MultiEdit new_string
+    ReplaceAll []bool // each NewText's replace_all
+    Added   []Lines  // from tool_response.structuredPatch: the lines added
+    Patched bool     // false: no patch that adds up; Added means nothing
 }
 
+type Lines struct{ First, Last int }
+
 type Answer struct {
-    Deny    bool
+    Deny    bool   // PreToolUse: deny; PostToolUse: decision "block", the write stays
     Reason  string // what the agent reads when denied
     Context string // additionalContext: alongside the tool result
     Warning string // systemMessage: to the user
@@ -867,6 +891,40 @@ Verified against the Claude Code documentation rather than assumed.
 `systemMessage` (reaches the user). stele never answers `permissionDecision:
 "allow"`: that would skip the user's own permission prompts.
 
+**After a write** (`PostToolUse`, #29) the input also carries `tool_response`,
+`tool_use_id` and `duration_ms`. Of these stele reads only the
+`structuredPatch` of an Edit or MultiEdit response: hunks `{oldStart, oldLines,
+newStart, newLines, lines}`, each line prefixed `' '`, `'-'` or `'+'`. The
+agent's lines are exactly the `'+'` lines, numbered from `newStart` (`' '` and
+`'+'` advance the count, `'-'` does not). The hooks documentation does not
+describe it, so a patch whose counts do not match its lines, or a response that
+is not an object, is ignored. The tool has already
+run, so nothing can be stopped. To send violations back, the answer is
+top-level:
+
+```json
+{"decision": "block", "reason": "<the violation message>",
+ "hookSpecificOutput": {"hookEventName": "PostToolUse",
+                        "additionalContext": "<non-blocking violations, notes>"}}
+```
+
+`reason` is added next to the tool result for Claude; the write stays. The hook
+reads the file back from disk (bounded, never through a symlink) rather than
+taking it from `tool_input`: an Edit carries only its new text, and the file on
+disk is what `stele check` will see. For a Write every line counts; for an Edit
+or MultiEdit only the lines the patch adds, or, with no usable patch, the lines
+its `new_string`s cover (`check.Spans`). Blocking violations go in `reason`,
+non-blocking ones in `additionalContext`, at most 20 per message. With
+`backstop` off the hook never blocks (ADR-0004), so blocking violations go in
+`additionalContext` too. Claude Code passes on a text of up to 10,000
+characters in full, so a rule's message is cut to 200 characters and each of
+`reason` and `additionalContext` is kept under 9,000 bytes, leaving out whole
+lines and counting them in "and N more". Failures follow the same policy as
+before a write; with `block_on_error` the agent is told the write went
+unchecked. Invalid rules are left to `stele check`. `PostToolUse` fires
+concurrently for parallel tool calls, so the post-write path keeps no session
+state.
+
 **Configuration** written by `init` (#12): the same command on `PreToolUse` and,
 for the post-write check (#29), on `PostToolUse`:
 
@@ -889,7 +947,8 @@ widens "turn" to the session.
 
 **Exit 127 does not block.** The spec claimed that a missing binary lets the write
 through and that this is not ours to control. Confirmed: non-zero exit codes other
-than 2 are non-blocking for `PreToolUse`. The strict-mode caveat in spec §5 is
+than 2 are non-blocking for `PreToolUse`. For `PostToolUse`, exit 2 only shows
+stderr to Claude. The strict-mode caveat in spec §5 is
 accurate as written.
 
 **`agent_id` identifies subagents.** v1 has no matcher subagent to stand aside
@@ -1104,6 +1163,7 @@ Embedded with `go:embed`:
 internal/install/assets/
   matcher-agent.md   → .claude/agents/stele-matcher.md
   block-message.txt  → the permissionDecisionReason text
+  violation-message.tmpl → the reason after a write that breaks a rule (#29)
   stele-header.md    → the header comment in a new stele.md
   gitignore          → .stele/.gitignore, containing "*"
 ```
