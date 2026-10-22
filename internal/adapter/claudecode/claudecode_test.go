@@ -41,6 +41,24 @@ func TestParse(t *testing.T) {
 			want: Event{Name: "PreToolUse", ToolName: "MultiEdit", File: abs, NewText: []string{"a", "b"}},
 		},
 		{
+			name: "post-write, with the tool's response",
+			payload: map[string]any{
+				"hook_event_name": "PostToolUse", "session_id": "s1", "transcript_path": "/t.jsonl", "cwd": cwd,
+				"permission_mode": "default", "tool_name": "Write", "tool_use_id": "toolu_1", "duration_ms": 12,
+				"tool_input":    map[string]any{"file_path": abs, "content": "package db"},
+				"tool_response": map[string]any{"filePath": abs, "type": "create"},
+			},
+			want: Event{Name: "PostToolUse", SessionID: "s1", ToolName: "Write", File: abs, NewText: []string{"package db"}},
+		},
+		{
+			name: "edit that deletes text",
+			payload: map[string]any{
+				"hook_event_name": "PostToolUse", "tool_name": "Edit",
+				"tool_input": map[string]any{"file_path": abs, "old_string": "x", "new_string": ""},
+			},
+			want: Event{Name: "PostToolUse", ToolName: "Edit", File: abs},
+		},
+		{
 			name: "a tool with no file",
 			payload: map[string]any{
 				"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": map[string]any{"command": "ls"},
@@ -100,6 +118,49 @@ func TestRender(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := string(Render("PreToolUse", tt.a))
+			if tt.want != "" {
+				tt.want += "\n"
+			}
+			if got != tt.want {
+				t.Errorf("Render =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+// After a write, a block cannot stop the tool: it sends the reason back to
+// Claude as a top-level decision.
+func TestRenderPostToolUse(t *testing.T) {
+	tests := []struct {
+		name string
+		a    Answer
+		want string
+	}{
+		{name: "nothing to say", a: Answer{}, want: ""},
+		{
+			name: "block",
+			a:    Answer{Deny: true, Reason: "fix line 3"},
+			want: `{"decision":"block","reason":"fix line 3"}`,
+		},
+		{
+			name: "block with context",
+			a:    Answer{Deny: true, Reason: "fix line 3", Context: "also a warning"},
+			want: `{"decision":"block","reason":"fix line 3","hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"also a warning"}}`,
+		},
+		{
+			name: "context only",
+			a:    Answer{Context: "a warning"},
+			want: `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"a warning"}}`,
+		},
+		{
+			name: "warning to the user",
+			a:    Answer{Warning: "stele could not run"},
+			want: `{"systemMessage":"stele could not run"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(Render("PostToolUse", tt.a))
 			if tt.want != "" {
 				tt.want += "\n"
 			}

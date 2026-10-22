@@ -8,6 +8,9 @@
 //     call, and Claude reads permissionDecisionReason. stele denies only to
 //     show rules, and otherwise leaves permissionDecision unset: "allow"
 //     would skip the user's own permission prompts.
+//   - A PostToolUse hook runs after the tool. A top-level decision "block"
+//     cannot undo it: it adds reason next to the tool result, for Claude.
+//     PostToolUse fires concurrently when Claude makes parallel tool calls.
 //   - additionalContext reaches Claude alongside the tool result; systemMessage
 //     reaches the user.
 //   - Exit code 0 with JSON on stdout is the only path stele uses. Exit 2
@@ -90,7 +93,9 @@ func Parse(stdin []byte) (Event, error) {
 
 // Answer is what stele tells Claude Code.
 type Answer struct {
-	// Deny stops a PreToolUse call; Reason is what Claude reads.
+	// Deny stops a PreToolUse call. After a PostToolUse it sends Reason back
+	// as decision "block": the write is not undone. Reason is what Claude
+	// reads.
 	Deny   bool
 	Reason string
 	// Context is added to Claude's context alongside the tool result.
@@ -109,19 +114,25 @@ func Render(event string, a Answer) []byte {
 		AdditionalContext        string `json:"additionalContext,omitempty"`
 	}
 	var out struct {
+		Decision           string    `json:"decision,omitempty"`
+		Reason             string    `json:"reason,omitempty"`
 		HookSpecificOutput *specific `json:"hookSpecificOutput,omitempty"`
 		SystemMessage      string    `json:"systemMessage,omitempty"`
 	}
-	if a.Deny || a.Context != "" {
+	post := event == "PostToolUse"
+	if a.Deny && post {
+		out.Decision, out.Reason = "block", a.Reason
+	}
+	if (a.Deny && !post) || a.Context != "" {
 		s := &specific{HookEventName: event, AdditionalContext: a.Context}
-		if a.Deny {
+		if a.Deny && !post {
 			s.PermissionDecision = "deny"
 			s.PermissionDecisionReason = a.Reason
 		}
 		out.HookSpecificOutput = s
 	}
 	out.SystemMessage = a.Warning
-	if out.HookSpecificOutput == nil && out.SystemMessage == "" {
+	if out.Decision == "" && out.HookSpecificOutput == nil && out.SystemMessage == "" {
 		return nil
 	}
 	data, err := json.Marshal(out)
