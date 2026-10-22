@@ -158,9 +158,18 @@ func Run(ctx context.Context, root string, idx index.Index, files []string, cs m
 	return p.report, nil
 }
 
-// RunFile checks one file's content without reading anything: the check
-// after a write (#29). Only ContentCheckers run; others are skipped.
+// RunFile checks one file's content without reading anything. Only
+// ContentCheckers run; others are skipped.
 func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker) Report {
+	return RunFileLines(idx, file, content, cs, nil)
+}
+
+// RunFileLines is RunFile keeping only the violations that start on a line
+// keep accepts: the check after a write (#29), where only the agent's lines
+// count. The filter runs before the cap per rule and file, so a file that
+// already breaks a rule many times still shows the agent's own violation. A
+// nil keep keeps all.
+func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) Report {
 	p := prepare(idx, cs)
 	if Own(file) {
 		return p.report
@@ -173,6 +182,9 @@ func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker
 		res := cc.CheckContent(g.rules, file, content)
 		p.report.Skipped = append(p.report.Skipped, res.Skipped...)
 		for _, v := range res.Violations {
+			if keep != nil && !keep(v.Line) {
+				continue
+			}
 			if f, _ := g.finding(v); f != nil {
 				p.report.Violations = append(p.report.Violations, *f)
 			}
