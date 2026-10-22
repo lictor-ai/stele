@@ -27,3 +27,31 @@ func TestBlockMessage(t *testing.T) {
 		t.Errorf("note missing:\n%s", note)
 	}
 }
+
+func TestViolationMessage(t *testing.T) {
+	vs := []Violation{
+		{Line: 3, Column: 7, RuleID: "r1", Excerpt: "Never put credentials in code.", Message: "Never put credentials in code."},
+		{Line: 9, Column: 1, RuleID: "r2", Excerpt: "No TODO comments.", Message: "track it in an issue"},
+	}
+	got := ViolationMessage("internal/db.go", vs, 4, true)
+	for _, want := range []string{
+		"internal/db.go:3:7: rule r1 \"Never put credentials in code.\"\n",
+		"internal/db.go:9:1: rule r2 \"No TODO comments.\": track it in an issue",
+		"and 4 more",
+		"stele check internal/db.go",
+		"fix",
+		"was saved",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("blocking message lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "credentials in code.\": Never") {
+		t.Errorf("a message equal to the excerpt is printed twice:\n%s", got)
+	}
+
+	soft := ViolationMessage("a.go", vs[1:], 0, false)
+	if !strings.Contains(soft, "non-blocking") || strings.Contains(soft, "more") {
+		t.Errorf("non-blocking message:\n%s", soft)
+	}
+}

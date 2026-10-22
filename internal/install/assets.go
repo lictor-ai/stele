@@ -35,3 +35,35 @@ func BlockMessage(path string, rules []BlockRule, note string) string {
 	}
 	return strings.TrimSpace(b.String())
 }
+
+// violationMessage is what the agent reads when a write it just made breaks
+// a rule stele can check. It is the other text that decides whether stele
+// works: tune it there.
+//
+//go:embed assets/violation-message.tmpl
+var violationMessage string
+
+var violationTemplate = template.Must(template.New("violation-message").Parse(violationMessage))
+
+// Violation is one place in a violation message.
+type Violation struct {
+	Line, Column             int
+	RuleID, Excerpt, Message string
+}
+
+// ViolationMessage renders the message for violations found in a write to
+// path. more counts those left out. blocking picks the wording: fix these
+// now, or fix them if they are part of the change.
+func ViolationMessage(path string, vs []Violation, more int, blocking bool) string {
+	var b strings.Builder
+	err := violationTemplate.Execute(&b, struct {
+		Path       string
+		Violations []Violation
+		More       int
+		Blocking   bool
+	}{path, vs, more, blocking})
+	if err != nil {
+		panic(err) // the template is compiled in and tested
+	}
+	return strings.TrimSpace(b.String())
+}
