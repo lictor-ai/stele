@@ -52,7 +52,7 @@ const maxShown = 20
 // It always exits 0, and prints nothing when it has nothing to say: exit 2
 // would block the write whatever the JSON says, and a hook that cannot make
 // sense of its input must never stop the agent.
-func runHook(_ []string, stdout, _ io.Writer) int {
+func runHook(args []string, stdout, _ io.Writer) int {
 	data, err := io.ReadAll(io.LimitReader(stdin, maxPayload))
 	if err != nil {
 		return exitOK
@@ -65,6 +65,7 @@ func runHook(_ []string, stdout, _ io.Writer) int {
 	switch {
 	case ev.Name == "PreToolUse":
 		a = beforeWrite(ev)
+		a.Warning = joinLines(a.Warning, versionWarning(ev, claudecode.InstalledVersion(args)))
 	case ev.Name == "PostToolUse" && writes[ev.ToolName]:
 		a = afterWrite(ev)
 	default:
@@ -287,6 +288,45 @@ func written(ev claudecode.Event, content []byte) []check.Span {
 		fs[i] = check.Fragment{Text: t, ReplaceAll: i < len(ev.ReplaceAll) && ev.ReplaceAll[i]}
 	}
 	return check.Spans(content, fs)
+}
+
+// versionWarning tells the user, once a session, that the hooks were
+// installed by another stele than the one running (spec §6). Every write
+// passes through PreToolUse, so the post-write path does not repeat it. A
+// matching version costs a string compare; only a mismatch reads anything.
+func versionWarning(ev claudecode.Event, installed string) string {
+	running := binaryVersion()
+	if installed == "" || installed == running || running == "devel" {
+		return ""
+	}
+	root, _, ok := target(ev)
+	if !ok {
+		return ""
+	}
+	msg := fmt.Sprintf("stele: the hooks in %s were installed by stele %s; this is stele %s. Run stele init to update them.",
+		filepath.ToSlash(claudecode.SettingsFile), installed, running)
+	key, err := loadKey()
+	if err != nil {
+		return msg
+	}
+	mark, warn := installed+" "+running, true
+	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
+		warn = st.VersionWarned != mark
+		st.VersionWarned = mark
+		return nil
+	})
+	if err != nil || warn {
+		return msg // a warning too many beats none
+	}
+	return ""
+}
+
+// joinLines joins the non-empty lines.
+func joinLines(a, b string) string {
+	if a == "" || b == "" {
+		return a + b
+	}
+	return a + "\n" + b
 }
 
 // unchecked is the note for a file the post-write check could not read.
