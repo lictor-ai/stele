@@ -32,7 +32,7 @@ func TestBlockMessage(t *testing.T) {
 // The templates are embedded as checked out; .gitattributes keeps them LF on
 // every platform, so the agent never reads a stray \r.
 func TestAssetsHaveLFLineEnds(t *testing.T) {
-	for name, s := range map[string]string{"block-message": blockMessage, "violation-message": violationMessage} {
+	for name, s := range map[string]string{"block-message": blockMessage, "violation-message": violationMessage, "stele-header.md": steleHeader} {
 		if strings.Contains(s, "\r") {
 			t.Errorf("%s.tmpl has CR line ends", name)
 		}

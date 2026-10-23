@@ -845,17 +845,68 @@ func Parse(stdin []byte) (Event, error)
 func Render(event string, a Answer) []byte // nil when there is nothing to say
 ```
 
-It owns everything in §4: the payload fields, the `hookSpecificOutput` shape and,
-with `init` (#12), the `.claude/settings.json` hook entries. `backstop.Decide`
+It owns everything in §4: the payload fields, the `hookSpecificOutput` shape and
+the `.claude/settings.json` hook entries `init` writes (#12):
+
+```go
+var SettingsFile = ".claude/settings.json"
+func Install(settings []byte, version string) (out []byte, changed bool, notes []string, err error)
+func Uninstall(settings []byte) (out []byte, removed int, empty bool, err error)
+func Installed(settings []byte) (version string, ok bool) // for stele status
+func InstalledVersion(args []string) string               // stele hook's own --installed=
+func OtherSteleHook(settings []byte, version string) bool // one init would not write
+```
+
+Both work on bytes. Every key and every value stele does not edit is written
+back exactly as it was (key order, number literals, escapes), the layout is two spaces as Claude
+Code writes it, and a byte order mark and CRLF line ends are kept. A run that
+changes nothing returns the file byte for byte. Malformed settings (invalid JSON,
+comments, a duplicate key, `hooks` or an event of the wrong type) are an error,
+never rewritten. `backstop.Decide`
 stays agent-neutral. `Parse` drops a UTF-8 byte order mark first: PowerShell adds
 one when it pipes text, and a Windows wrapper script must not disarm stele.
 
 ### `internal/install`
 
-Writes five marked artifacts and removes exactly those (D28). Three of them come
-from the adapter's `Artifacts`. Every artifact carries `stele:v<version>` in a
-comment or a JSON field so `uninstall` can identify its own work and leave hand
-edits alone.
+```go
+func Init(root, version string) (changes, notes []string, err error)
+func Uninstall(root string) (changes, notes []string, err error)
+func Header(version string) []byte // the comment a new stele.md starts with
+```
+
+In v1 `init` writes three things (ADR-0004), and `uninstall` removes exactly
+those (D28):
+
+1. The two hook entries in `.claude/settings.json`, through the adapter. Each is
+   marked and stamped by its own command, `stele hook --installed=<version>`:
+   settings files are JSON, with no comments, and Claude Code validates them
+   against a schema, so an extra key could break the user's file. The stamp
+   survives a fresh clone, and the hook reads it from its own arguments for
+   free. Only a command that is exactly `stele hook --installed=<version>` is
+   stele's; the first word may be a quoted path to the binary. Anything else
+   that runs `stele hook`, a stamp with more after it included, was written by
+   hand: `init` and `uninstall` leave it, and `init` says it will run twice, as
+   it does for a different stele hook in `settings.local.json` (Claude Code
+   runs identical handlers once). The file is rewritten with its own mode
+   (`safefile.ReplacePerm`: it can hold secrets) and, with `.claude/`, refused
+   if it is a link: stele does not write through a link, and shows the hooks
+   to add by hand. `uninstall` deletes it, and `.claude/`, only when nothing
+   else is left.
+2. `stele.md`, only when there is none, with `safefile.Create`, so an existing
+   file is never opened for writing (D38). Its header comment names the version
+   that created it. `uninstall` leaves it: it is the user's from then on.
+3. `.stele/` and its `.gitignore`, through `index.EnsureDir`. The whole directory
+   is stele's, so it carries no marker; `uninstall` removes it, and a `.stele`
+   that is a link or a junction loses only the link. A plain file named
+   `.stele` is the user's: `init` refuses, `uninstall` leaves it.
+
+`init` checks everything (`.claude/` and `.stele/` missing or real
+directories, the settings file readable) before its first write, then writes
+`.stele/`, `stele.md` and the settings last, so the hooks never run without the
+rest.
+
+`stele.lock` and `stele.json` stay: they are committed and the user's. The
+signing key is per machine, not per repository, and stays too.
 
 ---
 
@@ -929,14 +980,20 @@ state.
 for the post-write check (#29), on `PostToolUse`:
 
 ```json
-{"hooks": {"PreToolUse": [{
-  "matcher": "Write|Edit|MultiEdit",
-  "hooks": [{"type": "command",
-             "command": "stele", "args": ["hook"],
-             "timeout": 10}]}]}}
+{"hooks": {
+  "PreToolUse": [{
+    "matcher": "Write|Edit|MultiEdit",
+    "hooks": [{"type": "command",
+               "command": "stele hook --installed=v0.3.0",
+               "timeout": 10}]}],
+  "PostToolUse": [ the same group ]}}
 ```
 
-`args` gives exec form with no shell between Claude Code and the binary.
+The matcher is an exact list of tools. The default timeout is 600 seconds, so
+the explicit 10 matters. `--installed=` marks the entry as `init`'s and stamps
+the version that wrote it: when it differs from the running binary, the hook
+warns the user once a session (in `systemMessage`, recorded in the session
+state) to run `stele init` again. A `devel` build never warns.
 
 Four things the documentation settles that the spec had to guess at:
 
@@ -1164,9 +1221,12 @@ internal/install/assets/
   matcher-agent.md   → .claude/agents/stele-matcher.md
   block-message.txt  → the permissionDecisionReason text
   violation-message.tmpl → the reason after a write that breaks a rule (#29)
-  stele-header.md    → the header comment in a new stele.md
-  gitignore          → .stele/.gitignore, containing "*"
+  stele-header.md.tmpl   → the header comment in a new stele.md (#12)
 ```
+
+`.stele/.gitignore` is one line, `*`, written by `index.EnsureDir`, which both
+`init` and the first compile call: a literal there keeps `index` from importing
+`install`.
 
 **They live under `internal/install/`, not at the module root.** `go:embed`
 patterns resolve relative to the package directory and may not contain `..`, so a
@@ -1215,7 +1275,7 @@ or errors and call `t.Helper()`; they do not fail tests themselves. Comparisons 
 ## 11. Command surface
 
 ```
-stele init         install the five artifacts
+stele init         set stele up here: Claude Code hooks, stele.md, .stele/
 stele uninstall    remove exactly what init wrote
 stele compile      every source, then compile.Plan + compile.Apply; prints the reconcile report
 stele check        validate the rules, run checkers on changed files; writes nothing (for CI)
@@ -1223,8 +1283,17 @@ stele check        validate the rules, run checkers on changed files; writes not
 stele status       describe the install [--format text|json]
 stele push         send new log entries to every listed sink
 stele mcp          run the MCP server on stdio
-stele hook         read a PreToolUse payload on stdin, decide
+stele hook         read a Claude Code hook payload on stdin, decide
+                     [--installed=<version>]
 ```
+
+`init` and `uninstall` work in the current directory, never an ancestor: Claude
+Code reads `.claude/settings.json` from the directory it starts in. They print
+that directory first, and a note when an ancestor holds `.git`, `stele.md` or
+`stele.json`. `init` then prints one line per thing it wrote; run again, it
+writes nothing unless the hooks carry another version. Both `init` and `uninstall` exit 0, or 2 when
+they could not run. The version is set at release with `-ldflags "-X
+main.version=..."`, else read from the build info, else `devel`.
 
 Standard-library `flag` and a switch on `os.Args[1]`. Eight subcommands with a
 handful of flags does not justify a CLI framework.

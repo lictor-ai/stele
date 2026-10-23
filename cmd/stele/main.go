@@ -21,14 +21,14 @@ type command struct {
 }
 
 var commands = map[string]command{
-	"init":      {"install the five artifacts", notImplemented("init")},
-	"uninstall": {"remove exactly what init wrote", notImplemented("uninstall")},
+	"init":      {"set stele up here: Claude Code hooks, stele.md, .stele/", runInit},
+	"uninstall": {"remove exactly what init wrote", runUninstall},
 	"compile":   {"compile every source into the index", runCompile},
 	"check":     {"validate the rules and run checkers on changed files", runCheck},
 	"status":    {"describe the install", notImplemented("status")},
 	"push":      {"send new log entries to every listed sink", notImplemented("push")},
 	"mcp":       {"run the MCP server on stdio", notImplemented("mcp")},
-	"hook":      {"read a PreToolUse payload on stdin, decide", runHook},
+	"hook":      {"read a Claude Code hook payload on stdin, decide", runHook},
 }
 
 func main() {

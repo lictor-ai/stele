@@ -20,6 +20,13 @@ import (
 // Replace writes data to path. The file ends up 0644 whatever the umask did
 // to the temp file, because stele's files are read by other users and CI.
 func Replace(path string, data []byte) error {
+	return ReplacePerm(path, data, 0o644)
+}
+
+// ReplacePerm is Replace leaving the file with mode perm, for a file stele
+// rewrites but does not own, such as Claude Code's settings, which may hold
+// secrets.
+func ReplacePerm(path string, data []byte, perm os.FileMode) error {
 	// Anything but a plain file where the file belongs (a directory, a
 	// symlink, a junction) is never stele's: .stele/ is not covered by the
 	// repository's .gitignore, so a clone can commit one. Move it aside so
@@ -34,7 +41,7 @@ func Replace(path string, data []byte) error {
 	}
 	defer os.Remove(tmp.Name()) // fails harmlessly once renamed
 	// CreateTemp makes the file 0600, and the rename would carry that over.
-	if err := tmp.Chmod(0o644); err != nil {
+	if err := tmp.Chmod(perm); err != nil {
 		tmp.Close()
 		return err
 	}

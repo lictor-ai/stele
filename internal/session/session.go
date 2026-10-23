@@ -67,8 +67,11 @@ type State struct {
 	// Shown records the rules shown to each agent this turn: agent id ("" for
 	// the main agent) to rule id to when it was shown. A subagent has its own
 	// context, so it has its own entry (ADR-0004).
-	Shown     map[string]map[string]time.Time `json:"shown,omitempty"`
-	UpdatedAt time.Time                       `json:"updated_at"`
+	Shown map[string]map[string]time.Time `json:"shown,omitempty"`
+	// VersionWarned is the version mismatch the user was last warned of,
+	// so the warning comes once a session.
+	VersionWarned string    `json:"version_warned,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // errUnreadable is a state file that exists but holds no usable state: not

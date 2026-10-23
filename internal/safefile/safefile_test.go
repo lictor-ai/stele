@@ -54,6 +54,17 @@ func TestReplaceMode(t *testing.T) {
 	if got := info.Mode().Perm(); got != 0o644 {
 		t.Errorf("mode = %v, want 0644", got)
 	}
+
+	// A file that may hold secrets keeps its own mode.
+	if err := ReplacePerm(path, []byte("y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if info, err = os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode = %v, want 0600", got)
+	}
 }
 
 func TestReplaceMissingDir(t *testing.T) {
