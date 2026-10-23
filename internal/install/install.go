@@ -38,12 +38,28 @@ const maxSettings = 1 << 20
 
 // Init sets stele up under root (spec §6, ADR-0004): the Claude Code hooks
 // before and after a write, stamped with version, .stele/ and, only when
-// there is none, stele.md. It checks the settings file before writing
-// anything, so a file it cannot read leaves the repository untouched. changes
-// say what it wrote; notes what the user should know.
+// there is none, stele.md. Every check comes before the first write, so a
+// refusal leaves the repository untouched. changes say what it wrote; notes
+// what the user should know.
 func Init(root, version string) (changes, notes []string, err error) {
 	settings := filepath.Join(root, claudecode.SettingsFile)
-	data, mode, err := readSettings(settings, version)
+	claudeDir := filepath.Dir(settings)
+	steleDir := filepath.Join(root, index.Dir)
+	steleMD := filepath.Join(root, "stele.md")
+
+	// Check.
+	hooks, _, _, _ := claudecode.Install(nil, version)
+	byHand := fmt.Sprintf("; add these hooks to %s by hand:\n%s", claudecode.SettingsFile, hooks)
+	if err := plainDir(claudeDir); err != nil {
+		return nil, nil, fmt.Errorf("%w: stele will not write through it%s", err, byHand)
+	}
+	if err := plainDir(steleDir); err != nil {
+		return nil, nil, fmt.Errorf("%w: stele keeps its files there; move it away and run stele init again", err)
+	}
+	data, mode, err := readSettings(settings)
+	if errors.Is(err, safefile.ErrNotRegular) {
+		return nil, nil, fmt.Errorf("%s is not a plain file (a symlink?): stele will not replace it%s", claudecode.SettingsFile, byHand)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -51,41 +67,44 @@ func Init(root, version string) (changes, notes []string, err error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: %w; fix it and run stele init again", claudecode.SettingsFile, err)
 	}
+	createMD := !exists(steleMD)
+	hadGitignore := exists(filepath.Join(steleDir, ".gitignore"))
 
+	// Write: the settings last, so the hooks never run without the rest.
+	if err := index.EnsureDir(root); err != nil {
+		return changes, notes, err
+	}
+	if !hadGitignore {
+		changes = append(changes, "created "+index.Dir+"/.gitignore")
+	}
+	if createMD {
+		// The one file stele creates and never writes again (D38): Create
+		// fails rather than replace whatever appeared meanwhile.
+		err := safefile.Create(steleMD, Header(version), 0o644)
+		switch {
+		case errors.Is(err, fs.ErrExist):
+			notes = append(notes, "kept the existing stele.md")
+		case err != nil:
+			return changes, notes, err
+		default:
+			changes = append(changes, "created stele.md")
+		}
+	} else {
+		notes = append(notes, "kept the existing stele.md")
+	}
 	if changed {
-		if err := safefile.Dir(filepath.Dir(settings)); err != nil {
-			return nil, nil, err
+		if err := safefile.Dir(claudeDir); err != nil {
+			return changes, notes, err
 		}
 		if err := safefile.ReplacePerm(settings, out, mode); err != nil {
-			return nil, nil, err
+			return changes, notes, err
 		}
 		changes = append(changes, "added stele hooks (PreToolUse, PostToolUse) to "+claudecode.SettingsFile)
 	}
 
-	gitignore := filepath.Join(root, index.Dir, ".gitignore")
-	had := exists(gitignore)
-	if err := index.EnsureDir(root); err != nil {
-		return changes, notes, err
-	}
-	if !had {
-		changes = append(changes, "created "+index.Dir+"/.gitignore")
-	}
-
-	// The one file stele creates and never writes again (D38): Create fails
-	// rather than replace whatever is there.
-	err = safefile.Create(filepath.Join(root, "stele.md"), Header(version), 0o644)
-	switch {
-	case errors.Is(err, fs.ErrExist):
-		notes = append(notes, "kept the existing stele.md")
-	case err != nil:
-		return changes, notes, err
-	default:
-		changes = append(changes, "created stele.md")
-	}
-
-	local := filepath.Join(filepath.Dir(settings), "settings.local.json")
-	if l, err := safefile.ReadRegular(local, maxSettings); err == nil && claudecode.HasSteleHook(l) {
-		notes = append(notes, filepath.Join(".claude", "settings.local.json")+" also runs a stele hook: remove it there, or stele runs twice")
+	local := filepath.Join(claudeDir, "settings.local.json")
+	if l, err := safefile.ReadRegular(local, maxSettings); err == nil && claudecode.OtherSteleHook(l, version) {
+		notes = append(notes, filepath.Join(".claude", "settings.local.json")+" runs another stele hook: remove it there, or stele runs twice")
 	}
 	return changes, notes, nil
 }
@@ -95,7 +114,13 @@ func Init(root, version string) (changes, notes []string, err error) {
 // and every other file, and a settings file it cannot read entirely alone.
 func Uninstall(root string) (changes, notes []string, err error) {
 	settings := filepath.Join(root, claudecode.SettingsFile)
-	data, mode, err := readSettings(settings, "")
+	if err := plainDir(filepath.Dir(settings)); err != nil {
+		return nil, nil, fmt.Errorf("%w: stele will not write through it; remove its stele hooks by hand, nothing was removed", err)
+	}
+	data, mode, err := readSettings(settings)
+	if errors.Is(err, safefile.ErrNotRegular) {
+		return nil, nil, fmt.Errorf("%s is not a plain file (a symlink?): remove its stele hooks by hand, nothing was removed", claudecode.SettingsFile)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -127,9 +152,11 @@ func Uninstall(root string) (changes, notes []string, err error) {
 		return changes, nil, nil
 	case err != nil:
 		return changes, nil, err
-	case !info.IsDir():
+	case info.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0:
 		// A link, or a junction, that a clone committed: only the link goes.
 		err = os.Remove(dir)
+	case !info.IsDir():
+		return changes, []string{index.Dir + " is not a directory stele made: left it"}, nil
 	default:
 		// RemoveAll removes links inside, never what they point to.
 		err = os.RemoveAll(dir)
@@ -140,22 +167,29 @@ func Uninstall(root string) (changes, notes []string, err error) {
 	return append(changes, "removed "+index.Dir+"/"), nil, nil
 }
 
+// plainDir checks that path is missing or a real directory: never a link or
+// a junction, which would take stele's writes somewhere else.
+func plainDir(path string) error {
+	info, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case !info.IsDir() || info.Mode()&fs.ModeSymlink != 0:
+		return fmt.Errorf("%s is not a plain directory (a link?)", path)
+	}
+	return nil
+}
+
 // readSettings reads Claude Code's settings file, missing being empty, and
-// the mode to write it back with. A link is refused: replacing it would
-// replace the user's link with a file. The error then shows the hooks for
-// version, to add by hand.
-func readSettings(path, version string) (data []byte, mode os.FileMode, err error) {
+// the mode to write it back with. A link is safefile.ErrNotRegular:
+// replacing it would replace the user's link with a file.
+func readSettings(path string) (data []byte, mode os.FileMode, err error) {
 	data, err = safefile.ReadRegular(path, maxSettings)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return nil, 0o644, nil
-	case errors.Is(err, safefile.ErrNotRegular):
-		msg := fmt.Sprintf("%s is not a plain file (a symlink?): stele will not replace it", claudecode.SettingsFile)
-		if version != "" {
-			hooks, _, _, _ := claudecode.Install(nil, version)
-			msg += "; add these hooks to it by hand:\n" + string(hooks)
-		}
-		return nil, 0, errors.New(msg)
 	case err != nil:
 		return nil, 0, err
 	}

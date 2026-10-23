@@ -55,9 +55,9 @@ func TestInit(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"added stele hooks (PreToolUse, PostToolUse) to " + filepath.Join(".claude", "settings.json"),
 		"created .stele/.gitignore",
 		"created stele.md",
+		"added stele hooks (PreToolUse, PostToolUse) to " + filepath.Join(".claude", "settings.json"),
 	}
 	if diff := cmp.Diff(want, changes); diff != "" {
 		t.Errorf("changes mismatch (-want +got):\n%s", diff)
@@ -176,6 +176,91 @@ func TestInitNotesALocalSteleHook(t *testing.T) {
 	_, notes, err := Init(root, "v1")
 	if err != nil || !strings.Contains(strings.Join(notes, "\n"), "settings.local.json") {
 		t.Errorf("Init = %q, %v; want a note about settings.local.json", notes, err)
+	}
+}
+
+// dirLink links link to the directory target: a symlink, or on Windows,
+// where symlinks need a privilege, a junction.
+func dirLink(t *testing.T, link, target string) {
+	t.Helper()
+	if os.Symlink(target, link) == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("cmd", "/c", "mklink", "/J", link, target)
+		if out, err := cmd.CombinedOutput(); err == nil {
+			return
+		} else {
+			t.Skipf("mklink /J: %v: %s", err, out)
+		}
+	}
+	t.Skip("cannot link directories here")
+}
+
+func TestInitNotesAnIdenticalLocalHookNot(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, ".claude", "settings.local.json"),
+		`{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"stele hook --installed=v1"}]}]}}`)
+	_, notes, err := Init(root, "v1")
+	if err != nil || strings.Contains(strings.Join(notes, "\n"), "settings.local.json") {
+		t.Errorf("Init = %q, %v; Claude Code runs an identical handler once", notes, err)
+	}
+}
+
+func TestInitWritesNothingUntilEveryCheckPasses(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, ".stele"), "mine")
+	if _, _, err := Init(root, "v1"); err == nil {
+		t.Fatal("Init over a .stele file succeeded")
+	}
+	if exists(filepath.Join(root, "stele.md")) || exists(filepath.Join(root, ".claude")) {
+		t.Error("Init wrote before failing")
+	}
+	if read(t, filepath.Join(root, ".stele")) != "mine" {
+		t.Error(".stele changed")
+	}
+}
+
+func TestInitRefusesALinkedClaudeDir(t *testing.T) {
+	root := t.TempDir()
+	elsewhere := t.TempDir()
+	dirLink(t, filepath.Join(root, ".claude"), elsewhere)
+	_, _, err := Init(root, "v1")
+	if err == nil || !strings.Contains(err.Error(), "stele hook --installed=v1") || strings.Contains(err.Error(), "delete") {
+		t.Errorf("Init = %v, want a refusal showing the hooks, never asking to delete", err)
+	}
+	if exists(filepath.Join(elsewhere, "settings.json")) || exists(filepath.Join(root, "stele.md")) {
+		t.Error("Init wrote something")
+	}
+}
+
+func TestUninstallRefusesALinkedClaudeDir(t *testing.T) {
+	root := t.TempDir()
+	elsewhere := t.TempDir()
+	if _, _, err := Init(elsewhere, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	theirs := filepath.Join(elsewhere, ".claude")
+	dirLink(t, filepath.Join(root, ".claude"), theirs)
+	before := read(t, filepath.Join(theirs, "settings.json"))
+	_, _, err := Uninstall(root)
+	if err == nil || !strings.Contains(err.Error(), ".claude") {
+		t.Errorf("Uninstall = %v, want a refusal naming .claude", err)
+	}
+	if read(t, filepath.Join(theirs, "settings.json")) != before || !exists(filepath.Join(root, ".claude")) {
+		t.Error("Uninstall went through the link")
+	}
+}
+
+func TestUninstallLeavesARegularSteleFile(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, ".stele"), "mine")
+	changes, notes, err := Uninstall(root)
+	if err != nil || len(changes) != 0 || len(notes) != 1 {
+		t.Errorf("Uninstall = %q, %q, %v", changes, notes, err)
+	}
+	if read(t, filepath.Join(root, ".stele")) != "mine" {
+		t.Error("a user's .stele file was removed")
 	}
 }
 
