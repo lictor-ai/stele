@@ -854,11 +854,11 @@ func Install(settings []byte, version string) (out []byte, changed bool, notes [
 func Uninstall(settings []byte) (out []byte, removed int, empty bool, err error)
 func Installed(settings []byte) (version string, ok bool) // for stele status
 func InstalledVersion(args []string) string               // stele hook's own --installed=
-func HasSteleHook(settings []byte) bool
+func OtherSteleHook(settings []byte, version string) bool // one init would not write
 ```
 
-Both work on bytes. Every value stele does not edit is written back exactly as
-it was (key order, number literals, escapes), the layout is two spaces as Claude
+Both work on bytes. Every key and every value stele does not edit is written
+back exactly as it was (key order, number literals, escapes), the layout is two spaces as Claude
 Code writes it, and a byte order mark and CRLF line ends are kept. A run that
 changes nothing returns the file byte for byte. Malformed settings (invalid JSON,
 comments, a duplicate key, `hooks` or an event of the wrong type) are an error,
@@ -882,17 +882,28 @@ those (D28):
    settings files are JSON, with no comments, and Claude Code validates them
    against a schema, so an extra key could break the user's file. The stamp
    survives a fresh clone, and the hook reads it from its own arguments for
-   free. A `stele hook` without `--installed=` was written by hand: `init` and
-   `uninstall` leave it, and `init` says it will run twice. The file is checked
-   before anything is written, rewritten with its own mode
-   (`safefile.ReplacePerm`: it can hold secrets), and refused if it is a link.
-   `uninstall` deletes it, and `.claude/`, only when nothing else is left.
+   free. Only a command that is exactly `stele hook --installed=<version>` is
+   stele's; the first word may be a quoted path to the binary. Anything else
+   that runs `stele hook`, a stamp with more after it included, was written by
+   hand: `init` and `uninstall` leave it, and `init` says it will run twice, as
+   it does for a different stele hook in `settings.local.json` (Claude Code
+   runs identical handlers once). The file is rewritten with its own mode
+   (`safefile.ReplacePerm`: it can hold secrets) and, with `.claude/`, refused
+   if it is a link: stele does not write through a link, and shows the hooks
+   to add by hand. `uninstall` deletes it, and `.claude/`, only when nothing
+   else is left.
 2. `stele.md`, only when there is none, with `safefile.Create`, so an existing
    file is never opened for writing (D38). Its header comment names the version
    that created it. `uninstall` leaves it: it is the user's from then on.
 3. `.stele/` and its `.gitignore`, through `index.EnsureDir`. The whole directory
    is stele's, so it carries no marker; `uninstall` removes it, and a `.stele`
-   that is a link or a junction loses only the link.
+   that is a link or a junction loses only the link. A plain file named
+   `.stele` is the user's: `init` refuses, `uninstall` leaves it.
+
+`init` checks everything (`.claude/` and `.stele/` missing or real
+directories, the settings file readable) before its first write, then writes
+`.stele/`, `stele.md` and the settings last, so the hooks never run without the
+rest.
 
 `stele.lock` and `stele.json` stay: they are committed and the user's. The
 signing key is per machine, not per repository, and stays too.
@@ -1276,9 +1287,11 @@ stele hook         read a Claude Code hook payload on stdin, decide
                      [--installed=<version>]
 ```
 
-`init` sets up the nearest project root, or the current directory when there is
-none, and prints one line per thing it wrote; run again, it writes nothing unless
-the hooks carry another version. Both `init` and `uninstall` exit 0, or 2 when
+`init` and `uninstall` work in the current directory, never an ancestor: Claude
+Code reads `.claude/settings.json` from the directory it starts in. They print
+that directory first, and a note when an ancestor holds `.git`, `stele.md` or
+`stele.json`. `init` then prints one line per thing it wrote; run again, it
+writes nothing unless the hooks carry another version. Both `init` and `uninstall` exit 0, or 2 when
 they could not run. The version is set at release with `-ldflags "-X
 main.version=..."`, else read from the build info, else `devel`.
 

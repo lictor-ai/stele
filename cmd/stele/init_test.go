@@ -47,6 +47,35 @@ func TestInitAndUninstall(t *testing.T) {
 	}
 }
 
+// Claude Code reads .claude/settings.json from the directory it starts in,
+// so init sets up where it runs, never an ancestor.
+func TestInitUsesTheCurrentDirectory(t *testing.T) {
+	root := project(t, "")
+	sub := filepath.Join(root, "sub")
+	os.Mkdir(sub, 0o755)
+	t.Chdir(sub)
+	here, _ := os.Getwd()
+
+	code, out, errOut := runCmd("init")
+	if code != exitOK || !strings.HasPrefix(out, "stele init in "+here+"\n") {
+		t.Fatalf("init = %d, stdout %q", code, out)
+	}
+	if !strings.Contains(errOut, "this is not the repository root ("+root) {
+		t.Errorf("stderr %q, want a note naming the repository root", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(sub, ".claude", "settings.json")); err != nil {
+		t.Errorf("init did not set up the current directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".claude")); err == nil {
+		t.Error("init set up the repository root")
+	}
+
+	code, out, _ = runCmd("uninstall")
+	if code != exitOK || !strings.HasPrefix(out, "stele uninstall in "+here+"\n") || !strings.Contains(out, "removed stele hooks") {
+		t.Errorf("uninstall = %d, stdout %q", code, out)
+	}
+}
+
 func TestInitRefusesMalformedSettings(t *testing.T) {
 	root := project(t, "")
 	os.MkdirAll(filepath.Join(root, ".claude"), 0o755)
