@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "project": "04b2f8d3-1970-4d1b-9fa3-23d333021a92",
+  "rules": [
+    {
+      "id": "a93f0aa8-19d9-442c-be78-cdb30b116686",
+      "source": "stelemd",
+      "hash": "31e3461897f97f5be7374fe045c9df69880bc04bc81dff89b0927118bd637c19",
+      "position": 0
+    },
+    {
+      "id": "5ea41e93-2f87-42f9-8cf9-6ff9eb0c925a",
+      "source": "stelemd",
+      "hash": "9288532cfa689894a4b236bbd90220edb781c33ebd972442729d44ad80807b5a",
+      "position": 1
+    },
+    {
+      "id": "002ec6b6-4084-4149-ab0f-16fc48253a55",
+      "source": "stelemd",
+      "hash": "22aea02ae2ff52475e6136cf01e6cacf9bbc9a7f968b81bdb3c94a7e1ec6f4a1",
+      "position": 2
+    },
+    {
+      "id": "68f6b921-497f-4e32-aae2-1d87762a58f0",
+      "source": "stelemd",
+      "hash": "5ef206e53380fbb8a42cd6914b61317b6ee4980b47122708fb04cae31e6a6c49",
+      "position": 3
+    },
+    {
+      "id": "268db74f-f66f-4078-8bae-0ddda0705b97",
+      "source": "stelemd",
+      "hash": "1521643f510d983d618dff4fa6494c9dc06ca76f0cba7521eb2e6ebb362a539d",
+      "position": 4
+    },
+    {
+      "id": "af30f722-1eef-4ab1-84fd-8597a3c3af8d",
+      "source": "stelemd",
+      "hash": "60e68fe130f738f22a6f23ab4daae9b41d15291687b2aee0f58521b47cd594bd",
+      "position": 5
+    },
+    {
+      "id": "24134b0b-94ee-4668-8b4b-d839673f15e3",
+      "source": "stelemd",
+      "hash": "cca80fb92ca6604693d4aaadefdcc257e99d0135228503e72e015ee0d5de11e0",
+      "position": 6
+    },
+    {
+      "id": "2ab91390-1e1b-4139-a808-23f5241565c1",
+      "source": "stelemd",
+      "hash": "9ab4bcbb0ddaeb5486b13c797458619d05a9ba990c799eebae87dc30b5ceb6d8",
+      "position": 7
+    },
+    {
+      "id": "14d7dcd8-809c-41ca-abb2-2c2454af24f4",
+      "source": "stelemd",
+      "hash": "7178bbf3f44d2e84e8ad780a6e68e6f2edfc8cf925fed75409cdf4dbf1b4a0cc",
+      "position": 8
+    },
+    {
+      "id": "d4e09005-a875-4772-8f9c-9edfc4a7e32f",
+      "source": "stelemd",
+      "hash": "92395060054125e219562e6d4c45b6a52584eeba02c549012bb1498d18406e44",
+      "position": 9
+    }
+  ]
+}
