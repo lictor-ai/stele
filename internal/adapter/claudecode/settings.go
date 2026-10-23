@@ -35,9 +35,39 @@ type handler struct {
 	Args    []string `json:"args"`
 }
 
-// words is the handler's command line, split on spaces.
+// words is the handler's command line, split on spaces outside quotes.
 func (h handler) words() []string {
-	return append(strings.Fields(h.Command), h.Args...)
+	return append(split(h.Command), h.Args...)
+}
+
+// split splits a command line on spaces, keeping what is inside single or
+// double quotes together, quotes removed. A backslash is a character, as in
+// a Windows path.
+func split(s string) []string {
+	var words []string
+	var w strings.Builder
+	in, quote := false, rune(0)
+	for _, r := range s {
+		switch {
+		case quote != 0 && r == quote:
+			quote = 0
+		case quote == 0 && (r == '"' || r == '\''):
+			quote, in = r, true
+		case quote == 0 && (r == ' ' || r == '\t'):
+			if in {
+				words = append(words, w.String())
+				w.Reset()
+				in = false
+			}
+		default:
+			w.WriteRune(r)
+			in = true
+		}
+	}
+	if in {
+		words = append(words, w.String())
+	}
+	return words
 }
 
 // runsStele reports whether the handler runs stele hook, in any form.
@@ -46,20 +76,24 @@ func (h handler) runsStele() bool {
 	if len(w) < 2 || w[1] != "hook" {
 		return false
 	}
-	name := path.Base(strings.ReplaceAll(strings.Trim(w[0], `"'`), `\`, "/"))
+	name := path.Base(strings.ReplaceAll(w[0], `\`, "/"))
 	name = strings.TrimSuffix(strings.ToLower(name), ".exe")
 	return name == "stele"
 }
 
-// stamp returns the version on a handler init wrote; ok is false for any
-// other handler, including a stele hook written by hand.
+// stamp returns the version on a handler init wrote: exactly stele hook
+// --installed=<version>, nothing after. ok is false for any other handler,
+// including a stele hook written by hand or one the user added to.
 func (h handler) stamp() (version string, ok bool) {
 	w := h.words()
-	if !h.runsStele() || len(w) < 3 || !strings.HasPrefix(w[2], installedFlag) {
+	if !h.runsStele() || len(w) != 3 || !strings.HasPrefix(w[2], installedFlag) {
 		return "", false
 	}
 	return strings.TrimPrefix(w[2], installedFlag), true
 }
+
+// command is the command init writes for version.
+func command(version string) string { return "stele hook " + installedFlag + version }
 
 // Install returns settings with stele's hooks on PreToolUse and PostToolUse,
 // stamped with version. Empty settings are {}. changed is false, and out is
@@ -98,7 +132,7 @@ func Install(settings []byte, version string) (out []byte, changed bool, notes [
 		Type    string `json:"type"`
 		Command string `json:"command"`
 		Timeout int    `json:"timeout"`
-	}{"command", "stele hook " + installedFlag + version, 10}}})
+	}{"command", command(version), 10}}})
 	if err != nil {
 		return nil, false, nil, err
 	}
@@ -147,9 +181,11 @@ func Installed(settings []byte) (version string, ok bool) {
 	return "", false
 }
 
-// HasSteleHook reports whether settings run stele hook on any event, in any
-// form. Unreadable settings run nothing stele can see.
-func HasSteleHook(settings []byte) bool {
+// OtherSteleHook reports whether settings run stele hook, on any event, other
+// than as init writes it for version. Claude Code runs identical handlers
+// once, so only another one makes stele run twice. Unreadable settings run
+// nothing stele can see.
+func OtherSteleHook(settings []byte, version string) bool {
 	var s struct {
 		Hooks map[string][]struct {
 			Hooks []handler `json:"hooks"`
@@ -161,7 +197,7 @@ func HasSteleHook(settings []byte) bool {
 	for _, groups := range s.Hooks {
 		for _, g := range groups {
 			for _, h := range g.Hooks {
-				if h.runsStele() {
+				if h.runsStele() && (h.Command != command(version) || len(h.Args) > 0) {
 					return true
 				}
 			}
@@ -181,10 +217,12 @@ func InstalledVersion(args []string) string {
 	return ""
 }
 
-// member is one key of a JSON object, its value kept exactly as written.
+// member is one key of a JSON object, its key and value kept exactly as
+// written. Raw is empty for a key stele adds.
 type member struct {
 	Key   string
 	Value json.RawMessage
+	Raw   []byte
 }
 
 // object is a JSON object in its written order. stele edits only "hooks" and
@@ -209,7 +247,7 @@ func (o *object) set(key string, v json.RawMessage) {
 			return
 		}
 	}
-	*o = append(*o, member{key, v})
+	*o = append(*o, member{Key: key, Value: v})
 }
 
 func (o *object) remove(key string) {
@@ -228,9 +266,12 @@ func (o object) marshal() ([]byte, error) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		k, err := marshal(m.Key)
-		if err != nil {
-			return nil, err
+		k := m.Raw
+		if k == nil {
+			var err error
+			if k, err = marshal(m.Key); err != nil {
+				return nil, err
+			}
 		}
 		b.Write(k)
 		b.WriteByte(':')
@@ -275,11 +316,15 @@ func parseObject(data []byte, what string) (object, error) {
 	var o object
 	seen := map[string]bool{}
 	for dec.More() {
+		start := dec.InputOffset()
 		t, err := dec.Token()
 		if err != nil {
 			return nil, err
 		}
 		key := t.(string) // an object's tokens alternate key, value
+		// The key's bytes as written, escapes and all, without the comma
+		// and space before it.
+		raw := bytes.TrimLeft(data[start:dec.InputOffset()], ", \t\r\n")
 		if seen[key] {
 			return nil, fmt.Errorf("%q appears twice in %s", key, what)
 		}
@@ -288,7 +333,7 @@ func parseObject(data []byte, what string) (object, error) {
 		if err := dec.Decode(&v); err != nil {
 			return nil, err
 		}
-		o = append(o, member{key, v})
+		o = append(o, member{Key: key, Value: v, Raw: raw})
 	}
 	return o, nil
 }

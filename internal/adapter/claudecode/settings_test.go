@@ -233,6 +233,18 @@ func TestUninstall(t *testing.T) {
 			wantEmpty:   true,
 			want:        "{}\n",
 		},
+		{
+			name:        "quoted path with a space",
+			in:          `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"\"C:\\Program Files\\stele\\stele.exe\" hook --installed=v0.1"}]}]}}`,
+			wantRemoved: 1,
+			wantEmpty:   true,
+			want:        "{}\n",
+		},
+		{
+			name: "more after the stamp is the user's",
+			in:   `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"stele hook --installed=v1 && echo mine"}]}]}}`,
+			want: `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"stele hook --installed=v1 && echo mine"}]}]}}`,
+		},
 		{name: "nothing to remove", in: user, wantRemoved: 0, want: user},
 		{name: "empty file", in: "", wantRemoved: 0, want: ""},
 	}
@@ -305,12 +317,30 @@ func TestInstalled(t *testing.T) {
 	}
 }
 
-func TestHasSteleHook(t *testing.T) {
+func TestInstallNotesExtendedStamp(t *testing.T) {
+	in := `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"stele hook --installed=v1.2.0 && echo mine"}]}]}}`
+	out, changed, notes, err := Install([]byte(in), "v1.2.0")
+	if err != nil || !changed || len(notes) != 1 || !strings.Contains(string(out), "echo mine") {
+		t.Errorf("Install = changed %v, notes %q, err %v:\n%s", changed, notes, err, out)
+	}
+}
+
+func TestInstallKeepsKeysAsWritten(t *testing.T) {
+	in := `{"\u0041key": 1, "hooks": {"\u0058": []}}`
+	out, _, _, err := Install([]byte(in), "v1")
+	if err != nil || !strings.Contains(string(out), `"\u0041key": 1`) || !strings.Contains(string(out), `"\u0058": []`) {
+		t.Errorf("Install = %v:\n%s", err, out)
+	}
+}
+
+// Claude Code runs identical handlers once, so only a different one runs twice.
+func TestOtherSteleHook(t *testing.T) {
 	tests := []struct {
 		in   string
 		want bool
 	}{
-		{fresh, true},
+		{fresh, false}, // the same handler init writes
+		{strings.ReplaceAll(fresh, "v1.2.0", "v1.1.0"), true},
 		{`{"hooks":{"PostToolUse":[{"hooks":[{"command":"stele hook"}]}]}}`, true},
 		{`{"hooks":{"PreToolUse":[{"hooks":[{"command":"stele","args":["hook"]}]}]}}`, true},
 		{user, false},
@@ -318,8 +348,8 @@ func TestHasSteleHook(t *testing.T) {
 		{"garbage", false},
 	}
 	for _, tt := range tests {
-		if got := HasSteleHook([]byte(tt.in)); got != tt.want {
-			t.Errorf("HasSteleHook(%q) = %v, want %v", tt.in, got, tt.want)
+		if got := OtherSteleHook([]byte(tt.in), "v1.2.0"); got != tt.want {
+			t.Errorf("OtherSteleHook(%q) = %v, want %v", tt.in, got, tt.want)
 		}
 	}
 }
