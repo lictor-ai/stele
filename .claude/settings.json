@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "stele hook --installed=v0.0.0-20261023085801-32b83aefb0cb",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "stele hook --installed=v0.0.0-20261023085801-32b83aefb0cb",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
