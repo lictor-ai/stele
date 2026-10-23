@@ -65,6 +65,21 @@ func hook(t *testing.T, payload map[string]any) (hookOutput, string) {
 	return o, out
 }
 
+// A bug in stele must not block the write: Go exits 2 on a panic, and exit 2
+// blocks a PreToolUse call whatever stdout says.
+func TestHookRecoversFromPanic(t *testing.T) {
+	root := project(t, hookRules)
+	old := now
+	now = func() time.Time { panic("boom") }
+	t.Cleanup(func() { now = old })
+
+	o, _ := hook(t, write(filepath.Join(root, "a.go"), "p1", ""))
+	if o.HookSpecificOutput.PermissionDecision != "" || !strings.Contains(o.SystemMessage, "boom") {
+		t.Errorf("after a panic: decision %q, warning %q; want no decision and a warning naming the panic",
+			o.HookSpecificOutput.PermissionDecision, o.SystemMessage)
+	}
+}
+
 func write(file, prompt, agent string) map[string]any {
 	return map[string]any{
 		"hook_event_name": "PreToolUse", "session_id": "s1", "prompt_id": prompt, "agent_id": agent,

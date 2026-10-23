@@ -52,7 +52,7 @@ const maxShown = 20
 // It always exits 0, and prints nothing when it has nothing to say: exit 2
 // would block the write whatever the JSON says, and a hook that cannot make
 // sense of its input must never stop the agent.
-func runHook(args []string, stdout, _ io.Writer) int {
+func runHook(args []string, stdout, _ io.Writer) (code int) {
 	data, err := io.ReadAll(io.LimitReader(stdin, maxPayload))
 	if err != nil {
 		return exitOK
@@ -61,6 +61,15 @@ func runHook(args []string, stdout, _ io.Writer) int {
 	if err != nil || ev.File == "" {
 		return exitOK
 	}
+	// Go exits 2 on a panic, which would block the write: a bug in stele
+	// lets it through with a warning instead.
+	defer func() {
+		if r := recover(); r != nil {
+			w := fmt.Sprintf("stele: rules not checked for this write: internal error: %v", r)
+			stdout.Write(claudecode.Render(ev.Name, claudecode.Answer{Warning: w}))
+			code = exitOK
+		}
+	}()
 	var a claudecode.Answer
 	switch {
 	case ev.Name == "PreToolUse":
