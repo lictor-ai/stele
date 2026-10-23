@@ -62,7 +62,7 @@ pattern: fmt\.Print(f|ln)?\(
 message: log through internal/log, not fmt.Print
 
 Log through the shared logger in internal/log. Never print with fmt.Print,
-Printf or Println outside cmd/.
+Printf or Println.
 
 ---
 
@@ -101,7 +101,7 @@ Scope globs:
 
 ## What the agent sees
 
-- **Before a write.** The first write in a turn to a file with rules the agent hasn't seen this turn is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn.
+- **Before a write.** The first write in a turn to a file with rules the agent hasn't seen this turn is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent.
 - **After a write.** A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
 
@@ -168,7 +168,7 @@ Optional, committed next to `stele.md`. These are the defaults:
 | Key | Effect |
 |---|---|
 | `backstop` | `true`: the hook may deny a write to show its rules, and blocks on violations after a write. `false`: no rules are shown before writes; violations after a write are sent as context, never as a block. |
-| `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: the write is blocked and the agent is told why. Only applies when `backstop` is `true`. |
+| `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. Only applies when `backstop` is `true`. |
 
 ## Limits
 
