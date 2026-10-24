@@ -30,7 +30,8 @@ import (
 
 // runCheck validates the rules, then runs the checkers on the selected files,
 // and writes nothing (spec §8). It exits 1 for an invalid rule or a blocking
-// violation, and 2 when it could not run.
+// violation, and 2 when it could not run. A root with no rule files has
+// nothing to check: exit 0 (#49).
 func runCheck(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("stele check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -60,20 +61,26 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return cantRun("%v", err)
 	}
+	// A checkout that does not use stele has no rules to validate or check,
+	// but its files are still selected: a bad path or ref is still exit 2.
+	none := noRuleFiles(root)
 
 	// 1. The rules.
-	r, err := compile.Plan(context.Background(), root, sources(), uuid.NewString)
-	if err != nil {
-		var pe *source.ParseError
-		if !errors.As(err, &pe) && !errors.Is(err, lock.ErrDuplicateID) && !errors.Is(err, lock.ErrInvalid) {
-			return cantRun("%v", err)
+	var r compile.Result
+	if !none {
+		r, err = compile.Plan(context.Background(), root, sources(), uuid.NewString)
+		if err != nil {
+			var pe *source.ParseError
+			if !errors.As(err, &pe) && !errors.Is(err, lock.ErrDuplicateID) && !errors.Is(err, lock.ErrInvalid) {
+				return cantRun("%v", err)
+			}
+			return ruleFileProblem(root, *format, err.Error(), stdout, stderr)
 		}
-		return ruleFileProblem(root, *format, err.Error(), stdout, stderr)
-	}
-	// CI would otherwise report against ids that exist on nobody's machine.
-	if r.LockChanged {
-		return ruleFileProblem(root, *format, fmt.Sprintf("%s is out of date with the rules: run stele compile and commit %s",
-			lock.FileName, lock.FileName), stdout, stderr)
+		// CI would otherwise report against ids that exist on nobody's machine.
+		if r.LockChanged {
+			return ruleFileProblem(root, *format, fmt.Sprintf("%s is out of date with the rules: run stele compile and commit %s",
+				lock.FileName, lock.FileName), stdout, stderr)
+		}
 	}
 
 	// 2. The code.
@@ -87,9 +94,11 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		return cantRun("%v", err)
 	}
 	files, subs := ownedFiles(root, files)
-	rep, err := check.Run(context.Background(), root, r.Index, files, plugin.BuiltinCheckers())
-	if err != nil {
-		return cantRun("%v", err)
+	rep := check.NewReport("")
+	if !none {
+		if rep, err = check.Run(context.Background(), root, r.Index, files, plugin.BuiltinCheckers()); err != nil {
+			return cantRun("%v", err)
+		}
 	}
 	// A rules change passes CI, but reviewers must see it (#52). A stale
 	// stele.lock has already failed above.
@@ -107,10 +116,24 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		}
 		sort.SliceStable(rep.Skipped, func(i, j int) bool { return rep.Skipped[i].File < rep.Skipped[j].File })
 		printJSON(stdout, rep)
+	} else if none {
+		printNoRules(stdout, root, rep, subs)
 	} else {
 		printCheck(stdout, r.Lock, rep, subs, len(r.Index.Rules), len(files))
 	}
 	return rep.ExitCode()
+}
+
+// noRuleFiles reports whether root has no stele.md, stele.json or stele.lock:
+// a checkout that does not use stele, such as a submodule or a worktree of a
+// branch without rules (#49). Any entry counts, as findRoot counts it.
+func noRuleFiles(root string) bool {
+	for _, name := range []string{"stele.md", enforce.FileName, lock.FileName} {
+		if _, err := os.Lstat(filepath.Join(root, name)); !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+	}
+	return true
 }
 
 // ruleFileProblem reports rule files stele check cannot use: on stderr as #7
@@ -358,29 +381,9 @@ func printCheck(w io.Writer, lf lock.File, rep check.Report, subs []subproject, 
 		fmt.Fprintf(w, "%s: skipped: %s\n", showPath(s.File), s.Reason)
 		skipped[s.File] = true
 	}
-	for _, sp := range subs {
-		// git lists an untracked nested repository as one entry, nested/:
-		// a directory, not a file to count.
-		n := 0
-		for _, f := range sp.files {
-			if !strings.HasSuffix(f, "/") {
-				n++
-			}
-		}
-		if n == 0 {
-			fmt.Fprintf(w, "%s/: skipped, it has its own %s\n", showPath(sp.dir), sp.has)
-			continue
-		}
-		fmt.Fprintf(w, "%s/: skipped %s, it has its own %s\n", showPath(sp.dir), plural(n, "file"), sp.has)
-	}
+	printSubprojects(w, subs)
 	files -= len(skipped)
-	for _, c := range rep.RuleFilesChanged {
-		what := "it holds the project's rules"
-		if scope.Match(enforce.FileName, c.File) {
-			what = "it sets how strictly the rules are enforced"
-		}
-		fmt.Fprintf(w, "%s: %s on this branch: %s; review the change\n", showPath(c.File), c.Change, what)
-	}
+	printRuleFileChanges(w, rep.RuleFilesChanged)
 
 	if len(rep.Problems) == 0 {
 		fmt.Fprintf(w, "%s valid\n", plural(rules, "rule"))
@@ -401,6 +404,43 @@ func printCheck(w io.Writer, lf lock.File, rep check.Report, subs []subproject, 
 			counts = append(counts, plural(warns, "warning"))
 		}
 		fmt.Fprintf(w, "checked %s: %s\n", plural(files, "file"), strings.Join(counts, ", "))
+	}
+}
+
+// printNoRules is printCheck for a root with no rule files.
+func printNoRules(w io.Writer, root string, rep check.Report, subs []subproject) {
+	printSubprojects(w, subs)
+	printRuleFileChanges(w, rep.RuleFilesChanged)
+	fmt.Fprintf(w, "no stele.md or stele.json in %s: nothing to check\n", showPath(root))
+}
+
+// printSubprojects says which subprojects were skipped, and why.
+func printSubprojects(w io.Writer, subs []subproject) {
+	for _, sp := range subs {
+		// git lists an untracked nested repository as one entry, nested/:
+		// a directory, not a file to count.
+		n := 0
+		for _, f := range sp.files {
+			if !strings.HasSuffix(f, "/") {
+				n++
+			}
+		}
+		if n == 0 {
+			fmt.Fprintf(w, "%s/: skipped, it has its own %s\n", showPath(sp.dir), sp.has)
+			continue
+		}
+		fmt.Fprintf(w, "%s/: skipped %s, it has its own %s\n", showPath(sp.dir), plural(n, "file"), sp.has)
+	}
+}
+
+// printRuleFileChanges prints one line per rule file the branch changed.
+func printRuleFileChanges(w io.Writer, cs []check.RuleFileChange) {
+	for _, c := range cs {
+		what := "it holds the project's rules"
+		if scope.Match(enforce.FileName, c.File) {
+			what = "it sets how strictly the rules are enforced"
+		}
+		fmt.Fprintf(w, "%s: %s on this branch: %s; review the change\n", showPath(c.File), c.Change, what)
 	}
 }
 

@@ -110,14 +110,17 @@ func ruleID(t *testing.T, root string, position int) string {
 
 func TestCheck(t *testing.T) {
 	tests := []struct {
-		name     string
-		steleMD  string
-		compile  bool   // run stele compile first
-		after    string // stele.md content written after compiling
-		lock     string // stele.lock content written instead of compiling
-		wantCode int
-		wantOut  string
-		wantErr  string
+		name      string
+		steleMD   string
+		noMD      bool   // write no stele.md at all
+		steleJSON string // stele.json content, if any
+		compile   bool   // run stele compile first
+		after     string // stele.md content written after compiling
+		removeMD  bool   // remove stele.md after compiling
+		lock      string // stele.lock content written instead of compiling
+		wantCode  int
+		wantOut   string
+		wantErr   string
 	}{
 		{name: "valid", steleMD: rules, compile: true, wantCode: exitOK, wantOut: "2 rules valid"},
 		{name: "never compiled", steleMD: rules, wantCode: exitFailed, wantErr: "stele.lock is out of date with the rules: run stele compile"},
@@ -133,11 +136,21 @@ func TestCheck(t *testing.T) {
 			wantErr:  "duplicate rule id a",
 		},
 		{name: "invalid lock", steleMD: rules, lock: "{", wantCode: exitFailed, wantErr: "stele.lock: invalid"},
+		// A stele project without its lock still needs one: these are not
+		// "nothing to check" (#49).
+		{name: "empty stele.md", steleMD: "", wantCode: exitFailed, wantErr: "out of date"},
+		{name: "stele.json only", noMD: true, steleJSON: "{}", wantCode: exitFailed, wantErr: "out of date"},
+		{name: "stele.lock only", steleMD: rules, compile: true, removeMD: true, wantCode: exitFailed, wantErr: "out of date"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := gitProject(t, "")
-			writeAt(t, root, "stele.md", tt.steleMD)
+			if !tt.noMD {
+				writeAt(t, root, "stele.md", tt.steleMD)
+			}
+			if tt.steleJSON != "" {
+				writeAt(t, root, "stele.json", tt.steleJSON)
+			}
 			if tt.compile {
 				if code, _, errOut := runCmd("compile"); code != exitOK {
 					t.Fatalf("compile = %d, stderr %q", code, errOut)
@@ -145,6 +158,11 @@ func TestCheck(t *testing.T) {
 			}
 			if tt.after != "" {
 				writeAt(t, root, "stele.md", tt.after)
+			}
+			if tt.removeMD {
+				if err := os.Remove(filepath.Join(root, "stele.md")); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if tt.lock != "" {
 				writeAt(t, root, "stele.lock", tt.lock)
@@ -535,4 +553,84 @@ func TestPrintCheckEscapesFileNames(t *testing.T) {
 	if strings.Contains(out, "\nsrc/a.go") {
 		t.Errorf("output %q has an unescaped newline from a file name", out)
 	}
+}
+
+// A checkout with no stele.md, stele.json or stele.lock — a submodule, a
+// worktree of a branch without rules, a repository that adds the CI job
+// before its stele.md — has nothing to check: exit 0, said plainly (#49).
+func TestCheckNoRuleFiles(t *testing.T) {
+	nothing := "nothing to check"
+	t.Run("plain repository", func(t *testing.T) {
+		root := gitProject(t, "")
+		writeAt(t, root, "a.go", "password = 1\n")
+		before := snapshot(t, root)
+		code, out, errOut := runCmd("check")
+		if code != exitOK || errOut != "" || !strings.Contains(out, "no stele.md or stele.json in ") ||
+			!strings.Contains(out, filepath.Base(root)+": "+nothing) || strings.Contains(out, "out of date") {
+			t.Errorf("check = %d, stdout %q, stderr %q; want 0 and %q", code, out, errOut, nothing)
+		}
+		if after := snapshot(t, root); after != before {
+			t.Errorf("check wrote files:\nbefore %s\nafter  %s", before, after)
+		}
+	})
+	t.Run("paths and --all", func(t *testing.T) {
+		root := gitProject(t, "")
+		writeAt(t, root, "a.go", "password = 1\n")
+		commitAll(t, root, "code")
+		for _, args := range [][]string{{"check", "a.go"}, {"check", "--all"}} {
+			if code, out, errOut := runCmd(args...); code != exitOK || !strings.Contains(out, nothing) {
+				t.Errorf("%v = %d, stdout %q, stderr %q; want 0 and %q", args, code, out, errOut, nothing)
+			}
+		}
+		// A typo is still never a silent pass.
+		if code, _, errOut := runCmd("check", "nope.go"); code != exitCantRun || !strings.Contains(errOut, "no such file") {
+			t.Errorf("check nope.go = %d, stderr %q; want 2, no such file", code, errOut)
+		}
+		if code, _, errOut := runCmd("check", "--base", "nosuchref"); code != exitCantRun || !strings.Contains(errOut, "unknown ref") {
+			t.Errorf("check --base nosuchref = %d, stderr %q; want 2, unknown ref", code, errOut)
+		}
+	})
+	t.Run("rules deleted on the branch", func(t *testing.T) {
+		root := rulesBranch(t, "")
+		gitT(t, root, "rm", "-q", "stele.md", "stele.lock")
+		commitAll(t, root, "drop stele")
+		code, out, errOut := runCmd("check", "--base", "main")
+		if code != exitOK || !strings.Contains(out, "stele.md: deleted on this branch") || !strings.Contains(out, nothing) {
+			t.Errorf("check --base main = %d, stdout %q, stderr %q; want 0, the deletion and %q", code, out, errOut, nothing)
+		}
+		code, out, _ = runCmd("check", "--base", "main", "--format", "json")
+		var rep check.Report
+		if err := json.Unmarshal([]byte(out), &rep); err != nil {
+			t.Fatalf("not JSON: %v\n%s", err, out)
+		}
+		want := []check.RuleFileChange{{File: "stele.md", Change: "deleted"}}
+		if code != exitOK || !cmp.Equal(rep.RuleFilesChanged, want) {
+			t.Errorf("json: code %d, rule_files_changed %+v, want 0 and %+v", code, rep.RuleFilesChanged, want)
+		}
+	})
+	t.Run("json", func(t *testing.T) {
+		gitProject(t, "")
+		code, out, errOut := runCmd("check", "--format", "json")
+		var rep check.Report
+		if err := json.Unmarshal([]byte(out), &rep); err != nil {
+			t.Fatalf("not JSON: %v\n%s (stderr %q)", err, out, errOut)
+		}
+		if code != exitOK || rep.V != 1 || rep.Project != "" {
+			t.Errorf("code %d, v %d, project %q; want 0, 1, empty", code, rep.V, rep.Project)
+		}
+		for _, field := range []string{`"problems": []`, `"violations": []`, `"skipped": []`} {
+			if !strings.Contains(out, field) {
+				t.Errorf("json lacks %s:\n%s", field, out)
+			}
+		}
+	})
+	t.Run("subproject still reported", func(t *testing.T) {
+		root := gitProject(t, "")
+		writeAt(t, root, "sub/stele.md", checkRules)
+		writeAt(t, root, "sub/b.go", "password = 1\n")
+		code, out, errOut := runCmd("check", "sub/b.go")
+		if code != exitOK || !strings.Contains(out, "sub/: skipped 1 file, it has its own stele.md") || !strings.Contains(out, nothing) {
+			t.Errorf("check sub/b.go = %d, stdout %q, stderr %q; want 0, the subproject and %q", code, out, errOut, nothing)
+		}
+	})
 }
