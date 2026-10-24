@@ -352,3 +352,42 @@ func TestHookAsksForSettingsThroughLinks(t *testing.T) {
 		}
 	})
 }
+
+// A link inside the project that leads to a settings file the session loads
+// is asked for, as one from outside is.
+func TestHookAsksForSessionSettingsThroughALink(t *testing.T) {
+	clock(t, time.Now())
+	cfg := userConfig(t)
+	g := project(t, "")
+	if err := os.MkdirAll(filepath.Join(g, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeAt(t, g, "pkg/stele.md", hookRules)
+	writeAt(t, g, ".claude/settings.local.json", "{}\n")
+	pkg := filepath.Join(g, "pkg")
+	t.Run("to the user settings", func(t *testing.T) {
+		l := filepath.Join(pkg, "cfg")
+		link(t, cfg, l, true)
+		if o, out := hook(t, inSession("Edit", filepath.Join(l, "settings.json"), pkg)); o.HookSpecificOutput.PermissionDecision != "ask" {
+			t.Errorf("edit through a link to the user settings: %s, want ask", out)
+		}
+	})
+	t.Run("to the git root's settings", func(t *testing.T) {
+		l := filepath.Join(pkg, "top")
+		link(t, filepath.Join(g, ".claude"), l, true)
+		if o, out := hook(t, inSession("Edit", filepath.Join(l, "settings.local.json"), pkg)); o.HookSpecificOutput.PermissionDecision != "ask" {
+			t.Errorf("edit through a link to the git root's settings.local.json: %s, want ask", out)
+		}
+	})
+}
+
+// A relative CLAUDE_CONFIG_DIR still names the user settings.
+func TestHookAsksForRelativeUserConfig(t *testing.T) {
+	clock(t, time.Now())
+	root := project(t, hookRules)
+	writeAt(t, root, "cfg/settings.json", "{}\n")
+	t.Setenv("CLAUDE_CONFIG_DIR", "cfg")
+	if o, out := hook(t, inSession("Edit", filepath.Join(root, "cfg", "settings.json"), root)); o.HookSpecificOutput.PermissionDecision != "ask" {
+		t.Errorf("edit of the user settings under a relative CLAUDE_CONFIG_DIR: %s, want ask", out)
+	}
+}

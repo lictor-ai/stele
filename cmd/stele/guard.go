@@ -142,8 +142,22 @@ func sessionSettings(ev claudecode.Event, file string) bool {
 		}
 		cfg = filepath.Join(home, ".claude")
 	}
+	cfg, err := filepath.Abs(cfg) // a relative CLAUDE_CONFIG_DIR is the process's
+	if err != nil {
+		return false
+	}
 	rel, ok := below(cfg, file)
 	return ok && scope.Match("/settings.json", cleanRel(rel))
+}
+
+// loadsSettings reports whether a write to file, or through the links on its
+// way, lands on a settings file the session loads.
+func loadsSettings(ev claudecode.Event, file string) bool {
+	if sessionSettings(ev, file) {
+		return true
+	}
+	r, ok := resolve(file)
+	return ok && r != file && sessionSettings(ev, r)
 }
 
 // below returns file relative to dir, with / separators; ok is false when
@@ -163,13 +177,10 @@ func askOutside(ev claudecode.Event) claudecode.Answer {
 	if !writes[ev.ToolName] {
 		return claudecode.Answer{}
 	}
-	if sessionSettings(ev, ev.File) {
+	if loadsSettings(ev, ev.File) {
 		return claudecode.Answer{Ask: install.AskMessage(showPath(filepath.ToSlash(ev.File)))}
 	}
 	r, ok := resolve(ev.File)
-	if ok && r != ev.File && sessionSettings(ev, r) {
-		return claudecode.Answer{Ask: install.AskMessage(showPath(filepath.ToSlash(ev.File)))}
-	}
 	if !ok || r == ev.File {
 		return claudecode.Answer{}
 	}
