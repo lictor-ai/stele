@@ -121,7 +121,7 @@ Scope globs:
 
 Add `--format json` for JSON. Deleted files are skipped.
 
-`stele check` first checks the rules: `stele.md` must parse, every rule must be valid, and `stele.lock` must be committed and current. Then it checks the files:
+`stele check` first checks the rules: `stele.md` must parse, every rule must be valid, and `stele.lock` must be committed and current. In a checkout with no `stele.md`, `stele.json` or `stele.lock` (a submodule, a worktree of a branch without rules, a repository that adds the CI job before its `stele.md`), it says `nothing to check` and exits 0; with `--base` it still reports a deleted `stele.md`. Then it checks the files:
 
 ```
 $ stele check
@@ -137,7 +137,7 @@ With `--base`, `stele check` also says when the branch adds, changes or deletes 
 
 | Exit | Meaning |
 |---|---|
-| 0 | Rules are valid and there is no blocking violation |
+| 0 | Rules are valid (or there are none) and there is no blocking violation |
 | 1 | A rule is invalid, `stele.lock` is out of date, or there is a blocking violation |
 | 2 | stele couldn't run: bad flags, no git, unknown `--base` ref, no merge base |
 
@@ -187,7 +187,7 @@ Optional, committed next to `stele.md`. These are the defaults:
 6. **After an Edit, only the lines it wrote are checked.** If stele can't locate them (Claude Code sent no patch and the new text appears more than once), nothing is checked after that edit. Older violations in the file are left to `stele check`.
 7. **Binary files and files over 32 MiB are skipped.** The skip is reported, not silent.
 8. **Output is capped.** `stele check` shows at most 100 violations per rule and file; the agent gets at most 20 per message.
-9. **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too. So is a git worktree or submodule (a directory with its own `.git`): it gets no rules from an outer `stele.md`, only from its own.
+9. **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too. So is a git worktree or submodule (a directory with its own `.git`): it gets no rules from an outer `stele.md`, only from its own. `stele check` there says nothing to check until it has its own `stele.md`.
 10. **Nothing leaves the machine.** stele makes no network calls. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 11. **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
 12. **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about.
