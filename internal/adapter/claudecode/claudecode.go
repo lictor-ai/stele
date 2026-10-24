@@ -24,6 +24,11 @@
 //     reaches the user. A SessionStart or SubagentStart hook's
 //     additionalContext reaches Claude at the start of the conversation, before
 //     the first prompt; SessionStart fires again after /clear and compaction.
+//   - Before a Bash call, tool_input carries the command line, and
+//     run_in_background. stele reads the command, never runs it (#57). After
+//     it, tool_response may carry a bashEditDiff, but only in auto mode or
+//     with a user setting, as a beta whose shape may change: stele does not
+//     use it.
 //   - Exit code 0 with JSON on stdout is the only path stele uses. Exit 2
 //     would block regardless of the JSON, and any other code is ignored.
 package claudecode
@@ -46,6 +51,10 @@ type Event struct {
 	// File is the absolute path of the file the tool writes, or "" when the
 	// tool writes no file stele knows how to find.
 	File string
+	// Command is a Bash call's command line, which stele reads for the files
+	// it writes (#57); Background is its run_in_background.
+	Command    string
+	Background bool
 	// NewText is what the tool puts in the file: the content of a Write, the
 	// new_string of an Edit, or each edit's new_string of a MultiEdit.
 	NewText []string
@@ -128,6 +137,8 @@ func Parse(stdin []byte) (Event, error) {
 				NewString  string `json:"new_string"`
 				ReplaceAll bool   `json:"replace_all"`
 			} `json:"edits"`
+			Command         string `json:"command"`
+			RunInBackground bool   `json:"run_in_background"`
 		} `json:"tool_input"`
 		// Raw: tool_response is not an object for every tool.
 		ToolResponse json.RawMessage `json:"tool_response"`
@@ -148,6 +159,9 @@ func Parse(stdin []byte) (Event, error) {
 		AgentID:   p.AgentID,
 		Cwd:       p.Cwd,
 		ToolName:  p.ToolName,
+	}
+	if p.ToolName == "Bash" {
+		e.Command, e.Background = p.ToolInput.Command, p.ToolInput.RunInBackground
 	}
 	if f := p.ToolInput.FilePath; f != "" {
 		if !filepath.IsAbs(f) && p.Cwd != "" {
