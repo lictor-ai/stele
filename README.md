@@ -97,6 +97,7 @@ Scope globs:
 - A leading `/` anchors at the root: `/*.go`.
 - A trailing `/` matches everything under a directory: `migrations/`.
 - `{a,b}` matches either: `src/**/*.{go,ts}`.
+- A leading `!` excludes: `["internal/**/*.go", "!**/*_test.go"]`. Order does not matter, and a scope of only exclusions means every other file. To match a file whose name starts with `!`, write `\!`.
 - On Windows and macOS, matching ignores case.
 
 ## What the agent sees
@@ -176,7 +177,7 @@ Optional, committed next to `stele.md`. These are the defaults:
 2. **Only Write, Edit and MultiEdit are hooked.** A file written through Bash (`sed -i`, `cat >`) or NotebookEdit gets no rules and no check. `stele check` in CI is the only catch.
 3. **The agent can ignore the rules.** It is shown them and told about violations, but it can still choose not to follow them.
 4. **A regex check only catches what a pattern can express.** It matches text, not code, so it also fires in comments and strings. RE2 has no lookaround or backreferences. The pattern runs over the whole file: use `(?m)` for `^` and `$` to mean line start and end.
-5. **A rule with no `scope` is shown for every file.** Keep unscoped rules few. Rules are chosen by path, not by task.
+5. **A rule with no `scope`, or only `!` exclusions, is shown for every other file.** Keep such rules few. Rules are chosen by path, not by task.
 6. **After an Edit, only the lines it wrote are checked.** If stele can't locate them (Claude Code sent no patch and the new text appears more than once), nothing is checked after that edit. Older violations in the file are left to `stele check`.
 7. **Binary files and files over 32 MiB are skipped.** The skip is reported, not silent.
 8. **Output is capped.** `stele check` shows at most 100 violations per rule and file; the agent gets at most 20 per message.

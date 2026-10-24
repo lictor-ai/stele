@@ -10,17 +10,22 @@
 //   - a pattern with no / matches the file's name at any depth: "*.go"
 //   - a leading / or ./ anchors it at the root: "/*.go" is root files only
 //   - a pattern ending in / matches everything under that directory: "docs/"
+//   - a leading ! excludes: ["internal/**/*.go", "!**/*_test.go"]. Order
+//     does not matter, and a scope of only exclusions means every other file.
+//     A literal leading ! is written \!
 //
 // On Windows and macOS, whose file systems ignore case, so does matching: an
 // agent that writes Internal/x.go writes into internal/.
 //
 // A malformed pattern, one longer than 1 KB, or one that expands to more than
-// 256 alternatives matches nothing. Those caps bound the work whatever the
+// 256 alternatives matches nothing; as an exclusion, it excludes nothing, so
+// it never hides a rule. Those caps bound the work whatever the
 // pattern: stele.md comes from the repository, and the hook runs on every
 // write. Real scope globs are a few dozen characters.
 package scope
 
 import (
+	"fmt"
 	"path"
 	"runtime"
 	"strings"
@@ -38,18 +43,43 @@ const (
 // does. Tests set it.
 var foldCase = runtime.GOOS == "windows" || runtime.GOOS == "darwin"
 
-// Applies reports whether a rule with these scope patterns applies to file. A
-// rule with no scope applies everywhere.
+// Applies reports whether a rule with these scope patterns applies to file.
+// A pattern starting with ! excludes: the rule applies when file matches no
+// exclusion and at least one other pattern. With no other pattern (no scope,
+// or only exclusions) it applies to every file not excluded.
 func Applies(patterns []string, file string) bool {
-	if len(patterns) == 0 {
-		return true
-	}
+	included, includes := false, false
 	for _, p := range patterns {
-		if Match(p, file) {
-			return true
+		if rest, ok := strings.CutPrefix(p, "!"); ok {
+			if Match(rest, file) {
+				return false
+			}
+			continue
+		}
+		includes = true
+		if !included {
+			included = Match(p, file)
 		}
 	}
-	return false
+	return included || !includes
+}
+
+// Validate reports the first pattern that cannot be used: an exclusion with
+// no pattern after the !, whitespace after the !, or a second !.
+func Validate(patterns []string) error {
+	for _, p := range patterns {
+		rest, ok := strings.CutPrefix(p, "!")
+		switch {
+		case !ok:
+		case strings.TrimSpace(rest) == "":
+			return fmt.Errorf("%q has no pattern after the !", p)
+		case strings.TrimLeft(rest, " \t") != rest:
+			return fmt.Errorf("%q has whitespace after the !", p)
+		case strings.HasPrefix(rest, "!"):
+			return fmt.Errorf("%q: one ! only", p)
+		}
+	}
+	return nil
 }
 
 // Match reports whether file matches the glob pattern.

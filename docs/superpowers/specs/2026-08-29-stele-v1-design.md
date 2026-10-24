@@ -302,6 +302,8 @@ out of the rules (§6) (D56).
 * a list with no closing `]`, an empty item in a list, or a quote in a list that
   never closes
 * a code block or an HTML comment that never closes
+* a `scope` item that is `!` with no pattern after it, has whitespace after the
+  `!`, or starts with `!!` (D59)
 
 A missing `stele.md` is not an error. It gives no rules.
 
@@ -311,7 +313,7 @@ A missing `stele.md` is not an error. It gives no rules.
 | :-- | :-- |
 | `description` | What the matcher keys on. Absent means the body is used. Useful only for long rules. |
 | `tags` | Free vocabulary. stele ships none and imposes none. |
-| `scope` | Path globs. In v1, the filter that decides which rules the hook shows for a file (D58); a rule with no `scope` is shown for every file. For the team matcher, a hint, not a hard filter — see `O-CORPUS`. For a checker it is a filter (§8). |
+| `scope` | Path globs. In v1, the filter that decides which rules the hook shows for a file (D58); a rule with no `scope` is shown for every file. An item starting with `!` excludes (D59): `["internal/**/*.go", "!**/*_test.go"]`. For the team matcher, a hint, not a hard filter — see `O-CORPUS`. For a checker it is a filter (§8). |
 | `check` | The checker that checks this rule in CI, for example `regex`. Absent means the rule is guidance only. |
 | `blocking` | `true` or `false`: whether a violation fails `stele check`. Default `true` when `check` is set. |
 
@@ -781,6 +783,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D56 | `stele.md` follows Markdown where it can: a `---` inside a fenced code block or an HTML comment does not separate rules, and HTML comments before a rule's metadata are skipped. | — |
 | D57 | stele trusts only the generated files it wrote on this machine. `index.json` and session state carry an HMAC-SHA256 made with a per-user key kept outside every repository (the user config directory, owner-only); a file that does not verify is rebuilt or started afresh. `stele.lock` is shared on purpose and not signed. Malware running as the user is out of scope. | follows from D24 and D45: `.stele/` is not covered by the repository's `.gitignore`, so a repository could otherwise commit an index the agent is served |
 | D58 | v1 is for one developer. Rules are chosen by `scope`, not by a model: a `PreToolUse` hook denies a write that brings rules not yet shown this turn, with those rules as the reason; a `PostToolUse` hook runs built-in checks on the written file and reports violations. The MCP server, matcher subagent, logging, plugins and sinks move to the "team" milestone, with D12–D15, D30, D33–D35 and D39; D16, D29 and D37 are amended. | ADR-0004 |
+| D59 | A `scope` item starting with `!` excludes: a rule applies to a file that matches no exclusion and at least one other item; a scope of only exclusions applies to every other file. Order does not matter. A broken exclusion excludes nothing. | e2e 2026-10-23, What to change 1 (#39) |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 

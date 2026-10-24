@@ -175,6 +175,19 @@ Never put credentials in source code.
 			})},
 		},
 		{
+			name: "scope exclusions",
+			src:  "scope: [\"internal/**/*.go\", \"!**/*_test.go\"]\n\nBody.\n",
+			want: []source.Rule{rule(0, 1, source.Rule{
+				Scope: []string{"internal/**/*.go", "!**/*_test.go"},
+				Body:  "Body.",
+			})},
+		},
+		{
+			name: "a single exclusion without brackets",
+			src:  "scope: \"!**/*_test.go\"\n\nBody.\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Scope: []string{"!**/*_test.go"}, Body: "Body."})},
+		},
+		{
 			name: "empty list",
 			src:  "tags: []\n\nBody.\n",
 			want: []source.Rule{rule(0, 1, source.Rule{Body: "Body."})},
@@ -265,6 +278,9 @@ func TestParseErrors(t *testing.T) {
 			wantMsg: "stele.md:3: unclosed comment",
 		},
 		{name: "unclosed quote in a list", src: "tags: [\"a, b]\n\nBody.\n", wantMsg: "stele.md:1: tags: unclosed quote"},
+		{name: "exclusion with no pattern", src: "One.\n---\nscope: [a, \"!\"]\n\nBody.\n", wantMsg: `stele.md:3: scope: "!" has no pattern after the !`},
+		{name: "bare exclusion", src: "scope: !\n\nBody.\n", wantMsg: `stele.md:1: scope: "!" has no pattern after the !`},
+		{name: "double exclusion", src: "scope: [\"!!x\"]\n\nBody.\n", wantMsg: `stele.md:1: scope: "!!x": one ! only`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

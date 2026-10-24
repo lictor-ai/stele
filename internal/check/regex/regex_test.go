@@ -85,6 +85,15 @@ func TestCheckContent(t *testing.T) {
 		t.Errorf("CheckContent (-want +got):\n%s", diff)
 	}
 
+	// An excluded file gets nothing from the rule.
+	noTests := []check.Rule{{ID: "go", Scope: []string{"**/*.go", "!**/*_test.go"}, Meta: map[string]string{"pattern": "secret"}}}
+	if got := New().CheckContent(noTests, "a_test.go", []byte("secret\n")); len(got.Violations) != 0 {
+		t.Errorf("excluded file: %+v, want no violations", got.Violations)
+	}
+	if got := New().CheckContent(noTests, "a.go", []byte("secret\n")); len(got.Violations) != 1 {
+		t.Errorf("included file: %+v, want one violation", got.Violations)
+	}
+
 	// Binary: a NUL in the first 8 KB. Skipped, and said so.
 	bin := append([]byte("secret\x00"), "secret"...)
 	wantSkip := check.Result{Skipped: []check.Skip{{File: "a.bin", Reason: "binary"}}}

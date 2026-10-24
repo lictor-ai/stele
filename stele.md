@@ -94,10 +94,10 @@ stele.json and found on PATH ever run, never one inside the repository
 
 ---
 
-scope: ["internal/**/*.go"]
+scope: ["internal/**/*.go", "!**/*_test.go"]
 check: regex
-pattern: \bos\.Exit\(
-message: packages under internal/ return errors; only cmd/stele exits
+pattern: \bos\.Exit\(|\bfmt\.Print
+message: packages under internal/ return errors and values; only cmd/stele exits or prints
 
 Packages under internal/ never exit the process or print. They return errors
 and values; cmd/stele decides exit codes (0, 1, 2, spec §8) and what goes to
