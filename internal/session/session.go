@@ -69,6 +69,11 @@ type State struct {
 	// the main agent) to rule id to when it was shown. A subagent has its own
 	// context, so it has its own entry (ADR-0004).
 	Shown map[string]map[string]time.Time `json:"shown,omitempty"`
+	// Denied records, for each agent this turn, the files whose write was
+	// denied and when it was last denied: agent id to root-relative file to
+	// time. A later write to that file is the agent's retry after reading
+	// the reason.
+	Denied map[string]map[string]time.Time `json:"denied,omitempty"`
 	// VersionWarned is the version mismatch the user was last warned of,
 	// so the warning comes once a session.
 	VersionWarned string `json:"version_warned,omitempty"`

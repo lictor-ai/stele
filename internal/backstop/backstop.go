@@ -19,9 +19,19 @@ import (
 // Window is how long after a rule is shown a write that needs it is still
 // denied. The agent often issues several writes at once, and their hooks run
 // before it reads any deny reason; the window denies the whole batch, so the
-// agent reads the rules once and retries all of it. It is shorter than any
-// model round trip, so a retry after reading goes through.
+// agent reads the rules once and retries all of it. A model can retry within
+// the window, so a retry is recognised by its file: a write to a file whose
+// write was denied at least RetryAfter ago comes after that deny's reason
+// was read.
+// A time before a rule was shown (the clock moved back) is outside it.
 const Window = 3 * time.Second
+
+// RetryAfter is how long after a deny a write to the same file counts as the
+// agent's retry. The hooks of parallel tool calls run within milliseconds of
+// each other; a retry needs a model round trip, and the fastest seen took
+// 1.2 s. A write to the denied file sooner than this is a parallel write,
+// denied as any other in the window.
+const RetryAfter = 500 * time.Millisecond
 
 // Rule is a rule that applies to the file about to be written.
 type Rule struct {
@@ -33,6 +43,7 @@ type Rule struct {
 type Input struct {
 	PromptID string    // the turn; a new one starts with no rules shown
 	AgentID  string    // "" for the main agent; a subagent has its own record
+	File     string    // root-relative path of the file written; "" disables retry detection
 	Rules    []Rule    // every rule that applies to the file
 	Now      time.Time // when the hook runs
 }
@@ -52,8 +63,15 @@ func Decide(in Input, st session.State, p enforce.Policy) (Decision, session.Sta
 	if in.PromptID != st.PromptID {
 		st.PromptID = in.PromptID
 		st.Shown = nil
+		st.Denied = nil
 	}
 	shown := st.Shown[in.AgentID]
+	// A retry: this file's write was denied at least RetryAfter ago, so the
+	// agent has read that reason, which held every rule for the file shown
+	// at or before it. Sooner is a parallel write to the same file, and a
+	// deny in the future (the clock moved back) proves nothing.
+	deniedAt, retry := st.Denied[in.AgentID][in.File]
+	retry = retry && in.File != "" && in.Now.Sub(deniedAt) >= RetryAfter
 
 	var show []Rule
 	var fresh []string
@@ -63,7 +81,9 @@ func Decide(in Input, st session.State, p enforce.Policy) (Decision, session.Sta
 		case !seen:
 			show = append(show, r)
 			fresh = append(fresh, r.ID)
-		case in.Now.Sub(at) < Window:
+		case retry && !at.After(deniedAt):
+			// read in this file's deny reason, or before it
+		case inWindow(in.Now, at):
 			show = append(show, r) // same batch: shown, but not read yet
 		}
 	}
@@ -72,16 +92,32 @@ func Decide(in Input, st session.State, p enforce.Policy) (Decision, session.Sta
 	}
 
 	// Copy before writing, so the caller's state is never changed in place.
-	next := make(map[string]map[string]time.Time, len(st.Shown)+1)
-	maps.Copy(next, st.Shown)
-	agent := maps.Clone(shown)
-	if agent == nil {
-		agent = make(map[string]time.Time, len(fresh))
+	st.Shown = with(st.Shown, in.AgentID, fresh, in.Now)
+	if in.File != "" {
+		st.Denied = with(st.Denied, in.AgentID, []string{in.File}, in.Now)
 	}
-	for _, id := range fresh {
-		agent[id] = in.Now
-	}
-	next[in.AgentID] = agent
-	st.Shown = next
 	return Decision{Deny: true, Rules: show}, st
+}
+
+// inWindow reports whether now is within Window after at. A now before at
+// means the clock moved back, and is outside: the rule counts as read.
+func inWindow(now, at time.Time) bool {
+	d := now.Sub(at)
+	return d >= 0 && d < Window
+}
+
+// with returns a copy of m in which agent's keys are stamped at, leaving m
+// and its inner maps unchanged.
+func with(m map[string]map[string]time.Time, agent string, keys []string, at time.Time) map[string]map[string]time.Time {
+	next := make(map[string]map[string]time.Time, len(m)+1)
+	maps.Copy(next, m)
+	inner := maps.Clone(m[agent])
+	if inner == nil {
+		inner = make(map[string]time.Time, len(keys))
+	}
+	for _, k := range keys {
+		inner[k] = at
+	}
+	next[agent] = inner
+	return next
 }

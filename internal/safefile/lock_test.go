@@ -111,6 +111,38 @@ func TestLockTimesOut(t *testing.T) {
 
 // A stale lock is taken over, and the old holder's unlock then leaves the new
 // holder's lock alone.
+// A lock dated well in the future was left before the clock moved back: it
+// is stale, or every update would wait for it until the clock caught up.
+// One dated a moment ahead is still live.
+func TestLockFromTheFuture(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		ahead     time.Duration
+		wantTaken bool
+	}{
+		{"an hour ahead is stale", time.Hour, true},
+		{"a second ahead is live", time.Second, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			name := filepath.Join(t.TempDir(), "x.lock")
+			if err := os.WriteFile(name, []byte("crashed"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			future := time.Now().Add(tt.ahead)
+			if err := os.Chtimes(name, future, future); err != nil {
+				t.Fatal(err)
+			}
+			unlock, err := Lock(name, 100*time.Millisecond, 10*time.Second)
+			if taken := err == nil; taken != tt.wantTaken {
+				t.Fatalf("Lock: err %v, want taken %v", err, tt.wantTaken)
+			}
+			if unlock != nil {
+				unlock()
+			}
+		})
+	}
+}
+
 func TestLockStaleTakeover(t *testing.T) {
 	name := filepath.Join(t.TempDir(), "x.lock")
 	oldUnlock, err := Lock(name, time.Second, time.Minute)
