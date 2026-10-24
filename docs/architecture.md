@@ -543,7 +543,7 @@ shown, and three seconds is shorter than any model round trip.
 and tell the agent why. A broken `stele.md` with a good index behind it is not a
 failure: the last good rules apply, and a note in the answer tells the agent what
 is wrong. A repository without `stele.md` or `stele.json` is left alone entirely:
-the hook writes nothing there, even when it finds a `.git/`.
+the hook writes nothing there, even when it finds a `.git`.
 
 ### `internal/matcher` and `internal/serve`
 
@@ -765,9 +765,10 @@ rule id.
 
 `--relative` keeps a `stele.md` in a subdirectory of the repository to its own
 files. Names are taken exactly as git gives them. Files in a nested project — a
-directory below the root with a regular file named `stele.md` or `stele.json` —
-are left out: the hook gives them that project's rules (ADR-0004), so its own
-`stele check` does. Each such subproject is reported (`sub/: skipped N files`,
+directory below the root with a regular file named `stele.md` or `stele.json`, or
+with its own `.git` (a worktree or submodule) — are left out: the hook gives them
+that project's rules (ADR-0004, §6), so its own `stele check` does. Each such
+subproject is reported (`sub/: skipped N files`,
 and in JSON a `Skip` per file), so adding a `stele.json` cannot hide a directory
 from CI unseen. Text output quotes a file name that holds a control character,
 so a name cannot forge a line of the CI log. `check` receives a plain list of
@@ -1065,14 +1066,21 @@ blocking in the same millisecond can cross on (1); (2) removes even that.
 
 ## 6. Locating the project root
 
-Walk up from `cwd` for a directory containing `stele.md` or `stele.json`. If none,
-walk up for one containing `.git/` and use that. `stele.json` counts because a
-repository may take all its rules from other sources and have no `stele.md`.
+Walk up from `cwd` (the hook: from the written file's directory) for the nearest
+directory containing `stele.md`, `stele.json` or `.git`, and use that. `stele.json`
+counts because a repository may take all its rules from other sources and have
+no `stele.md`.
 
-`stele.md` comes first because it is what the user placed deliberately — in a
-monorepo, a subproject with its own rules should use them rather than the root's.
-`.git/` is the fallback for a repository that has stele installed but no rules
-written yet, which is the state right after `init`.
+The nearest wins, so in a monorepo a subproject with its own rules uses them
+rather than the root's. A `.git` — a directory in a repository, the file a git
+worktree or submodule has — ends the search: rules never cross into another
+checkout (#43). A worktree on a branch without `stele.md` gets no rules, as CI
+on that branch would check none; otherwise its paths would start with
+`.claude/worktrees/<id>/` and miss every scope written for the project. A
+submodule is another repository, whose files the outer `stele check` never
+sees: it gets rules only from a `stele.md` of its own. A `.git` with no rule
+file beside it is a repository that has stele installed but no rules written
+yet, which is the state right after `init`.
 
 `.stele/` is always a sibling of `stele.md` at whichever root wins. It is never
 searched for independently, because a stale `.stele/` left behind by an
@@ -1294,7 +1302,9 @@ stele hook         read a Claude Code hook payload on stdin, decide
 `init` and `uninstall` work in the current directory, never an ancestor: Claude
 Code reads `.claude/settings.json` from the directory it starts in. They print
 that directory first, and a note when an ancestor holds `.git`, `stele.md` or
-`stele.json`. `init` then prints one line per thing it wrote; run again, it
+`stele.json` — unless the directory holds `.git` itself: a worktree's or
+submodule's root is a repository root, whatever is above it (#42). `init` then
+prints one line per thing it wrote; run again, it
 writes nothing unless the stamp it would write differs from the one there. Both `init` and `uninstall` exit 0, or 2 when
 they could not run. The version is set at release with `-ldflags "-X
 main.version=..."`, else read from the build info, else `devel`; `init`

@@ -162,9 +162,9 @@ func beforeWrite(ev claudecode.Event) claudecode.Answer {
 	return claudecode.Answer{Deny: true, Reason: install.BlockMessage(rel, shown, note)}
 }
 
-// usesStele reports whether root has stele.md or stele.json. findRoot falls
-// back to a .git directory, and a repository that does not use stele must not
-// get a stele.lock or a .stele/ from a hook registered user-wide.
+// usesStele reports whether root has stele.md or stele.json. findRoot stops
+// at a .git, and a repository that does not use stele must not get a
+// stele.lock or a .stele/ from a hook registered user-wide.
 func usesStele(root string) bool {
 	for _, name := range []string{"stele.md", enforce.FileName} {
 		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
