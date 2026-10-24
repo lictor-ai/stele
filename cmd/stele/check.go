@@ -24,6 +24,7 @@ import (
 	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/plugin"
+	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/source"
 )
 
@@ -284,8 +285,9 @@ func ruleFileChanges(root, base string) ([]check.RuleFileChange, error) {
 	var cs []check.RuleFileChange
 	for i := 0; i+1 < len(out); i += 2 {
 		status, file := out[i], out[i+1]
-		name := strings.ToLower(path.Base(file))
-		if name != "stele.md" && name != strings.ToLower(enforce.FileName) {
+		// Case is ignored only where stele ignores it (scope.Match): on Linux
+		// stele never reads a STELE.md.
+		if !scope.Match("stele.md", file) && !scope.Match(enforce.FileName, file) {
 			continue
 		}
 		if c, ok := changes[status]; ok {
@@ -376,7 +378,7 @@ func printCheck(w io.Writer, lf lock.File, rep check.Report, subs []subproject, 
 	files -= len(skipped)
 	for _, c := range rep.RuleFilesChanged {
 		what := "it holds the project's rules"
-		if strings.EqualFold(path.Base(c.File), enforce.FileName) {
+		if scope.Match(enforce.FileName, c.File) {
 			what = "it sets how strictly the rules are enforced"
 		}
 		fmt.Fprintf(w, "%s: %s on this branch: %s; review the change\n", showPath(c.File), c.Change, what)

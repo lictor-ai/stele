@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -80,6 +81,19 @@ func TestCheckBaseReportsDeletedRuleFiles(t *testing.T) {
 				t.Errorf("stdout = %q, stderr %q, want stele.json deleted", out, errOut)
 			}
 		})
+	}
+}
+
+// stele reads STELE.md only where file names ignore case, so only there is
+// it a rules change.
+func TestCheckBaseRuleFileCase(t *testing.T) {
+	root := rulesBranch(t, "")
+	writeAt(t, root, "docs/STELE.md", "notes\n")
+	commitAll(t, root, "notes")
+	_, out, _ := runCmd("check", "--base", "main")
+	folds := runtime.GOOS == "windows" || runtime.GOOS == "darwin"
+	if got := strings.Contains(out, "docs/STELE.md: added on this branch"); got != folds {
+		t.Errorf("docs/STELE.md reported = %v, want %v on %s; stdout %q", got, folds, runtime.GOOS, out)
 	}
 }
 
