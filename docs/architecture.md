@@ -993,7 +993,7 @@ whenever the session's `cwd` is in a stele project. Claude Code reloads
 settings mid-session, so removing stele's entries or adding `disableAllHooks`
 switches stele off at once. Its own protection of `.claude` is not enough: it
 is silent in `bypassPermissions`, goes to the classifier in `auto`, and can be
-turned off for a session ("allow … this project's .claude folder"). Every edit
+turned off for a session ("allow â€¦ this project's .claude folder"). Every edit
 asks, without reading the file: `disableAllHooks` in any loaded file switches
 stele off, whether the file holds stele's entries or not. The `ConfigChange`
 hook was considered and left out: it cannot stop the file on disk changing,
