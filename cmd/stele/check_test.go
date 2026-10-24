@@ -55,7 +55,8 @@ func gitProject(t *testing.T, steleMD string) string {
 	gitT(t, root, "config", "commit.gpgsign", "false")
 	gitT(t, root, "config", "core.autocrlf", "false")
 	if steleMD != "" {
-		if code, _, errOut := runCmd("compile"); code != exitOK {
+		// An invalid rule exits 1, but the files are written all the same.
+		if code, _, errOut := runCmd("compile"); code != exitOK && code != exitFailed {
 			t.Fatalf("compile = %d, stderr %q", code, errOut)
 		}
 	}

@@ -47,6 +47,8 @@ wrote stele.lock and .stele/index.json
 
 **Commit** `stele.md`, `stele.lock`, `.claude/settings.json`, and `stele.json` if you have one. **Don't commit** `.stele/`; it ignores itself.
 
+If a rule can't be used — a `check` other than `regex`, a pattern that doesn't compile or matches empty text, a `blocking` that isn't `true` or `false` — `stele compile` names it and exits 1. It still writes `stele.lock`, so the rule keeps its id, and the hook enforces the other rules and tells you once a session.
+
 The hook also recompiles when `stele.md` changes, so edits take effect on the next write. Commit the updated `stele.lock`.
 
 To remove stele: `stele uninstall`. It removes stele's hooks and `.stele/`, and keeps `stele.md`, `stele.lock` and `stele.json`.
@@ -102,7 +104,7 @@ Scope globs:
 
 ## What the agent sees
 
-- **Before a write.** The first write in a turn to a file with rules the agent hasn't seen this turn is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent.
+- **Before a write.** The first write in a turn to a file with rules the agent hasn't seen this turn is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent. A retry of the denied write goes through; parallel writes in the same message, to other files or to the same one, are denied too, once.
 - **After a write.** A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
 - **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` says. A change there can weaken stele or turn it off. Allow it only if you asked for it.
@@ -128,7 +130,7 @@ main.go:7:10: error 2de7574e-7106-4986-8ce6-996d06e2703a "Never put credentials 
 checked 1 file: 2 errors
 ```
 
-A non-blocking violation prints `warning` instead of `error`.
+A non-blocking violation prints `warning` instead of `error`. Lines and columns start at 1; a column counts characters.
 
 With `--base`, `stele check` also says when the branch adds, changes or deletes a `stele.md` or `stele.json` (`stele.md: modified on this branch: ...`), so reviewers see a change to the rules. It doesn't change the exit code; in JSON it is `rule_files_changed`.
 

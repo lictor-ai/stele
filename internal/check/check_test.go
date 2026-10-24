@@ -129,6 +129,35 @@ func TestRunGroupsRulesByChecker(t *testing.T) {
 	}
 }
 
+func TestValidate(t *testing.T) {
+	idx := index.Index{Rules: []index.Entry{
+		entry("unknown", "Use semgrep.", nil, map[string]string{"check": "semgrep"}),
+		entry("empty", "Empty check.", nil, map[string]string{"check": " "}),
+		entry("yes", "Blocking yes.", nil, map[string]string{"check": "fake", "blocking": "yes"}),
+		entry("bad", "Fails validation.", nil, map[string]string{"check": "fake"}),
+		entry("good", "Still runs.", nil, map[string]string{"check": "fake"}),
+		entry("guide", "Guidance only.", nil, nil),
+	}}
+	f := &fake{name: "fake", problems: []Problem{{RuleID: "bad", Message: "fake: no pattern"}}}
+	got := Validate(idx, map[string]Checker{"fake": f})
+	r, err := Run(context.Background(), "root", idx, nil, map[string]Checker{"fake": &fake{name: "fake", problems: f.problems}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(r.Problems, got); diff != "" {
+		t.Errorf("Validate differs from Run's problems (-run +validate):\n%s", diff)
+	}
+	if len(got) != 4 {
+		t.Errorf("Validate = %d problems, want 4", len(got))
+	}
+	if f.gotRules != nil || f.gotFiles != nil {
+		t.Errorf("Validate ran the checker on rules %v, files %v; it must read no file", f.gotRules, f.gotFiles)
+	}
+	if ps := Validate(index.Index{}, map[string]Checker{"fake": f}); len(ps) != 0 {
+		t.Errorf("Validate(empty index) = %v, want none", ps)
+	}
+}
+
 func TestRunRuleProblems(t *testing.T) {
 	idx := index.Index{Rules: []index.Entry{
 		entry("unknown", "Use semgrep.", nil, map[string]string{"check": "semgrep"}),
