@@ -951,8 +951,12 @@ Verified against the Claude Code documentation rather than assumed.
 "allow"`: that would skip the user's own permission prompts.
 
 **Output to ask** (#52): a Write, Edit or MultiEdit to one of stele's own files
-(`stele.md`, `stele.json`, `stele.lock`, `.stele/`, at any depth, by name, through a
-link, or as the same file) answers `permissionDecision: "ask"`, before `stele.json`
+(`stele.md`, `stele.json`, `stele.lock`, `.stele/`) answers `permissionDecision:
+"ask"`, before `stele.json` is read. Names count at any depth, a subproject's too,
+and symlinks and junctions on the way are followed, from inside a project or
+outside every project. A hard link or an 8.3 short name, which only a same-file
+test tells, is caught for the root's `stele.md`, `stele.json`, `stele.lock` and
+`.stele/` only. The ask comes before `stele.json`
 is read, so `backstop` and `block_on_error` change nothing. Claude Code shows
 `permissionDecisionReason` to the user in the prompt; with no one to answer
 (`claude -p`) the call is refused. A deny from another hook wins over it. The

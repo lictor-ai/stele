@@ -188,7 +188,7 @@ Optional, committed next to `stele.md`. These are the defaults:
 10. **Nothing leaves the machine.** stele makes no network calls. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 11. **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
 12. **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about.
-13. **Asking before a write to stele's own files covers Write, Edit and MultiEdit only.** A Bash command, a NotebookEdit, or an edit to `.claude/settings.json` that removes the hooks, is not asked about. With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
+13. **Asking before a write to stele's own files covers Write, Edit and MultiEdit only, and their names and links.** A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock` and `.stele/`. A Bash command, a NotebookEdit, or an edit to `.claude/settings.json` that removes the hooks, is not asked about. With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
 
 ## License
 

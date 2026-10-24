@@ -16,9 +16,11 @@ import (
 var ownNames = []string{"stele.md", enforce.FileName, "stele.lock", ".stele", "**/.stele/"}
 
 // guarded reports whether a write to file, rel to root, changes one of
-// stele's own files: by name, through a link, or as the same file under
-// another name. A change there can weaken stele or turn it off, so the user
-// is asked every time (#52).
+// stele's own files. Names count at any depth, a subproject's too, and so do
+// symlinks and junctions on the way, followed everywhere. A hard link or an
+// 8.3 short name, which only a same-file test can tell, is caught for the
+// root's stele.md, stele.json, stele.lock and .stele/ only. A change there
+// can weaken stele or turn it off, so the user is asked every time (#52).
 func guarded(root, rel, file string) bool {
 	if ownName(rel) {
 		return true
@@ -28,8 +30,7 @@ func guarded(root, rel, file string) bool {
 			return true
 		}
 	}
-	// A directory that is .stele under another name: a junction, which
-	// EvalSymlinks does not follow on Windows, or an 8.3 short name.
+	// The root's .stele under another name, such as an 8.3 short name.
 	if dot, err := os.Stat(filepath.Join(root, ".stele")); err == nil {
 		for d := filepath.Dir(file); ; d = filepath.Dir(d) {
 			if info, err := os.Stat(d); err == nil && os.SameFile(info, dot) {
@@ -40,7 +41,8 @@ func guarded(root, rel, file string) bool {
 			}
 		}
 	}
-	// A hard link, or a name Windows maps to the same file.
+	// The root's own files under another name: a hard link, or an 8.3 short
+	// name.
 	info, err := os.Stat(file)
 	if err != nil {
 		return false
