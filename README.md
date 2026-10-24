@@ -108,7 +108,7 @@ Scope globs:
 - **Before a write.** The first write in a turn to a file with rules the agent hasn't seen this turn is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent. A retry of the denied write goes through; parallel writes in the same message, to other files or to the same one, are denied too, once.
 - **After a write.** A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
-- **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` says. A change there can weaken stele or turn it off. Allow it only if you asked for it.
+- **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` says. So does a write to Claude Code's settings files, which run stele's hooks: `.claude/settings.json` and `.claude/settings.local.json` anywhere in the project or from the session's directory up to the git root, and your user `settings.json`. A change there can weaken stele or turn it off. Allow it only if you asked for it.
 
 ## CI: stele check
 
@@ -191,7 +191,7 @@ Optional, committed next to `stele.md`. These are the defaults:
 10. **Nothing leaves the machine.** stele makes no network calls. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 11. **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
 12. **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about.
-13. **Asking before a write to stele's own files covers Write, Edit and MultiEdit only, and their names and links.** A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock` and `.stele/`. A Bash command, a NotebookEdit, or an edit to `.claude/settings.json` that removes the hooks, is not asked about. With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
+13. **Asking before a write to stele's own files covers Write, Edit and MultiEdit only, and their names and links.** A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock`, `.stele/` and `.claude` settings files. Not asked about: a Bash command, a NotebookEdit, managed settings, settings passed with `--settings` or the environment, and a session started above the stele project with hooks registered there by hand. With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
 
 ## License
 
