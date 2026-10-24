@@ -160,7 +160,14 @@ func beforeWrite(ev claudecode.Event) claudecode.Answer {
 	// is answered: a deny that was not recorded would repeat forever.
 	var d backstop.Decision
 	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
-		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, File: rel, Rules: rules, Now: now()}
+		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, File: rel, Rules: rules, Now: now(),
+			Fit: func(rs []backstop.Rule) int {
+				// At least one: a rule too long for any message would
+				// otherwise be denied forever.
+				return max(1, install.FitRules(len(rs), install.MaxMessage, func(k int) string {
+					return install.BlockMessageMore(rel, blockRules(rs[:k]), len(rs)-k, note)
+				}))
+			}}
 		d, *st = backstop.Decide(in, *st, policy)
 		return nil
 	})
@@ -170,11 +177,16 @@ func beforeWrite(ev claudecode.Event) claudecode.Answer {
 	if !d.Deny {
 		return claudecode.Answer{Context: note}
 	}
-	shown := make([]install.BlockRule, len(d.Rules))
-	for i, r := range d.Rules {
-		shown[i] = install.BlockRule{ID: r.ID, Text: r.Text}
+	return claudecode.Answer{Deny: true, Reason: install.BlockMessageMore(rel, blockRules(d.Rules), d.More, note)}
+}
+
+// blockRules is rules as a message shows them.
+func blockRules(rules []backstop.Rule) []install.BlockRule {
+	out := make([]install.BlockRule, len(rules))
+	for i, r := range rules {
+		out[i] = install.BlockRule{ID: r.ID, Text: r.Text}
 	}
-	return claudecode.Answer{Deny: true, Reason: install.BlockMessage(rel, shown, note)}
+	return out
 }
 
 // usesStele reports whether root has stele.md or stele.json. findRoot stops

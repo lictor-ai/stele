@@ -137,6 +137,40 @@ func TestDecideBash(t *testing.T) {
 	}
 }
 
+// Rules that do not fit in the message stay unseen: the next write shows
+// them.
+func TestDecideFitsTheMessage(t *testing.T) {
+	first := func(rs []Rule) int { return 1 }
+	d, st := Decide(Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Fit: first, Now: t0}, session.State{}, on)
+	if !d.Deny || len(d.Rules) != 1 || d.Rules[0] != sqlRule || d.More != 1 {
+		t.Fatalf("first deny = %+v", d)
+	}
+	if _, ok := st.Shown[""]["log"]; ok {
+		t.Error("a rule left out of the message is marked shown")
+	}
+	// The retry shows the rest.
+	d, st = Decide(Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Fit: first, Now: t0.Add(time.Second)}, st, on)
+	if !d.Deny || len(d.Rules) != 1 || d.Rules[0] != logRule || d.More != 0 {
+		t.Fatalf("retry = %+v", d)
+	}
+	if d, _ := Decide(Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Fit: first, Now: t0.Add(2 * time.Second)}, st, on); d.Deny {
+		t.Errorf("third write = %+v, want it through", d)
+	}
+
+	// Bash: the same, and the Write the agent makes instead shows the rest.
+	bd, st := DecideBash(BashInput{PromptID: "p1", Files: []BashFile{{File: "b.go", Rules: []Rule{sqlRule, logRule}}}, Fit: first, Now: t0}, session.State{}, on)
+	if !bd.Deny || len(bd.Rules) != 1 || bd.More != 1 {
+		t.Fatalf("bash deny = %+v", bd)
+	}
+	if _, ok := st.Shown[""]["log"]; ok {
+		t.Error("a rule left out of the Bash message is marked shown")
+	}
+	d, _ = Decide(Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule, logRule}, Now: t0.Add(time.Second)}, st, on)
+	if !d.Deny || len(d.Rules) != 1 || d.Rules[0] != logRule {
+		t.Errorf("the Write after = %+v, want a deny with the rule left out", d)
+	}
+}
+
 // A Write to a file whose Bash write was just denied is the agent doing as
 // told: the rules it was shown count as read.
 func TestDecideBashThenWrite(t *testing.T) {

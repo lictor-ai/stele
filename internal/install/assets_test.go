@@ -44,6 +44,32 @@ func TestMessagesSayWriteAndEdit(t *testing.T) {
 	}
 }
 
+func TestFitRules(t *testing.T) {
+	render := func(k int) string { return strings.Repeat("x", 10*k) }
+	for _, tt := range []struct{ n, limit, want int }{
+		{4, 100, 4}, {4, 35, 3}, {4, 10, 1}, {4, 5, 0}, {0, 100, 0},
+	} {
+		if got := FitRules(tt.n, tt.limit, render); got != tt.want {
+			t.Errorf("FitRules(%d, %d) = %d, want %d", tt.n, tt.limit, got, tt.want)
+		}
+	}
+}
+
+// Rules left out of a message are counted, and said to come next.
+func TestMessagesCountRulesLeftOut(t *testing.T) {
+	for name, s := range map[string]string{
+		"block": BlockMessageMore("a.go", []BlockRule{{Text: "r"}}, 2, ""),
+		"bash":  BashMessageMore([]string{"a.go"}, []BlockRule{{Text: "r"}}, 2, ""),
+	} {
+		if !strings.Contains(s, "2 more rules") || !strings.Contains(s, "next write") {
+			t.Errorf("%s message does not count the rules left out:\n%s", name, s)
+		}
+	}
+	if s := BlockMessage("a.go", []BlockRule{{Text: "r"}}, ""); strings.Contains(s, "more rules") {
+		t.Errorf("nothing left out, yet:\n%s", s)
+	}
+}
+
 func TestBashMessage(t *testing.T) {
 	got := BashMessage([]string{"internal/x.go", "a.go"}, []BlockRule{{ID: "a", Text: "Never build SQL by string concatenation."}}, "")
 	for _, want := range []string{

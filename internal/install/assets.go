@@ -25,12 +25,18 @@ type BlockRule struct {
 // when set, says something the agent should know, such as stele.md failing to
 // parse.
 func BlockMessage(path string, rules []BlockRule, note string) string {
+	return BlockMessageMore(path, rules, 0, note)
+}
+
+// BlockMessageMore is BlockMessage with more rules left out, counted.
+func BlockMessageMore(path string, rules []BlockRule, more int, note string) string {
 	var b strings.Builder
 	err := blockTemplate.Execute(&b, struct {
 		Path  string
 		Rules []BlockRule
+		More  int
 		Note  string
-	}{path, rules, note})
+	}{path, rules, more, note})
 	if err != nil {
 		panic(err) // the template is compiled in and tested
 	}
@@ -48,12 +54,18 @@ var bashTemplate = template.Must(template.New("bash-message").Parse(bashMessage)
 // BashMessage renders the message for a Bash command that writes paths.
 // rules are those the agent has not seen; note is as for BlockMessage.
 func BashMessage(paths []string, rules []BlockRule, note string) string {
+	return BashMessageMore(paths, rules, 0, note)
+}
+
+// BashMessageMore is BashMessage with more rules left out, counted.
+func BashMessageMore(paths []string, rules []BlockRule, more int, note string) string {
 	var b strings.Builder
 	err := bashTemplate.Execute(&b, struct {
 		Paths string
 		Rules []BlockRule
+		More  int
 		Note  string
-	}{strings.Join(paths, ", "), rules, note})
+	}{strings.Join(paths, ", "), rules, more, note})
 	if err != nil {
 		panic(err) // the template is compiled in and tested
 	}
@@ -150,6 +162,24 @@ var sessionContext string
 // SessionContext returns the text the agent reads when a session or subagent
 // starts.
 func SessionContext() string { return strings.TrimSpace(sessionContext) }
+
+// FitRules returns how many of n rules, kept whole and in order, fit in a
+// message within limit bytes; render renders it with the first k. Rules are
+// not cut: Claude Code passes a hook text on in full only up to 10,000
+// characters, and a rule cut off in a preview would count as shown. It is 0
+// when not even one fits.
+func FitRules(n, limit int, render func(k int) string) int {
+	lo, hi := 0, n // the answer is in [lo, hi]
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if len(render(mid)) <= limit {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return lo
+}
 
 // truncate cuts s to n characters, marking the cut with "…".
 func truncate(s string, n int) string {

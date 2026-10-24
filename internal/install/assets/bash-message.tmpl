@@ -9,3 +9,7 @@ Note: {{.Note}}
 ---
 {{.Text}}
 {{end -}}
+{{- if .More}}
+
+And {{.More}} more rules: they will be shown on your next write.
+{{- end}}

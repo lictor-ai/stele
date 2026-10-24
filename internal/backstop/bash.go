@@ -20,6 +20,7 @@ type BashInput struct {
 	AgentID  string
 	Files    []BashFile
 	Now      time.Time
+	Fit      func([]Rule) int // as for Input
 }
 
 // BashDecision is the hook's answer to a Bash command.
@@ -27,6 +28,7 @@ type BashDecision struct {
 	Deny  bool
 	Files []string // the files denied, in input order
 	Rules []Rule   // the rules the agent has not been shown, each once, in input order
+	More  int      // unseen rules left out of the message; they stay unseen
 }
 
 // DecideBash decides a Bash command that writes files with rules (#57). A
@@ -67,6 +69,10 @@ func DecideBash(in BashInput, st session.State, p enforce.Policy) (BashDecision,
 		return BashDecision{}, st
 	}
 	d.Deny = true
+	// Only the rules the message holds are shown; a Write shows the rest.
+	k := fit(in.Fit, d.Rules)
+	d.More = len(d.Rules) - k
+	d.Rules, fresh = d.Rules[:k], kept(fresh, d.Rules[:k])
 	// Copy before writing, so the caller's state is never changed in place.
 	st.BashDenied = with(st.BashDenied, in.AgentID, d.Files, in.Now)
 	st.Denied = with(st.Denied, in.AgentID, d.Files, in.Now)

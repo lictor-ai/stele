@@ -555,6 +555,14 @@ open is still denied once. A time before a rule was shown means the clock moved
 back, and counts as outside the window, so a jump back never causes a deny loop
 (#53).
 
+**The message holds what fits.** Claude Code passes a hook text on in full only
+up to 10,000 characters. A deny reason holds the rules that fit, kept whole and
+in order, within `install.MaxMessage` (`install.FitRules`, through
+`Input.Fit`), and says how many more there are. Only the rules it holds are
+marked shown; the rest stay unseen, so the next write, the retry, is denied
+with them. A Bash command writing into several projects shares one message
+budget across them. The first message shows at least one rule, however long.
+
 **Failures** — no key, a session that cannot be saved, an invalid `stele.json`,
 `stele.md` broken with no good index behind it — go to `failure`: with
 `block_on_error` off, allow and warn the user (`systemMessage`); with it on, deny
@@ -1050,9 +1058,13 @@ state.
 ```
 
 The hook reads the command, never runs it: `internal/shell` lexes it (quotes,
-heredoc bodies skipped, `$(…)` and backticks, `[[ ]]` and `(( ))`, `cd`, simple
-`NAME=value`, globs) and returns the files it writes by redirection, `tee`,
-`sed -i` and `perl -i`, and those `rm`, `mv`, `cp`, `ln` and `truncate` touch.
+heredoc bodies skipped but for an unquoted one's substitutions, `$(…)` and
+backticks, `[[ ]]`, `(( ))` and `$[ ]`, `cd`, which a function body or a
+subshell keeps to itself, `case` patterns, simple `NAME=value`, `$PWD` from the
+directory tracked, wrappers such as `sudo`, `env` and `timeout`, globs reading
+at most 2,000 directory entries a command) and returns the files it writes by
+redirection, `tee`, `sed -i` and `perl -i`, and those `rm`, `mv`, `cp`, `ln`
+and `truncate` touch.
 A command that writes nothing costs a parse: no key, no index, no file. A
 target that is one of stele's own files asks, as a Write does (#52). A target
 a scoped rule covers is denied, once per file, per agent and per turn

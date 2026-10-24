@@ -3,12 +3,15 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lictor-ai/stele/internal/install"
 )
 
 // bash is a PreToolUse payload for a Bash command run in cwd.
@@ -110,6 +113,92 @@ func TestHookBashPayload(t *testing.T) {
 	if !denied(o) || !strings.Contains(o.HookSpecificOutput.PermissionDecisionReason, "internal/db/query.go") {
 		t.Errorf("the recorded payload: %s", out)
 	}
+}
+
+// bigRules is stele.md with one 3 KB rule per extension, so that four of
+// them do not fit in one message.
+func bigRules(exts ...string) string {
+	var b strings.Builder
+	for i, e := range exts {
+		if i > 0 {
+			b.WriteString("\n---\n\n")
+		}
+		fmt.Fprintf(&b, "scope: [\"**/*.%s\"]\n\nRule for %s files. %s\n", e, e, strings.Repeat("Keep it short. ", 200))
+	}
+	return b.String()
+}
+
+// A deny holds no more rules than fit in Claude Code's 10,000 characters;
+// the rest are shown on the next write, not marked shown and lost.
+func TestHookFitsTheRules(t *testing.T) {
+	exts := []string{"go", "ts", "py", "rs"}
+	t.Run("Bash", func(t *testing.T) {
+		root := project(t, bigRules(exts...))
+		advance := clock(t, time.Now())
+		o, _ := hook(t, bash("sed -i s/a/b/ a.go b.ts c.py d.rs", root, "p1", ""))
+		reason := o.HookSpecificOutput.PermissionDecisionReason
+		if !denied(o) || len(reason) > install.MaxMessage || !strings.Contains(reason, "more rules") {
+			t.Fatalf("deny of %d bytes:\n%.300s", len(reason), reason)
+		}
+		shown := countRules(reason, exts)
+		// The Writes the agent makes instead show the rest, file by file.
+		advance(time.Second)
+		for i, e := range exts {
+			o, _ := hook(t, write(filepath.Join(root, string(rune('a'+i))+"."+e), "p1", ""))
+			if got := countRules(o.HookSpecificOutput.PermissionDecisionReason, exts); got > 0 {
+				shown += got
+			}
+			advance(time.Second)
+		}
+		if shown != len(exts) {
+			t.Errorf("%d of %d rules shown in all", shown, len(exts))
+		}
+	})
+	t.Run("Write", func(t *testing.T) {
+		root := project(t, strings.ReplaceAll(bigRules(exts...), "scope: [\"**/*.", "scope: [\"x.go\", \"**/*."))
+		advance := clock(t, time.Now())
+		shown := 0
+		for range 5 {
+			o, _ := hook(t, write(filepath.Join(root, "x.go"), "p1", ""))
+			if !denied(o) {
+				break
+			}
+			reason := o.HookSpecificOutput.PermissionDecisionReason
+			if len(reason) > install.MaxMessage {
+				t.Fatalf("deny of %d bytes", len(reason))
+			}
+			shown += countRules(reason, exts)
+			advance(time.Second)
+		}
+		if shown != len(exts) {
+			t.Errorf("%d of %d rules shown before the write went through", shown, len(exts))
+		}
+	})
+	t.Run("two projects share one budget", func(t *testing.T) {
+		root := project(t, bigRules("go", "ts"))
+		clock(t, time.Now())
+		if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "sub", "stele.md"), []byte(bigRules("py", "rs")), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		o, _ := hook(t, bash("sed -i s/a/b/ a.go b.ts sub/c.py sub/d.rs", root, "p1", ""))
+		if reason := o.HookSpecificOutput.PermissionDecisionReason; !denied(o) || len(reason) > install.MaxMessage {
+			t.Errorf("deny of %d bytes over two projects", len(reason))
+		}
+	})
+}
+
+// countRules counts the big rules a message holds.
+func countRules(msg string, exts []string) int {
+	n := 0
+	for _, e := range exts {
+		if strings.Contains(msg, "Rule for "+e+" files.") {
+			n++
+		}
+	}
+	return n
 }
 
 // 2. A command that writes outside every stele project is left alone.
