@@ -112,6 +112,10 @@ func beforeWrite(ev claudecode.Event) claudecode.Answer {
 	if !ok {
 		return claudecode.Answer{}
 	}
+	// Before stele.json is read: it is one of the files that would change.
+	if writes[ev.ToolName] && guarded(root, rel, ev.File) {
+		return claudecode.Answer{Ask: install.AskMessage(showPath(rel))}
+	}
 
 	policy, perr := enforce.Load(root)
 	if !policy.Backstop {
