@@ -58,7 +58,7 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 		return exitOK
 	}
 	ev, err := claudecode.Parse(data)
-	if err != nil || (ev.File == "" && !startsSession(ev.Name)) {
+	if err != nil || (ev.File == "" && ev.Command == "" && !startsSession(ev.Name)) {
 		return exitOK
 	}
 	// Go exits 2 on a panic, which would block the write: a bug in stele
@@ -72,6 +72,8 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 	}()
 	var a claudecode.Answer
 	switch {
+	case ev.Name == "PreToolUse" && ev.ToolName == "Bash":
+		a = beforeBash(ev)
 	case ev.Name == "PreToolUse":
 		a = beforeWrite(ev)
 		a.Warning = joinLines(a.Warning, versionWarning(ev, claudecode.InstalledVersion(args)))

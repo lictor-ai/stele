@@ -125,9 +125,10 @@ func TestInitRegistersAWorkingHook(t *testing.T) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		t.Fatal(err)
 	}
+	matchers := map[string]string{"PreToolUse": "Write|Edit|MultiEdit|Bash", "PostToolUse": "Write|Edit|MultiEdit"}
 	for _, ev := range []string{"PreToolUse", "PostToolUse"} {
 		g := s.Hooks[ev]
-		if len(g) != 1 || g[0].Matcher != "Write|Edit|MultiEdit" || len(g[0].Hooks) != 1 {
+		if len(g) != 1 || g[0].Matcher != matchers[ev] || len(g[0].Hooks) != 1 {
 			t.Fatalf("%s = %+v", ev, g)
 		}
 		words := strings.Fields(g[0].Hooks[0].Command)
