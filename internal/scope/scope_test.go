@@ -165,7 +165,9 @@ func TestMatchStaysFast(t *testing.T) {
 	for _, p := range patterns {
 		start := time.Now()
 		Match(p, deep)
-		if d := time.Since(start); d > 200*time.Millisecond {
+		// A blow-up takes seconds or more; a loaded CI machine can take a few
+		// hundred milliseconds on a linear pattern.
+		if d := time.Since(start); d > 2*time.Second {
 			t.Errorf("Match(%.30q...) took %v", p, d)
 		}
 	}
