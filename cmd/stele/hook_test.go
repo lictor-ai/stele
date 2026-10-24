@@ -87,6 +87,19 @@ func write(file, prompt, agent string) map[string]any {
 	}
 }
 
+// A clock moved back must not deny every write until it catches up (#53).
+func TestHookClockMovedBack(t *testing.T) {
+	root := project(t, hookRules)
+	advance := clock(t, time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC))
+	if o, _ := hook(t, write(filepath.Join(root, "a.go"), "p1", "")); o.HookSpecificOutput.PermissionDecision != "deny" {
+		t.Fatalf("first write: decision %q, want deny", o.HookSpecificOutput.PermissionDecision)
+	}
+	advance(-time.Hour)
+	if _, out := hook(t, write(filepath.Join(root, "b.go"), "p1", "")); out != "" {
+		t.Errorf("after the clock moved back: stdout %q, want nothing", out)
+	}
+}
+
 func TestHookShowsRules(t *testing.T) {
 	root := project(t, hookRules)
 	advance := clock(t, time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC))
@@ -104,15 +117,23 @@ func TestHookShowsRules(t *testing.T) {
 		}
 	}
 
-	// A parallel write in the same batch is denied too.
+	// A parallel write to another file in the same batch is denied too.
 	advance(time.Second)
-	if o, _ := hook(t, write(goFile, "p1", "")); o.HookSpecificOutput.PermissionDecision != "deny" {
+	otherFile := filepath.Join(root, "internal", "db", "other.go")
+	if o, _ := hook(t, write(otherFile, "p1", "")); o.HookSpecificOutput.PermissionDecision != "deny" {
 		t.Error("a write in the same batch went through before the rules were read")
 	}
 
-	// The retry after reading goes through, with no output at all.
-	advance(10 * time.Second)
+	// The retry of the denied file goes through within the window, with no
+	// output at all: a model can retry in under 3 s.
+	advance(time.Second)
 	if _, out := hook(t, write(goFile, "p1", "")); out != "" {
+		t.Errorf("retry within the window: stdout %q, want nothing", out)
+	}
+
+	// So does a retry after the window.
+	advance(10 * time.Second)
+	if _, out := hook(t, write(otherFile, "p1", "")); out != "" {
 		t.Errorf("retry: stdout %q, want nothing", out)
 	}
 

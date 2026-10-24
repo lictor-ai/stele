@@ -145,7 +145,7 @@ func beforeWrite(ev claudecode.Event) claudecode.Answer {
 	// is answered: a deny that was not recorded would repeat forever.
 	var d backstop.Decision
 	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
-		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, Rules: rules, Now: now()}
+		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, File: rel, Rules: rules, Now: now()}
 		d, *st = backstop.Decide(in, *st, policy)
 		return nil
 	})

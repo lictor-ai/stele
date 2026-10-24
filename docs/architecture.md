@@ -364,6 +364,7 @@ type State struct {
     SessionID string
     PromptID  string                          // the turn Shown belongs to
     Shown     map[string]map[string]time.Time // agent id ("" = main) → rule id → when shown
+    Denied    map[string]map[string]time.Time // agent id → root-relative file → when its write was last denied
     UpdatedAt time.Time
 }
 
@@ -389,7 +390,10 @@ fail every update of that session.
 It is keyed by agent because a subagent has its own context: rules shown to the
 main agent do not count as shown to a subagent, or the other way round. A new
 `prompt_id` empties it. Each entry keeps when it was shown, which is what lets the
-hook deny a whole batch of parallel writes (`backstop.Window`). In v1 only `stele
+hook deny a whole batch of parallel writes (`backstop.Window`). `Denied`, keyed
+and emptied the same way, records the files whose write was denied, so a later
+write to one of them is recognised as the agent's retry (#51). Both fields are
+`omitempty`, and an older state file loads with them empty. In v1 only `stele
 hook` writes session state; the arm-and-fetch fields of the spec (`Armed`,
 `Touched`, `Blocks`, `LastError`) belonged to the MCP exchange and are gone.
 
@@ -494,6 +498,7 @@ type Rule struct{ ID, Text string }
 type Input struct {
     PromptID string    // the turn
     AgentID  string    // "" for the main agent
+    File     string    // the root-relative file written; "" disables retry detection
     Rules    []Rule    // every rule that applies to the file, by scope
     Now      time.Time
 }
@@ -519,11 +524,13 @@ The order is the whole behaviour:
 ```
 1. !policy.Backstop                     → allow
 2. no rules apply to the file           → allow
-3. PromptID differs from the state      → a new turn: forget what was shown
+3. PromptID differs from the state      → a new turn: forget what was shown and denied
 4. for each rule: not shown to AgentID  → show it, record it at Now
-                  shown < Window ago    → show it again (same batch)
+                  a retry of a denied file, and the rule
+                  shown at or before that deny          → read: skip it
+                  0 ≤ Now − shown < Window → show it again (same batch)
 5. nothing to show                      → allow
-6. otherwise                            → DENY with those rules
+6. otherwise                            → DENY with those rules, record File at Now
 ```
 
 `Decide` returns the state to save, and `cmd/` saves it **before** answering:
@@ -535,7 +542,13 @@ so a save that fails goes through the failure policy instead.
 in one message, and their hooks run before it reads any deny reason; within the
 window every write that needs the same rules is denied too, so the agent reads
 them once and retries the batch. It does not slide: a rule is stamped when first
-shown, and three seconds is shorter than any model round trip.
+shown. A model can retry within three seconds, so a retry is recognised by its
+file, not by time: a write to a file whose write was denied comes after that
+deny's reason, which held every rule for the file shown at or before it (#51). It
+compares two stored times, so a clock jump cannot break it. A first write to a
+third file while the window is open is still denied once. A time before a rule
+was shown means the clock moved back, and counts as outside the window, so a
+jump back never causes a deny loop (#53).
 
 **Failures** — no key, a session that cannot be saved, an invalid `stele.json`,
 `stele.md` broken with no good index behind it — go to `failure`: with
