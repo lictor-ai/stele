@@ -47,6 +47,8 @@ wrote stele.lock and .stele/index.json
 
 **Commit** `stele.md`, `stele.lock`, `.claude/settings.json`, and `stele.json` if you have one. **Don't commit** `.stele/`; it ignores itself.
 
+If a rule can't be used — a `check` other than `regex`, a pattern that doesn't compile or matches empty text, a `blocking` that isn't `true` or `false` — `stele compile` names it and exits 1. It still writes `stele.lock`, so the rule keeps its id, and the hook enforces the other rules and tells you once a session.
+
 The hook also recompiles when `stele.md` changes, so edits take effect on the next write. Commit the updated `stele.lock`.
 
 To remove stele: `stele uninstall`. It removes stele's hooks and `.stele/`, and keeps `stele.md`, `stele.lock` and `stele.json`.
@@ -127,7 +129,7 @@ main.go:7:10: error 2de7574e-7106-4986-8ce6-996d06e2703a "Never put credentials 
 checked 1 file: 2 errors
 ```
 
-A non-blocking violation prints `warning` instead of `error`.
+A non-blocking violation prints `warning` instead of `error`. Lines and columns start at 1; a column counts characters.
 
 | Exit | Meaning |
 |---|---|

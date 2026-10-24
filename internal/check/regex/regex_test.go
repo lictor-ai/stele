@@ -26,11 +26,38 @@ func TestMatch(t *testing.T) {
 		{"several on a line", `o`, "foo", []Location{{1, 2}, {1, 3}}},
 		{"later lines", `x`, "a\nbx\n\nx", []Location{{2, 2}, {4, 1}}},
 		{"CRLF", `x`, "a\r\nbx\r\n", []Location{{2, 2}}},
-		{"column in bytes", `x`, "éx", []Location{{1, 3}}},
 		{"multiline anchor", `(?m)^x`, "x\nax\nx", []Location{{1, 1}, {3, 1}}},
 		{"no multiline: whole content", `^x`, "a\nx", nil},
 		{"spans lines: where it starts", `a\nb`, "za\nb", []Location{{1, 2}}},
 		{"no match", `q`, "abc", nil},
+
+		// A column counts characters (code points), not bytes.
+		{"column in characters", `x`, "éx", []Location{{1, 2}}},
+		{"CJK and emoji are one each", `x`, "日本😀x", []Location{{1, 4}}},
+		{"combining mark is its own character", `x`, "éx", []Location{{1, 3}}},
+		{"tab is one", `x`, "\tx", []Location{{1, 2}}},
+		{"multibyte before each of several matches", `x`, "éxéx", []Location{{1, 2}, {1, 4}}},
+		{"multibyte on an earlier line does not count", `x`, "éé\nx", []Location{{2, 1}}},
+		{"CRLF after multibyte", `x`, "é\r\nüx\r\n", []Location{{2, 2}}},
+		{"CR is a character", `\r`, "é\r\n", []Location{{1, 2}}},
+
+		// A leading byte order mark is not part of the text.
+		{"BOM: column skips it", `x`, "\xEF\xBB\xBFx", []Location{{1, 1}}},
+		{"BOM: multiline anchor on line 1", `(?m)^x`, "\uFEFFx\nx", []Location{{1, 1}, {2, 1}}},
+		{"BOM: start of text", `\Ax`, "\uFEFFx", []Location{{1, 1}}},
+		{"BOM: caret", `^x`, "\uFEFFx", []Location{{1, 1}}},
+		{"BOM: later lines unaffected", `x`, "\uFEFFa\nbx", []Location{{2, 2}}},
+		{"BOM: a pattern cannot match the leading one", `\x{FEFF}`, "\uFEFFa", nil},
+		{"BOM: only one stripped", `x`, "\uFEFF\uFEFFx", []Location{{1, 2}}},
+		{"U+FEFF mid-line counts", `x`, "a\uFEFFx", []Location{{1, 3}}},
+		{"U+FEFF at the start of line 2 is not stripped", `(?m)^x`, "a\n\uFEFFx", nil},
+
+		// Each byte that is not valid UTF-8 is one column, as the regexp steps.
+		{"invalid UTF-8: one per byte", `x`, "\xffx", []Location{{1, 2}}},
+		{"invalid UTF-8: truncated sequence", `x`, "\xe2\x82x", []Location{{1, 3}}},
+		{"invalid then valid", `x`, "\xff\xfeéx", []Location{{1, 4}}},
+		{"invalid byte before a newline", `x`, "\xc3\nx", []Location{{2, 1}}},
+		{"match starting on an invalid byte", `.x`, "a\xffx", []Location{{1, 2}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -39,6 +66,16 @@ func TestMatch(t *testing.T) {
 				t.Errorf("Match (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// Columns are counted once, going forward: recounting from the line start for
+// each match would take about 10^10 steps here.
+func TestMatchLongLine(t *testing.T) {
+	const n = 100_000
+	got := Match(regexp.MustCompile(`x`), []byte(strings.Repeat("éx", n)))
+	if len(got) != n || got[n-1] != (Location{1, 2 * n}) {
+		t.Fatalf("got %d locations, last %v; want %d, last {1 %d}", len(got), got[len(got)-1], n, 2*n)
 	}
 }
 
@@ -83,6 +120,21 @@ func TestCheckContent(t *testing.T) {
 	}
 	if diff := cmp.Diff(check.Result{Violations: want}, got); diff != "" {
 		t.Errorf("CheckContent (-want +got):\n%s", diff)
+	}
+
+	// A file starting with a byte order mark: line 1 is checked from its first
+	// character, and columns count characters.
+	bomRules := []check.Rule{
+		rule("pkg", map[string]string{"pattern": `(?m)^package`}),
+		rule("plain", map[string]string{"pattern": "secret"}),
+	}
+	got = New().CheckContent(bomRules, "a.go", []byte("\uFEFFpackage é // secret\n"))
+	wantBOM := []check.Violation{
+		{RuleID: "pkg", File: "a.go", Line: 1, Column: 1},
+		{RuleID: "plain", File: "a.go", Line: 1, Column: 14},
+	}
+	if diff := cmp.Diff(check.Result{Violations: wantBOM}, got); diff != "" {
+		t.Errorf("BOM file (-want +got):\n%s", diff)
 	}
 
 	// An excluded file gets nothing from the rule.

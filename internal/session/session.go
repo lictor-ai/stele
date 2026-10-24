@@ -76,8 +76,11 @@ type State struct {
 	Denied map[string]map[string]time.Time `json:"denied,omitempty"`
 	// VersionWarned is the version mismatch the user was last warned of,
 	// so the warning comes once a session.
-	VersionWarned string    `json:"version_warned,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	VersionWarned string `json:"version_warned,omitempty"`
+	// RulesWarned marks the invalid rules the user was last told of, so the
+	// warning comes once a session for each set of problems (#54).
+	RulesWarned string    `json:"rules_warned,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // errUnreadable is a state file that exists but holds no usable state: not

@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/lictor-ai/stele/internal/check"
 	"github.com/lictor-ai/stele/internal/compile"
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/lock"
@@ -17,7 +18,10 @@ import (
 )
 
 // runCompile reads every source, then writes stele.lock and the index when
-// they changed, and prints how each rule got its id.
+// they changed, and prints how each rule got its id. It then checks the
+// rules with the built-in checkers, as stele check does, and exits 1 when one
+// is invalid (#54). The files are written anyway: an invalid rule keeps its
+// id, and the valid rules are enforced.
 func runCompile(args []string, stdout, stderr io.Writer) int {
 	root, ok := setup("compile", args, stderr)
 	if !ok {
@@ -34,7 +38,13 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 		return exitCantRun
 	}
 	printCompile(stdout, r)
-	return exitOK
+	ps := check.Validate(r.Index, plugin.BuiltinCheckers())
+	if len(ps) == 0 {
+		return exitOK
+	}
+	printProblems(stdout, r.Lock, ps)
+	fmt.Fprintf(stdout, "%s in the rules: stele check fails, and the hook skips these rules, until they are fixed\n", plural(len(ps), "problem"))
+	return exitFailed
 }
 
 // keyDir is where this machine's signing key lives. Tests point it at a

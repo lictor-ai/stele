@@ -77,6 +77,13 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 		a.Warning = joinLines(a.Warning, versionWarning(ev, claudecode.InstalledVersion(args)))
 	case ev.Name == "PostToolUse" && writes[ev.ToolName]:
 		a = afterWrite(ev)
+		room := install.MaxMessage
+		if a.Context != "" {
+			room -= len(a.Context) + len("\n\n") // joinNotes' separator
+		}
+		w, c := invalidRules(ev, room)
+		a.Warning = joinLines(a.Warning, w)
+		a.Context = joinNotes(a.Context, c)
 	default:
 		return exitOK
 	}

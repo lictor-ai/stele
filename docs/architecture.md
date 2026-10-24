@@ -632,7 +632,7 @@ to stdin and closes it, the plugin writes one JSON response to stdout and exits 
 | `fingerprint` | `root`, `config` | `{"fingerprint": "…"}` |
 | `read` | `root`, `config` | `{"fingerprint": "…", "rules": [{file, position, line, description, tags, scope, body, meta}]}` |
 | `validate` | `config`, `rules: [{id, meta}]` | `{"problems": [{"rule_id", "message"}]}` |
-| `check` | `root`, `config`, `files`, `rules: [{id, body, scope, meta}]` | `{"violations": [{rule_id, file, line, column, message}]}` |
+| `check` | `root`, `config`, `files`, `rules: [{id, body, scope, meta}]` | `{"violations": [{rule_id, file, line, column, message}]}`, line and column 1-based, column in characters |
 | `push` | `config`, `project`, `records: [...]` — log entries and check reports, each with its own `v` | `{"accepted": n}` |
 
 A `read` response may set `id` on a rule; only a source that owns its ids should
@@ -700,7 +700,7 @@ type Problem struct {
 type Violation struct {
     RuleID       string
     File         string
-    Line, Column int    // 1-based; Column counts bytes
+    Line, Column int    // 1-based; Column counts characters
     Message      string // empty for the default, the rule's excerpt
 }
 
@@ -716,6 +716,7 @@ type Report struct {
 func Run(ctx context.Context, root string, idx index.Index, files []string, cs map[string]Checker) (Report, error)
 func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker) Report // pure
 func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) Report
+func Validate(idx index.Index, cs map[string]Checker) []Problem // the rule problems Run reports, reading no file
 func (r Report) ExitCode() int // 0, 1; errors from Run are 2
 
 type Span struct{ First, Last int }       // lines, 1-based, inclusive
@@ -735,7 +736,10 @@ known checker is a `Problem`, not a skip, and so is a `blocking` that is neither
 `true` nor `false`. Whether a violation is blocking is read from the rule's
 `blocking` key — default `true` when `check` is set — never from the checker
 (spec §8). Rules that fail `Validate` are left out of `Check`; the others still
-run, so one `stele check` shows every problem. Findings are sorted by file, line,
+run, so one `stele check` shows every problem. `stele compile` and the post-write
+hook call `Validate` for the same problems (#54); the hook checks the rules again
+rather than storing problems in the index, which would make `index` depend on
+`check`. Findings are sorted by file, line,
 column and rule id, and at most 100 are kept for one rule in one file; the rest
 are counted in `Truncated`.
 
@@ -803,7 +807,8 @@ reports a missing or invalid pattern, and one that matches empty text, which
 would match at every position. The pattern runs over the whole content, so `^`
 and `$` match per line only with `(?m)`. `Check` reads each file once through
 `safefile.ReadRegular`, runs every rule that applies to it, and turns each match
-offset into a line and column; a missing, non-regular or over-32 MiB file is
+offset into a line and a column in characters (a leading UTF-8 byte order
+mark is dropped first, so patterns do not see it); a missing, non-regular or over-32 MiB file is
 skipped and reported as a `Skip`. An optional `message` key replaces the default message. Binary files —
 a NUL in the first 8 KB — are skipped.
 
@@ -1287,7 +1292,7 @@ string literals scattered through the code, so they can be revised and diffed.
 | `lock.Reconcile`, ids from a source | Supplied id kept, clash is an error, `Project` minted once and never changed. |
 | sinks / `stele push` | The test plugin as a sink: offset advances only on success, no record sent twice, `brief` stripped unless `share_briefs`. |
 | `status` | Temp directory: JSON shape and `v`, plugin found and missing, stale index. |
-| `regex` | Table-driven over `Match`: line and column, multiple matches, multi-line content, CRLF, binary skip, invalid pattern. |
+| `regex` | Table-driven over `Match`: line and column, multiple matches, multi-line content, CRLF, multibyte text, BOM, invalid UTF-8, binary skip, invalid pattern. |
 | `backstop.Decide` | Table-driven over the full cross-product of state, policy, error and `HasRules`. Pure, so no fixtures. |
 | `matcher` | Table-driven. Cap, truncation, empty selection. |
 | `index`, `session`, `journal` | Temp directories. Concurrent-write tests for the replace path, including a locked target. |
