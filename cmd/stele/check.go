@@ -293,9 +293,7 @@ func dedupe(files []string) []string {
 // printCheck prints the report for a person: the rule problems, one line per
 // violation, then a summary.
 func printCheck(w io.Writer, lf lock.File, rep check.Report, subs []subproject, rules, files int) {
-	for _, p := range rep.Problems {
-		fmt.Fprintf(w, "invalid rule %s \"%s\"%s: %s\n", p.RuleID, p.Excerpt, where(lf, p.RuleID), p.Message)
-	}
+	printProblems(w, lf, rep.Problems)
 	errs, warns := 0, 0
 	for _, f := range rep.Violations {
 		level := "error"
@@ -359,6 +357,14 @@ func printCheck(w io.Writer, lf lock.File, rep check.Report, subs []subproject, 
 }
 
 // where says which rule in which source an id is, as printCompile does.
+// printProblems prints one line per invalid rule, as stele check and stele
+// compile do.
+func printProblems(w io.Writer, lf lock.File, ps []check.Problem) {
+	for _, p := range ps {
+		fmt.Fprintf(w, "invalid rule %s \"%s\"%s: %s\n", p.RuleID, p.Excerpt, where(lf, p.RuleID), p.Message)
+	}
+}
+
 func where(lf lock.File, id string) string {
 	for _, e := range lf.Rules {
 		if e.ID == id {

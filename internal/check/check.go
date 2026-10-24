@@ -158,6 +158,13 @@ func Run(ctx context.Context, root string, idx index.Index, files []string, cs m
 	return p.report, nil
 }
 
+// Validate reports the rules in idx that cannot be checked, as Run would,
+// reading no file: a bad blocking, an empty or unknown check, or settings
+// the checker rejects. Excerpts are filled.
+func Validate(idx index.Index, cs map[string]Checker) []Problem {
+	return prepare(idx, cs).report.Problems
+}
+
 // RunFile checks one file's content without reading anything. Only
 // ContentCheckers run; others are skipped.
 func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker) Report {
