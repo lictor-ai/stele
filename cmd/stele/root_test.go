@@ -2,7 +2,9 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -62,6 +64,49 @@ func TestFindRootStopsAtGit(t *testing.T) {
 		if want := filepath.Join(repo, want); got != want {
 			t.Errorf("findRoot(%s) = %s, want %s", from, got, want)
 		}
+	}
+}
+
+// A .git that is a dangling link still marks a checkout: the hook's root
+// search and check's and init's holdsGit must agree on it.
+func TestFindRootDanglingGitLink(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "stele.md"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(repo, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	danglingLink(t, filepath.Join(sub, ".git"))
+
+	got, err := findRoot(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != sub || !holdsGit(sub) {
+		t.Errorf("findRoot = %s, holdsGit = %v; want %s and true", got, holdsGit(sub), sub)
+	}
+}
+
+// danglingLink makes link a symlink, or on Windows without the privilege a
+// junction, to a directory that no longer exists.
+func danglingLink(t *testing.T, link string) {
+	t.Helper()
+	target := filepath.Join(t.TempDir(), "gone")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS != "windows" {
+			t.Skipf("cannot make a symlink: %v", err)
+		}
+		if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+			t.Skipf("cannot make a symlink or a junction: %v\n%s", err, out)
+		}
+	}
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
 	}
 }
 

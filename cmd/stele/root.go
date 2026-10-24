@@ -32,11 +32,13 @@ func holdsGit(dir string) bool {
 	return err == nil
 }
 
-// walkUp returns the first directory from dir upwards that holds any of names.
+// walkUp returns the first directory from dir upwards that holds any of
+// names. Any entry counts, a dangling link too, as holdsGit counts it: the
+// hook and stele check must agree on where a project ends.
 func walkUp(dir string, names ...string) (string, bool) {
 	for {
 		for _, name := range names {
-			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
 				return dir, true
 			}
 		}
