@@ -41,7 +41,7 @@ func Lock(name string, wait, stale time.Duration) (unlock func(), err error) {
 			if takeOver(name, token, stale, true) {
 				continue
 			}
-		case lerr == nil && time.Since(info.ModTime()) > stale:
+		case lerr == nil && isStale(info.ModTime(), stale):
 			if takeOver(name, token, stale, false) {
 				continue
 			}
@@ -104,13 +104,21 @@ func takeOver(name, token string, stale time.Duration, force bool) bool {
 	if err := os.Rename(name, grave); err != nil {
 		return false
 	}
-	if info, err := os.Lstat(grave); err == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) <= stale {
+	if info, err := os.Lstat(grave); err == nil && info.Mode().IsRegular() && !isStale(info.ModTime(), stale) {
 		os.Link(grave, name) // fails if a new lock already exists; then both are live, the narrowest case
 		os.Remove(grave)
 		return !force // a forced takeover that moved a live lock took nothing over
 	}
 	os.Remove(grave)
 	return true
+}
+
+// isStale reports whether a lock last written at m is older than stale, or
+// dated more than stale in the future: the clock moved back after it was
+// left. A live lock is held for milliseconds, so neither is a live one.
+func isStale(m time.Time, stale time.Duration) bool {
+	age := time.Since(m)
+	return age > stale || age < -stale
 }
 
 func newToken() (string, error) {
