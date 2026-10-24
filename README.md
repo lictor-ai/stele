@@ -33,7 +33,7 @@ added stele hooks (PreToolUse, PostToolUse) to .claude/settings.json
 ```
 
 - It works on the current directory only, and says so if a parent directory looks like the repository root.
-- It adds `stele hook --installed=<version>` to `.claude/settings.json` on `PreToolUse` and `PostToolUse` (matcher `Write|Edit|MultiEdit`, timeout 10 s). The rest of the file is kept.
+- It adds `stele hook --installed=<version>` to `.claude/settings.json` on `PreToolUse` and `PostToolUse` (matcher `Write|Edit|MultiEdit`, timeout 10 s). The rest of the file is kept. `<version>` is the release tag, or `devel` for a build from a commit (`go install ./cmd/stele` in a clone, or `@latest` before a tag); a build from a commit never replaces a release's stamp.
 - It creates `stele.md` only if there is none. stele never writes `stele.md` or `stele.json` after that.
 - Running it again prints `up to date, nothing written`.
 
@@ -183,6 +183,7 @@ Optional, committed next to `stele.md`. These are the defaults:
 9. **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too.
 10. **Nothing leaves the machine.** stele makes no network calls. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 11. **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
+12. **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about.
 
 ## License
 
