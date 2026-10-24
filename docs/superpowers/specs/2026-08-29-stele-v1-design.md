@@ -576,7 +576,9 @@ a guarantee that code never lands without rules, and it should not be sold as on
 
 > **Amended by ADR-0004 (D58).** `init` registers two hooks, `PreToolUse` and
 > `PostToolUse` on Write and Edit, and creates `stele.md` and `.stele/`. No MCP
-> server registration and no subagent file.
+> server registration and no subagent file. **Amended by D60:** it also
+> registers `SessionStart` and `SubagentStart`, which tell the agent to write
+> files with Write and Edit only.
 
 `stele init` writes five things. Each carries a marker so `stele uninstall`
 removes exactly those and nothing else. Items 1–3 are the Claude Code agent
@@ -784,6 +786,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D57 | stele trusts only the generated files it wrote on this machine. `index.json` and session state carry an HMAC-SHA256 made with a per-user key kept outside every repository (the user config directory, owner-only); a file that does not verify is rebuilt or started afresh. `stele.lock` is shared on purpose and not signed. Malware running as the user is out of scope. | follows from D24 and D45: `.stele/` is not covered by the repository's `.gitignore`, so a repository could otherwise commit an index the agent is served |
 | D58 | v1 is for one developer. Rules are chosen by `scope`, not by a model: a `PreToolUse` hook denies a write that brings rules not yet shown this turn, with those rules as the reason; a `PostToolUse` hook runs built-in checks on the written file and reports violations. The MCP server, matcher subagent, logging, plugins and sinks move to the "team" milestone, with D12–D15, D30, D33–D35 and D39; D16, D29 and D37 are amended. | ADR-0004 |
 | D59 | A `scope` item starting with `!` excludes: a rule applies to a file that matches no exclusion and at least one other item; a scope of only exclusions applies to every other file. Order does not matter. A broken exclusion excludes nothing. | e2e 2026-10-23, What to change 1 (#39) |
+| D60 | `init` also registers `stele hook` on `SessionStart` and `SubagentStart`. In a stele project it answers with context telling the agent to create and change files with Write and Edit only, never through Bash, which skips both hooks; the deny and violation messages say it too. Bash writes are still not seen. | tests of v1.0.0-dev.0 (#50) |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 
