@@ -47,6 +47,23 @@ func TestInitAndUninstall(t *testing.T) {
 	}
 }
 
+// A build from a commit stamps devel, so builds from two commits agree.
+func TestInitFromACommitStampsDevel(t *testing.T) {
+	root := project(t, "")
+	setVersion(t, "v0.0.0-20261023085801-32b83aefb0cb")
+	if code, _, errOut := runCmd("init"); code != exitOK {
+		t.Fatalf("init = %d, stderr %q", code, errOut)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
+	if err != nil || !strings.Contains(string(data), "stele hook --installed=devel") {
+		t.Fatalf("settings.json = %s, %v; want the devel stamp", data, err)
+	}
+	setVersion(t, "v0.0.0-20261024101500-aaaaaaaaaaaa")
+	if _, out, _ := runCmd("init"); !strings.Contains(out, "up to date, nothing written") {
+		t.Errorf("init from another commit: stdout %q", out)
+	}
+}
+
 // Claude Code reads .claude/settings.json from the directory it starts in,
 // so init sets up where it runs, never an ancestor.
 func TestInitUsesTheCurrentDirectory(t *testing.T) {
@@ -170,6 +187,11 @@ func TestHookWarnsOfAnotherVersion(t *testing.T) {
 		{"same version", "v0.0.2", "--installed=v0.0.2"},
 		{"no stamp", "v0.0.2", ""},
 		{"devel binary", "devel", "--installed=v0.0.1"},
+		{"pseudo binary", "v0.0.0-20261024000000-aaaaaaaaaaaa", "--installed=v0.0.1"},
+		{"dirty binary", "v0.0.2+dirty", "--installed=v0.0.1"},
+		{"pseudo stamp", "v0.0.2", "--installed=v0.0.0-20261023085801-32b83aefb0cb"},
+		{"devel stamp", "v0.0.2", "--installed=devel"},
+		{"two pseudo-versions", "v0.0.0-20261024000000-aaaaaaaaaaaa", "--installed=v0.0.0-20261023085801-32b83aefb0cb"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root := project(t, hookRules)
