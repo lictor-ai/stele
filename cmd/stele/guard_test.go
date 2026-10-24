@@ -178,6 +178,55 @@ func TestHookAsksThroughLinks(t *testing.T) {
 	})
 }
 
+// link makes link point to target: a symlink, or on Windows without the
+// privilege a junction, when target is a directory.
+func link(t *testing.T, target, link string, dir bool) {
+	t.Helper()
+	err := os.Symlink(target, link)
+	if err == nil {
+		return
+	}
+	if runtime.GOOS != "windows" || !dir {
+		t.Skipf("cannot make a symlink: %v", err)
+	}
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+		t.Skipf("cannot make a symlink or a junction: %v\n%s", err, out)
+	}
+}
+
+// A path in no stele project can still lead into one.
+func TestHookAsksForALinkFromOutside(t *testing.T) {
+	clock(t, time.Now())
+	t.Run("to stele.md", func(t *testing.T) {
+		root := project(t, hookRules)
+		l := filepath.Join(t.TempDir(), "rules.md")
+		link(t, filepath.Join(root, "stele.md"), l, false)
+		if o, out := hook(t, preWrite("Write", l)); o.HookSpecificOutput.PermissionDecision != "ask" {
+			t.Errorf("write through a link from outside to stele.md: %s, want ask", out)
+		}
+	})
+	t.Run("to .stele", func(t *testing.T) {
+		root := project(t, hookRules)
+		if err := os.MkdirAll(filepath.Join(root, ".stele"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		l := filepath.Join(t.TempDir(), "cache")
+		link(t, filepath.Join(root, ".stele"), l, true)
+		if o, out := hook(t, preWrite("Write", filepath.Join(l, "index.json"))); o.HookSpecificOutput.PermissionDecision != "ask" {
+			t.Errorf("write through a link from outside to .stele/: %s, want ask", out)
+		}
+	})
+	t.Run("to a plain file", func(t *testing.T) {
+		root := project(t, hookRules)
+		writeAt(t, root, "a.go", "package a\n")
+		l := filepath.Join(t.TempDir(), "a.go")
+		link(t, filepath.Join(root, "a.go"), l, false)
+		if o, out := hook(t, preWrite("Write", l)); o.HookSpecificOutput.PermissionDecision == "ask" {
+			t.Errorf("asked for a link from outside to a.go: %s", out)
+		}
+	})
+}
+
 func TestHookDoesNotAsk(t *testing.T) {
 	clock(t, time.Now())
 	t.Run("a repository that does not use stele", func(t *testing.T) {
