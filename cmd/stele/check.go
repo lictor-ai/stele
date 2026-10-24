@@ -142,7 +142,7 @@ func ownedFiles(root string, files []string) ([]string, []subproject) {
 		}
 		o := ownerOf(path.Dir(dir))
 		if o == "" {
-			if name := ruleFile(filepath.Join(root, filepath.FromSlash(dir))); name != "" {
+			if name := ownProject(filepath.Join(root, filepath.FromSlash(dir))); name != "" {
 				o, has[dir] = dir, name
 			}
 		}
@@ -175,15 +175,21 @@ func ownedFiles(root string, files []string) ([]string, []subproject) {
 	return out, subs
 }
 
-// ruleFile names the stele.md or stele.json in dir that makes it a
-// subproject, or "". Unlike usesStele, it counts only a regular file: a
-// directory or a symlink named stele.json cannot hide files from CI.
-func ruleFile(dir string) string {
+// ownProject names what makes dir a project of its own, or "": a stele.md or
+// stele.json, or a .git. Unlike usesStele, a rule file counts only as a
+// regular file: a directory or a symlink named stele.json cannot hide files
+// from CI. A .git counts in any form: git never checks out a path named
+// .git, so a clone cannot plant one, and the outer git lists none of a
+// submodule's files anyway.
+func ownProject(dir string) string {
 	var found []string
 	for _, name := range []string{"stele.md", enforce.FileName} {
 		if info, err := os.Lstat(filepath.Join(dir, name)); err == nil && info.Mode().IsRegular() {
 			found = append(found, name)
 		}
+	}
+	if holdsGit(dir) {
+		found = append(found, ".git")
 	}
 	return strings.Join(found, " and ")
 }
