@@ -33,9 +33,6 @@ const (
 	// maxAge is how long a session file outlives its last update. Nothing
 	// tells stele a session ended.
 	maxAge = 24 * time.Hour
-	// lockWait is how long an update waits for another process's lock. The
-	// hook runs on every write, so it must not wait long.
-	lockWait = 2 * time.Second
 	// staleLock is the age past which a lock file is taken to be left by a
 	// crashed process. A lock is held for milliseconds.
 	staleLock = 10 * time.Second
@@ -43,6 +40,10 @@ const (
 	// stops a planted file from exhausting memory.
 	maxSize = 1 << 20
 )
+
+// lockWait is how long an update waits for another process's lock. The hook
+// runs on every write, so it must not wait long. A test raises it.
+var lockWait = 2 * time.Second
 
 // ErrBadSessionID is a session id that cannot name a file. The id comes from
 // the host agent, or from .stele/state/current, which a cloned repository can
