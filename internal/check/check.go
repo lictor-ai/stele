@@ -75,7 +75,7 @@ type Problem struct {
 type Violation struct {
 	RuleID       string
 	File         string // relative to the root, with / separators
-	Line, Column int    // 1-based; Column counts bytes
+	Line, Column int    // 1-based; Column counts characters (runes)
 	Message      string // empty for the default, the rule's excerpt
 }
 
