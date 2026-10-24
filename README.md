@@ -32,7 +32,7 @@ created stele.md
 added stele hooks (PreToolUse, PostToolUse) to .claude/settings.json
 ```
 
-- It works on the current directory only, and says so if a parent directory looks like the repository root.
+- It works on the current directory only, and says so if a parent directory looks like the repository root (not when the current directory is a git worktree or submodule).
 - It adds `stele hook --installed=<version>` to `.claude/settings.json` on `PreToolUse` and `PostToolUse` (matcher `Write|Edit|MultiEdit`, timeout 10 s). The rest of the file is kept.
 - It creates `stele.md` only if there is none. stele never writes `stele.md` or `stele.json` after that.
 - Running it again prints `up to date, nothing written`.
@@ -180,7 +180,7 @@ Optional, committed next to `stele.md`. These are the defaults:
 6. **After an Edit, only the lines it wrote are checked.** If stele can't locate them (Claude Code sent no patch and the new text appears more than once), nothing is checked after that edit. Older violations in the file are left to `stele check`.
 7. **Binary files and files over 32 MiB are skipped.** The skip is reported, not silent.
 8. **Output is capped.** `stele check` shows at most 100 violations per rule and file; the agent gets at most 20 per message.
-9. **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too.
+9. **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too. So is a git worktree or submodule (a directory with its own `.git`): it gets no rules from an outer `stele.md`, only from its own.
 10. **Nothing leaves the machine.** stele makes no network calls. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 11. **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
 
