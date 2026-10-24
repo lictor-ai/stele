@@ -77,6 +77,13 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 		a.Warning = joinLines(a.Warning, versionWarning(ev, claudecode.InstalledVersion(args)))
 	case ev.Name == "PostToolUse" && writes[ev.ToolName]:
 		a = afterWrite(ev)
+		room := install.MaxMessage
+		if a.Context != "" {
+			room -= len(a.Context) + len("\n\n") // joinNotes' separator
+		}
+		w, c := invalidRules(ev, room)
+		a.Warning = joinLines(a.Warning, w)
+		a.Context = joinNotes(a.Context, c)
 	case startsSession(ev.Name):
 		a = sessionStart(ev)
 	default:
@@ -112,7 +119,11 @@ func target(ev claudecode.Event) (root, rel string, ok bool) {
 func beforeWrite(ev claudecode.Event) claudecode.Answer {
 	root, rel, ok := target(ev)
 	if !ok {
-		return claudecode.Answer{}
+		return askOutside(ev)
+	}
+	// Before stele.json is read: it is one of the files that would change.
+	if writes[ev.ToolName] && guarded(root, rel, ev.File) {
+		return claudecode.Answer{Ask: install.AskMessage(showPath(rel))}
 	}
 
 	policy, perr := enforce.Load(root)
@@ -147,7 +158,7 @@ func beforeWrite(ev claudecode.Event) claudecode.Answer {
 	// is answered: a deny that was not recorded would repeat forever.
 	var d backstop.Decision
 	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
-		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, Rules: rules, Now: now()}
+		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, File: rel, Rules: rules, Now: now()}
 		d, *st = backstop.Decide(in, *st, policy)
 		return nil
 	})

@@ -168,6 +168,21 @@ func TestRender(t *testing.T) {
 			a:    Answer{Warning: "stele could not run"},
 			want: `{"systemMessage":"stele could not run"}`,
 		},
+		{
+			name: "ask",
+			a:    Answer{Ask: "stele.md is stele's"},
+			want: `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"stele.md is stele's"}}`,
+		},
+		{
+			name: "deny wins over ask",
+			a:    Answer{Deny: true, Reason: "read the rules", Ask: "stele.md is stele's"},
+			want: `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"read the rules"}}`,
+		},
+		{
+			name: "ask with context",
+			a:    Answer{Ask: "stele.md is stele's", Context: "a note"},
+			want: `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"stele.md is stele's","additionalContext":"a note"}}`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -214,6 +229,12 @@ func TestRenderPostToolUse(t *testing.T) {
 			name: "context only",
 			a:    Answer{Context: "a warning"},
 			want: `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"a warning"}}`,
+		},
+		{
+			// The write already happened: there is nothing left to ask.
+			name: "ask is ignored",
+			a:    Answer{Ask: "stele.md is stele's"},
+			want: "",
 		},
 		{
 			name: "warning to the user",

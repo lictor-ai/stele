@@ -75,7 +75,7 @@ type Problem struct {
 type Violation struct {
 	RuleID       string
 	File         string // relative to the root, with / separators
-	Line, Column int    // 1-based; Column counts bytes
+	Line, Column int    // 1-based; Column counts characters (runes)
 	Message      string // empty for the default, the rule's excerpt
 }
 
@@ -100,6 +100,17 @@ type Report struct {
 	// Truncated counts the violations left out past maxPerFile for one rule
 	// in one file.
 	Truncated int `json:"truncated"`
+	// RuleFilesChanged is set only by stele check --base, and has no effect
+	// on the exit code.
+	RuleFilesChanged []RuleFileChange `json:"rule_files_changed,omitempty"`
+}
+
+// RuleFileChange is a stele.md or stele.json that stele check --base found
+// changed: reviewers must see a change to the rules, or to how strictly they
+// are enforced.
+type RuleFileChange struct {
+	File   string `json:"file"`   // relative to the root, / separators
+	Change string `json:"change"` // "added", "modified" or "deleted"
 }
 
 // ReportVersion is the report format's version (D50).
@@ -156,6 +167,13 @@ func Run(ctx context.Context, root string, idx index.Index, files []string, cs m
 	}
 	p.report.finish()
 	return p.report, nil
+}
+
+// Validate reports the rules in idx that cannot be checked, as Run would,
+// reading no file: a bad blocking, an empty or unknown check, or settings
+// the checker rejects. Excerpts are filled.
+func Validate(idx index.Index, cs map[string]Checker) []Problem {
+	return prepare(idx, cs).report.Problems
 }
 
 // RunFile checks one file's content without reading anything. Only

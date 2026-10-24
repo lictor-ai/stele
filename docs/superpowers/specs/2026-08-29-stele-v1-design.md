@@ -682,6 +682,13 @@ and writes nothing. It fails when:
 A stale lock is an error and not a warning: CI would otherwise report violations
 against ids that exist on nobody's machine.
 
+`stele compile` checks the rules the same way with the built-in checkers (#54):
+it writes `stele.lock` and the index anyway, so an invalid rule keeps its id and
+the valid ones are enforced, prints each problem, and exits 1. The post-write
+hook skips an invalid rule and tells the user once a session for each set of
+problems; when the agent's write was to `stele.md` itself, the agent is told
+too.
+
 **2. Run the checkers on the selected files.**
 
 ```
@@ -718,7 +725,9 @@ executable it looked for.
 **The `regex` checker.** Built in. It reads the rule's `pattern` as a Go regular
 expression (RE2 syntax) and reports one violation per match, with the line and
 column where the match starts. An optional `message` key replaces the default
-message, which is the rule's excerpt.
+message, which is the rule's excerpt. The column counts characters (Unicode
+code points), so a tab is one; a leading UTF-8 byte order mark is not part of
+the text: patterns do not see it and columns do not count it.
 
 `stele check` reads rules from the index it just planned, never from rule files
 (D40). It does not touch the hook, the session state or the log. The log records

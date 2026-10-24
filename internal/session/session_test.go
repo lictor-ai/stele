@@ -75,6 +75,44 @@ func TestUpdate(t *testing.T) {
 	}
 }
 
+func TestDeniedRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	denied := map[string]map[string]time.Time{"": {"a.go": t0}}
+	if _, err := Update(root, "s1", t0, testKey, func(s *State) error {
+		s.Denied = denied
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(root, "s1", testKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(denied, got.Denied); diff != "" {
+		t.Errorf("denied (-want +got):\n%s", diff)
+	}
+}
+
+// A state file saved before Denied existed still loads, with Denied empty.
+func TestLoadStateWithoutDenied(t *testing.T) {
+	root := t.TempDir()
+	// Make the state directory as an update does.
+	if _, err := Update(root, "s1", t0, testKey, func(*State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	old := `{"session_id": "s1", "prompt_id": "p1", "shown": {"": {"sql": "2026-10-12T09:00:00Z"}}}` + "\n"
+	if err := os.WriteFile(path(root, "s1"), testKey.Seal(purpose("s1"), []byte(old)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(root, "s1", testKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Shown[""]["sql"] != t0 || got.Denied != nil {
+		t.Errorf("old state = %+v, want sql shown at %v and no denied files", got, t0)
+	}
+}
+
 func TestUpdateErrorSavesNothing(t *testing.T) {
 	root := t.TempDir()
 	boom := errors.New("boom")

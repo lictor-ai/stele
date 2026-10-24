@@ -37,6 +37,23 @@ func BlockMessage(path string, rules []BlockRule, note string) string {
 	return strings.TrimSpace(b.String())
 }
 
+// askMessage is what the user reads in Claude Code's permission prompt when
+// the agent writes one of stele's own files.
+//
+//go:embed assets/ask-message.tmpl
+var askMessage string
+
+var askTemplate = template.Must(template.New("ask-message").Parse(askMessage))
+
+// AskMessage renders the prompt for a write to path, one of stele's own files.
+func AskMessage(path string) string {
+	var b strings.Builder
+	if err := askTemplate.Execute(&b, struct{ Path string }{path}); err != nil {
+		panic(err) // the template is compiled in and tested
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // violationMessage is what the agent reads when a write it just made breaks
 // a rule stele can check. It is the other text that decides whether stele
 // works: tune it there.

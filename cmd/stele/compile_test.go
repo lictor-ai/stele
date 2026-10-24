@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lictor-ai/stele/internal/lock"
 )
 
 const rules = "tags: [db]\n\nNever build SQL by string concatenation.\n\n---\n\nEvery handler goes through the middleware chain.\n"
@@ -69,6 +71,64 @@ func TestCompile(t *testing.T) {
 	code, out, _ = runCmd("compile")
 	if code != exitOK || !strings.Contains(out, "1 by position") || !strings.Contains(out, "stelemd rule 2") {
 		t.Errorf("compile after reword = %d, stdout %q, want the guess named", code, out)
+	}
+}
+
+// An invalid rule is written to stele.lock and the index like any other, so
+// it keeps its id and the valid rules are enforced, but compile exits 1 (#54).
+func TestCompileInvalidRule(t *testing.T) {
+	const valid = "check: regex\npattern: password\\s*=\n\nNever put credentials in code.\n"
+	root := project(t, valid+"\n---\n\ncheck: regex\npattern: x*\n\nNo x.\n")
+
+	code, out, errOut := runCmd("compile")
+	if code != exitFailed {
+		t.Fatalf("compile = %d, stderr %q, want %d for an invalid rule", code, errOut, exitFailed)
+	}
+	for _, want := range []string{"invalid rule ", `"No x."`, "matches empty text", "(stelemd rule 2)", "1 problem in the rules", "wrote stele.lock and .stele/index.json"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout = %q, want it to contain %q", out, want)
+		}
+	}
+	lf, err := lock.Load(root)
+	if err != nil || len(lf.Rules) != 2 {
+		t.Fatalf("stele.lock: %d rules, %v; want both rules", len(lf.Rules), err)
+	}
+	id := lf.Rules[1].ID
+
+	// Run again: nothing written, still invalid.
+	code, out, _ = runCmd("compile")
+	if code != exitFailed || !strings.Contains(out, "up to date, nothing written") || !strings.Contains(out, "matches empty text") {
+		t.Errorf("second compile = %d, stdout %q, want up to date and the problem", code, out)
+	}
+
+	// stele check names the rule, not an out-of-date lock.
+	writeAt(t, root, "a.go", "package a\n")
+	code, out, errOut = runCmd("check", "a.go")
+	if code != exitFailed || !strings.Contains(out, "invalid rule "+id) || strings.Contains(out+errOut, "out of date") {
+		t.Errorf("check = %d, stdout %q, stderr %q, want the invalid rule named", code, out, errOut)
+	}
+
+	// Fix the pattern: exit 0, and the rule keeps its id.
+	writeAt(t, root, "stele.md", valid+"\n---\n\ncheck: regex\npattern: x+\n\nNo x.\n")
+	if code, out, _ := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile after the fix = %d, stdout %q", code, out)
+	}
+	if lf, _ := lock.Load(root); len(lf.Rules) != 2 || lf.Rules[1].ID != id {
+		t.Errorf("the fixed rule's id changed: %+v, want %s", lf.Rules, id)
+	}
+}
+
+func TestCompileInvalidRuleKinds(t *testing.T) {
+	for name, meta := range map[string]string{
+		"unknown checker": "check: eslint\n",
+		"bad blocking":    "check: regex\npattern: x+\nblocking: maybe\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			project(t, meta+"\nA rule.\n")
+			if code, out, _ := runCmd("compile"); code != exitFailed || !strings.Contains(out, "invalid rule ") {
+				t.Errorf("compile = %d, stdout %q, want exit %d and the problem", code, out, exitFailed)
+			}
+		})
 	}
 }
 

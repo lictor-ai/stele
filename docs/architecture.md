@@ -364,6 +364,7 @@ type State struct {
     SessionID string
     PromptID  string                          // the turn Shown belongs to
     Shown     map[string]map[string]time.Time // agent id ("" = main) → rule id → when shown
+    Denied    map[string]map[string]time.Time // agent id → root-relative file → when its write was last denied
     UpdatedAt time.Time
 }
 
@@ -389,7 +390,10 @@ fail every update of that session.
 It is keyed by agent because a subagent has its own context: rules shown to the
 main agent do not count as shown to a subagent, or the other way round. A new
 `prompt_id` empties it. Each entry keeps when it was shown, which is what lets the
-hook deny a whole batch of parallel writes (`backstop.Window`). In v1 only `stele
+hook deny a whole batch of parallel writes (`backstop.Window`). `Denied`, keyed
+and emptied the same way, records the files whose write was denied, so a later
+write to one of them is recognised as the agent's retry (#51). Both fields are
+`omitempty`, and an older state file loads with them empty. In v1 only `stele
 hook` writes session state; the arm-and-fetch fields of the spec (`Armed`,
 `Touched`, `Blocks`, `LastError`) belonged to the MCP exchange and are gone.
 
@@ -494,6 +498,7 @@ type Rule struct{ ID, Text string }
 type Input struct {
     PromptID string    // the turn
     AgentID  string    // "" for the main agent
+    File     string    // the root-relative file written; "" disables retry detection
     Rules    []Rule    // every rule that applies to the file, by scope
     Now      time.Time
 }
@@ -519,11 +524,13 @@ The order is the whole behaviour:
 ```
 1. !policy.Backstop                     → allow
 2. no rules apply to the file           → allow
-3. PromptID differs from the state      → a new turn: forget what was shown
+3. PromptID differs from the state      → a new turn: forget what was shown and denied
 4. for each rule: not shown to AgentID  → show it, record it at Now
-                  shown < Window ago    → show it again (same batch)
+                  a retry (File denied ≥ RetryAfter ago), and the rule
+                  shown at or before that deny          → read: skip it
+                  0 ≤ Now − shown < Window → show it again (same batch)
 5. nothing to show                      → allow
-6. otherwise                            → DENY with those rules
+6. otherwise                            → DENY with those rules, record File at Now
 ```
 
 `Decide` returns the state to save, and `cmd/` saves it **before** answering:
@@ -535,7 +542,17 @@ so a save that fails goes through the failure policy instead.
 in one message, and their hooks run before it reads any deny reason; within the
 window every write that needs the same rules is denied too, so the agent reads
 them once and retries the batch. It does not slide: a rule is stamped when first
-shown, and three seconds is shorter than any model round trip.
+shown. A model can retry within three seconds, so a retry is recognised by its
+file: a write to a file whose write was denied at least `RetryAfter` (500 ms)
+ago comes after that deny's reason, which held every rule for the file shown at
+or before it (#51). The hooks of parallel tool calls run within milliseconds of
+each other, and a retry needs a model round trip (the fastest seen took 1.2 s),
+so a second write to the same file sooner than that is a parallel one, denied
+as any other in the window. A deny dated in the future, after the clock moved
+back, is not a retry either. A first write to a third file while the window is
+open is still denied once. A time before a rule was shown means the clock moved
+back, and counts as outside the window, so a jump back never causes a deny loop
+(#53).
 
 **Failures** — no key, a session that cannot be saved, an invalid `stele.json`,
 `stele.md` broken with no good index behind it — go to `failure`: with
@@ -615,7 +632,7 @@ to stdin and closes it, the plugin writes one JSON response to stdout and exits 
 | `fingerprint` | `root`, `config` | `{"fingerprint": "…"}` |
 | `read` | `root`, `config` | `{"fingerprint": "…", "rules": [{file, position, line, description, tags, scope, body, meta}]}` |
 | `validate` | `config`, `rules: [{id, meta}]` | `{"problems": [{"rule_id", "message"}]}` |
-| `check` | `root`, `config`, `files`, `rules: [{id, body, scope, meta}]` | `{"violations": [{rule_id, file, line, column, message}]}` |
+| `check` | `root`, `config`, `files`, `rules: [{id, body, scope, meta}]` | `{"violations": [{rule_id, file, line, column, message}]}`, line and column 1-based, column in characters |
 | `push` | `config`, `project`, `records: [...]` — log entries and check reports, each with its own `v` | `{"accepted": n}` |
 
 A `read` response may set `id` on a rule; only a source that owns its ids should
@@ -683,7 +700,7 @@ type Problem struct {
 type Violation struct {
     RuleID       string
     File         string
-    Line, Column int    // 1-based; Column counts bytes
+    Line, Column int    // 1-based; Column counts characters
     Message      string // empty for the default, the rule's excerpt
 }
 
@@ -694,11 +711,15 @@ type Report struct {
     Violations []Finding    // Violation + Blocking + rule excerpt
     Skipped    []Skip       // reported, never a pass; no effect on the exit code
     Truncated  int          // violations past 100 for one rule in one file
+    RuleFilesChanged []RuleFileChange // --base only, omitted when empty: stele.md and stele.json added, modified or deleted; no effect on the exit code (#52)
 }
+
+type RuleFileChange struct{ File, Change string } // Change: added, modified, deleted
 
 func Run(ctx context.Context, root string, idx index.Index, files []string, cs map[string]Checker) (Report, error)
 func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker) Report // pure
 func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) Report
+func Validate(idx index.Index, cs map[string]Checker) []Problem // the rule problems Run reports, reading no file
 func (r Report) ExitCode() int // 0, 1; errors from Run are 2
 
 type Span struct{ First, Last int }       // lines, 1-based, inclusive
@@ -710,6 +731,10 @@ func Excerpt(body string) string
 func Own(file string) bool
 ```
 
+A field added to the report, like `rule_files_changed`, keeps `"v": 1`: it is
+optional, readers ignore keys they do not know, and no existing field changes.
+`v` moves only when a field changes meaning or goes away (D50).
+
 `Run` groups rules by their `check` key and calls each checker once, with only
 its own rules and only the files that match at least one of their `scope`s; the
 checker applies each rule's scope to each file, and `Run` drops any violation
@@ -718,7 +743,10 @@ known checker is a `Problem`, not a skip, and so is a `blocking` that is neither
 `true` nor `false`. Whether a violation is blocking is read from the rule's
 `blocking` key — default `true` when `check` is set — never from the checker
 (spec §8). Rules that fail `Validate` are left out of `Check`; the others still
-run, so one `stele check` shows every problem. Findings are sorted by file, line,
+run, so one `stele check` shows every problem. `stele compile` and the post-write
+hook call `Validate` for the same problems (#54); the hook checks the rules again
+rather than storing problems in the index, which would make `index` depend on
+`check`. Findings are sorted by file, line,
 column and rule id, and at most 100 are kept for one rule in one file; the rest
 are counted in `Truncated`.
 
@@ -786,7 +814,8 @@ reports a missing or invalid pattern, and one that matches empty text, which
 would match at every position. The pattern runs over the whole content, so `^`
 and `$` match per line only with `(?m)`. `Check` reads each file once through
 `safefile.ReadRegular`, runs every rule that applies to it, and turns each match
-offset into a line and column; a missing, non-regular or over-32 MiB file is
+offset into a line and a column in characters (a leading UTF-8 byte order
+mark is dropped first, so patterns do not see it); a missing, non-regular or over-32 MiB file is
 skipped and reported as a `Skip`. An optional `message` key replaces the default message. Binary files —
 a NUL in the first 8 KB — are skipped.
 
@@ -942,6 +971,25 @@ Verified against the Claude Code documentation rather than assumed.
 `additionalContext` (reaches the agent alongside the tool result) and a top-level
 `systemMessage` (reaches the user). stele never answers `permissionDecision:
 "allow"`: that would skip the user's own permission prompts.
+
+**Output to ask** (#52): a Write, Edit or MultiEdit to one of stele's own files
+(`stele.md`, `stele.json`, `stele.lock`, `.stele/`) answers `permissionDecision:
+"ask"`, before `stele.json` is read. Names count at any depth, a subproject's too,
+and symlinks and junctions on the way are followed, from inside a project or
+outside every project. A hard link or an 8.3 short name, which only a same-file
+test tells, is caught for the root's `stele.md`, `stele.json`, `stele.lock` and
+`.stele/` only. The ask comes before `stele.json`
+is read, so `backstop` and `block_on_error` change nothing. Claude Code shows
+`permissionDecisionReason` to the user in the prompt; with no one to answer
+(`claude -p`) the call is refused. A deny from another hook wins over it. The
+prompt text is the asset `ask-message.tmpl`.
+
+```json
+{"hookSpecificOutput": {
+   "hookEventName": "PreToolUse",
+   "permissionDecision": "ask",
+   "permissionDecisionReason": "<the ask message>"}}
+```
 
 **After a write** (`PostToolUse`, #29) the input also carries `tool_response`,
 `tool_use_id` and `duration_ms`. Of these stele reads only the
@@ -1253,6 +1301,7 @@ internal/install/assets/
   block-message.txt  → the permissionDecisionReason text
   violation-message.tmpl → the reason after a write that breaks a rule (#29)
   stele-header.md.tmpl   → the header comment in a new stele.md (#12)
+  ask-message.tmpl       → the prompt before a write to stele's own files (#52)
 ```
 
 `.stele/.gitignore` is one line, `*`, written by `index.EnsureDir`, which both
@@ -1289,7 +1338,7 @@ string literals scattered through the code, so they can be revised and diffed.
 | `lock.Reconcile`, ids from a source | Supplied id kept, clash is an error, `Project` minted once and never changed. |
 | sinks / `stele push` | The test plugin as a sink: offset advances only on success, no record sent twice, `brief` stripped unless `share_briefs`. |
 | `status` | Temp directory: JSON shape and `v`, plugin found and missing, stale index. |
-| `regex` | Table-driven over `Match`: line and column, multiple matches, multi-line content, CRLF, binary skip, invalid pattern. |
+| `regex` | Table-driven over `Match`: line and column, multiple matches, multi-line content, CRLF, multibyte text, BOM, invalid UTF-8, binary skip, invalid pattern. |
 | `backstop.Decide` | Table-driven over the full cross-product of state, policy, error and `HasRules`. Pure, so no fixtures. |
 | `matcher` | Table-driven. Cap, truncation, empty selection. |
 | `index`, `session`, `journal` | Temp directories. Concurrent-write tests for the replace path, including a locked target. |

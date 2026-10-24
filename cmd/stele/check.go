@@ -24,6 +24,7 @@ import (
 	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/plugin"
+	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/source"
 )
 
@@ -89,6 +90,13 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	rep, err := check.Run(context.Background(), root, r.Index, files, plugin.BuiltinCheckers())
 	if err != nil {
 		return cantRun("%v", err)
+	}
+	// A rules change passes CI, but reviewers must see it (#52). A stale
+	// stele.lock has already failed above.
+	if *base != "" {
+		if rep.RuleFilesChanged, err = ruleFileChanges(root, *base); err != nil {
+			return cantRun("%v", err)
+		}
 	}
 
 	if *format == "json" {
@@ -257,8 +265,41 @@ func gitFiles(root, base string, all bool) ([]string, error) {
 	return dedupe(append(changed, untracked...)), nil
 }
 
-// git runs git in root and splits its NUL-separated output.
+// git runs git in root and splits its NUL-separated output, sorted and
+// without repeats.
 func git(root string, args ...string) ([]string, error) {
+	files, err := gitRaw(root, args...)
+	return dedupe(files), err
+}
+
+// ruleFileChanges returns the stele.md and stele.json files, at any depth,
+// that the branch adds, modifies or deletes since its merge base with base.
+// A rename counts as a deletion and an addition: moving stele.json away
+// drops it.
+func ruleFileChanges(root, base string) ([]check.RuleFileChange, error) {
+	out, err := gitRaw(root, "diff", "--name-status", "-z", "--relative", "--no-renames", base+"...HEAD", "--")
+	if err != nil {
+		return nil, err
+	}
+	changes := map[string]string{"A": "added", "M": "modified", "T": "modified", "D": "deleted"}
+	var cs []check.RuleFileChange
+	for i := 0; i+1 < len(out); i += 2 {
+		status, file := out[i], out[i+1]
+		// Case is ignored only where stele ignores it (scope.Match): on Linux
+		// stele never reads a STELE.md.
+		if !scope.Match("stele.md", file) && !scope.Match(enforce.FileName, file) {
+			continue
+		}
+		if c, ok := changes[status]; ok {
+			cs = append(cs, check.RuleFileChange{File: file, Change: c})
+		}
+	}
+	sort.Slice(cs, func(i, j int) bool { return cs[i].File < cs[j].File })
+	return cs, nil
+}
+
+// gitRaw runs git in root and splits its NUL-separated output, in order.
+func gitRaw(root string, args ...string) ([]string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = root
 	var errOut bytes.Buffer
@@ -276,7 +317,7 @@ func git(root string, args ...string) ([]string, error) {
 			files = append(files, f)
 		}
 	}
-	return dedupe(files), nil
+	return files, nil
 }
 
 func dedupe(files []string) []string {
@@ -293,9 +334,7 @@ func dedupe(files []string) []string {
 // printCheck prints the report for a person: the rule problems, one line per
 // violation, then a summary.
 func printCheck(w io.Writer, lf lock.File, rep check.Report, subs []subproject, rules, files int) {
-	for _, p := range rep.Problems {
-		fmt.Fprintf(w, "invalid rule %s \"%s\"%s: %s\n", p.RuleID, p.Excerpt, where(lf, p.RuleID), p.Message)
-	}
+	printProblems(w, lf, rep.Problems)
 	errs, warns := 0, 0
 	for _, f := range rep.Violations {
 		level := "error"
@@ -335,6 +374,13 @@ func printCheck(w io.Writer, lf lock.File, rep check.Report, subs []subproject, 
 		fmt.Fprintf(w, "%s/: skipped %s, it has its own %s\n", showPath(sp.dir), plural(n, "file"), sp.has)
 	}
 	files -= len(skipped)
+	for _, c := range rep.RuleFilesChanged {
+		what := "it holds the project's rules"
+		if scope.Match(enforce.FileName, c.File) {
+			what = "it sets how strictly the rules are enforced"
+		}
+		fmt.Fprintf(w, "%s: %s on this branch: %s; review the change\n", showPath(c.File), c.Change, what)
+	}
 
 	if len(rep.Problems) == 0 {
 		fmt.Fprintf(w, "%s valid\n", plural(rules, "rule"))
@@ -355,6 +401,14 @@ func printCheck(w io.Writer, lf lock.File, rep check.Report, subs []subproject, 
 			counts = append(counts, plural(warns, "warning"))
 		}
 		fmt.Fprintf(w, "checked %s: %s\n", plural(files, "file"), strings.Join(counts, ", "))
+	}
+}
+
+// printProblems prints one line per invalid rule, as stele check and stele
+// compile do.
+func printProblems(w io.Writer, lf lock.File, ps []check.Problem) {
+	for _, p := range ps {
+		fmt.Fprintf(w, "invalid rule %s \"%s\"%s: %s\n", p.RuleID, p.Excerpt, where(lf, p.RuleID), p.Message)
 	}
 }
 
