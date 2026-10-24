@@ -699,6 +699,7 @@ type Report struct {
 func Run(ctx context.Context, root string, idx index.Index, files []string, cs map[string]Checker) (Report, error)
 func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker) Report // pure
 func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) Report
+func Validate(idx index.Index, cs map[string]Checker) []Problem // the rule problems Run reports, reading no file
 func (r Report) ExitCode() int // 0, 1; errors from Run are 2
 
 type Span struct{ First, Last int }       // lines, 1-based, inclusive
@@ -718,7 +719,10 @@ known checker is a `Problem`, not a skip, and so is a `blocking` that is neither
 `true` nor `false`. Whether a violation is blocking is read from the rule's
 `blocking` key — default `true` when `check` is set — never from the checker
 (spec §8). Rules that fail `Validate` are left out of `Check`; the others still
-run, so one `stele check` shows every problem. Findings are sorted by file, line,
+run, so one `stele check` shows every problem. `stele compile` and the post-write
+hook call `Validate` for the same problems (#54); the hook checks the rules again
+rather than storing problems in the index, which would make `index` depend on
+`check`. Findings are sorted by file, line,
 column and rule id, and at most 100 are kept for one rule in one file; the rest
 are counted in `Truncated`.
 
