@@ -73,7 +73,8 @@ type results struct {
 	out     []Target
 	seen    map[string]int // path to its index in out
 	unknown int
-	globbed int
+	globbed int // files matched by globs
+	entries int // directory entries globs read
 }
 
 // add adds one target, merging a duplicate. A content write wins over a

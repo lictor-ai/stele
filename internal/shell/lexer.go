@@ -3,6 +3,7 @@ package shell
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -23,11 +24,33 @@ type parser struct {
 	dirOK bool   // false once a cd went somewhere unknown
 
 	heredocs []heredoc // pending, read at the next newline
+
+	// A function body runs only when the function is called: its cd does not
+	// move the directory of what follows it.
+	funcNext bool   // the next { … } is a function body
+	braces   int    // { … } groups open
+	bodies   []body // function bodies open, innermost last
 }
 
+// body is a function body being read: where it began, and the directory to
+// go back to at its end.
+type body struct {
+	braces int
+	dir    string
+	dirOK  bool
+}
+
+// The states of a case … esac being read.
+const (
+	caseHead    = iota // the subject, up to in
+	casePattern        // a pattern, up to its )
+	caseBody           // the commands of a pattern, up to ;; or esac
+)
+
 type heredoc struct {
-	delim string
-	strip bool // <<-: leading tabs are not part of a line
+	delim  string
+	strip  bool // <<-: leading tabs are not part of a line
+	expand bool // the delimiter is unquoted: the body's substitutions run
 }
 
 // word is one shell word, quotes removed and what can be expanded expanded.
@@ -75,7 +98,7 @@ func (c *command) reset() {
 
 // keywords may stand before a command; they are not its name.
 var keywords = map[string]bool{
-	"{": true, "}": true, "!": true, "if": true, "then": true, "else": true, "elif": true, "fi": true,
+	"!": true, "if": true, "then": true, "else": true, "elif": true, "fi": true,
 	"do": true, "done": true, "while": true, "until": true, "time": true, "esac": true,
 }
 
@@ -88,34 +111,102 @@ func (p *parser) list(term string) {
 		return
 	}
 	var c command
-	prevPipe := false
+	var cases []int // the case … esac open in this list, innermost last
+	prevPipe, fnName := false, false
 	for !p.err {
 		t := p.next()
 		if p.err {
 			return // the command being read is dropped
 		}
+		n := len(cases)
 		switch t.kind {
 		case tEOF:
 			p.finish(&c, prevPipe)
 			return
 		case tWord:
-			if len(c.words) == 0 && t.w.plain() {
-				if keywords[t.w.text] {
-					continue
+			if n > 0 && cases[n-1] != caseBody {
+				// The subject or a pattern: not a command.
+				switch {
+				case !t.w.plain():
+				case cases[n-1] == caseHead && t.w.text == "in":
+					cases[n-1] = casePattern
+				case cases[n-1] == casePattern && t.w.text == "esac":
+					cases = cases[:n-1]
 				}
-				if t.w.text == "[[" {
+				continue
+			}
+			if fnName {
+				fnName = false // function NAME
+				continue
+			}
+			if len(c.words) == 0 && t.w.plain() {
+				switch t.w.text {
+				case "case":
+					cases = append(cases, caseHead)
+					continue
+				case "esac":
+					if n > 0 {
+						cases = cases[:n-1]
+					}
+					continue
+				case "function":
+					p.funcNext, fnName = true, true
+					continue
+				case "{":
+					if p.funcNext {
+						p.bodies = append(p.bodies, body{p.braces, p.dir, p.dirOK})
+						p.funcNext = false
+					}
+					p.braces++
+					continue
+				case "}":
+					p.braces--
+					if b := len(p.bodies); b > 0 && p.bodies[b-1].braces == p.braces {
+						p.dir, p.dirOK = p.bodies[b-1].dir, p.bodies[b-1].dirOK
+						p.bodies = p.bodies[:b-1]
+					}
+					continue
+				case "[[":
 					p.skipWords("]]")
 					continue
 				}
+				if keywords[t.w.text] {
+					continue
+				}
 			}
+			p.funcNext = false
 			c.words = append(c.words, t.w)
 		case tRedir:
 			c.redirs = append(c.redirs, t)
 		case tOp:
+			if n > 0 {
+				switch st := cases[n-1]; {
+				case st == casePattern && t.op == ")":
+					cases[n-1] = caseBody
+					c.reset()
+					continue
+				case st == casePattern && (t.op == "(" || t.op == "|" || t.op == "\n"):
+					continue // (a|b): parts of the pattern
+				case st == caseBody && (t.op == ";;" || t.op == ";&" || t.op == ";;&"):
+					p.finish(&c, prevPipe)
+					prevPipe = false
+					cases[n-1] = casePattern
+					continue
+				case st == caseHead:
+					continue
+				}
+			}
 			switch t.op {
 			case "(":
-				if len(c.words) > 0 {
-					continue // f() { …: a function definition
+				if len(c.words) > 0 || p.funcNext {
+					// NAME() or function NAME(): a function definition.
+					if q := p.next(); q.kind != tOp || q.op != ")" {
+						p.err = true
+						return
+					}
+					c.reset()
+					p.funcNext = true
+					continue
 				}
 				dir, ok := p.dir, p.dirOK
 				p.list(")")
@@ -186,7 +277,7 @@ func (p *parser) next() token {
 			p.readHeredocs()
 			return token{kind: tOp, op: "\n"}
 		case ';':
-			return p.op(";;", ";")
+			return p.op(";;&", ";;", ";&", ";")
 		case '&':
 			if p.has("&>") {
 				return p.redirect("")
@@ -261,33 +352,70 @@ func (p *parser) redirect(fd string) token {
 	}
 	t.w, t.hasWord = p.readWord(), true
 	if t.op == "<<" || t.op == "<<-" {
-		p.heredocs = append(p.heredocs, heredoc{delim: t.w.text, strip: t.op == "<<-"})
+		quoted := t.w.raw != t.w.text || strings.ContainsAny(t.w.raw, `'"\`)
+		p.heredocs = append(p.heredocs, heredoc{delim: t.w.text, strip: t.op == "<<-", expand: !quoted})
 	}
 	return t
 }
 
-// readHeredocs skips the bodies of the heredocs pending at a newline.
+// readHeredocs reads the bodies of the heredocs pending at a newline. A body
+// is text, not commands; but when its delimiter is unquoted, its $(…) and
+// backticks run, so they are read for targets.
 func (p *parser) readHeredocs() {
-	for _, h := range p.heredocs {
-		for p.i < len(p.src) {
-			end := strings.IndexByte(p.src[p.i:], '\n')
-			line := p.src[p.i:]
-			if end >= 0 {
-				line = line[:end]
-				p.i += end + 1
-			} else {
-				p.i = len(p.src)
-			}
-			line = strings.TrimSuffix(line, "\r")
+	pending := p.heredocs
+	p.heredocs = nil
+	for _, h := range pending {
+		for p.i < len(p.src) && !p.err {
+			end := lineEnd(p.src, p.i)
+			line := strings.TrimSuffix(p.src[p.i:end], "\r")
 			if h.strip {
 				line = strings.TrimLeft(line, "\t")
 			}
 			if line == h.delim {
+				p.i = min(end+1, len(p.src))
 				break
 			}
+			if h.expand {
+				p.substitutions(end)
+				// A substitution may have run past this line: go on from
+				// the end of the line it stopped in.
+				end = lineEnd(p.src, max(p.i, end))
+			}
+			p.i = min(end+1, len(p.src))
 		}
 	}
-	p.heredocs = nil
+}
+
+// lineEnd is the index of the newline ending the line at i, or len(s).
+func lineEnd(s string, i int) int {
+	if i >= len(s) {
+		return len(s)
+	}
+	if n := strings.IndexByte(s[i:], '\n'); n >= 0 {
+		return i + n
+	}
+	return len(s)
+}
+
+// substitutions reads the $(…) and backticks of a heredoc line, up to end.
+func (p *parser) substitutions(end int) {
+	for p.i < end && !p.err {
+		switch {
+		case p.src[p.i] == '\\':
+			p.i += 2
+		case p.has("$(("):
+			p.i += 3
+			p.skipArith()
+		case p.has("$("):
+			p.i += 2
+			p.sub()
+		case p.src[p.i] == '`':
+			var w word
+			p.backtick(&w)
+		default:
+			p.i++
+		}
+	}
 }
 
 // readWord reads one word, removing quotes and expanding what it can.
@@ -397,6 +525,24 @@ func (p *parser) dollar(b *strings.Builder, w *word, quoted bool) {
 		p.i++
 		p.sub()
 		w.dynamic = true
+	case c == '[': // $[ … ], old arithmetic
+		depth := 0
+		for p.i < len(p.src) {
+			switch p.src[p.i] {
+			case '[':
+				depth++
+			case ']':
+				depth--
+			}
+			p.i++
+			if depth == 0 {
+				break
+			}
+		}
+		if depth != 0 {
+			p.err = true
+		}
+		w.dynamic = true
 	case c == '{':
 		end := strings.IndexByte(p.src[p.i:], '}')
 		if end < 0 {
@@ -427,6 +573,22 @@ func (p *parser) dollar(b *strings.Builder, w *word, quoted bool) {
 // expand writes the value of variable name, from an assignment earlier in
 // the command or the environment.
 func (p *parser) expand(b *strings.Builder, w *word, name string) {
+	switch name {
+	case "PWD": // where the command has moved to, not where stele runs
+		if !p.dirOK || p.dyn[name] {
+			w.dynamic = true
+			return
+		}
+		if v, ok := p.vars[name]; ok {
+			b.WriteString(v)
+			return
+		}
+		b.WriteString(p.dir)
+		return
+	case "OLDPWD":
+		w.dynamic = true
+		return
+	}
 	if p.dyn[name] {
 		w.dynamic = true
 		return
@@ -581,6 +743,10 @@ func (p *parser) unwrap(words []word) []word {
 					words = words[1:]
 				}
 			}
+			// timeout DURATION cmd: the duration is not the command.
+			if n := positional[name(w)]; len(words) >= n {
+				words = words[n:]
+			}
 		default:
 			return words
 		}
@@ -598,7 +764,14 @@ var wrappers = map[string]map[string]bool{
 	"nohup":   {},
 	"nice":    {"-n": true},
 	"time":    {},
+	"timeout": {"-s": true, "-k": true},
+	"stdbuf":  {"-i": true, "-o": true, "-e": true},
+	"ionice":  {"-c": true, "-n": true, "-t": false},
 }
+
+// positional counts the words a wrapper takes after its options, before the
+// command.
+var positional = map[string]int{"timeout": 1}
 
 // name is a command word's name: its base name, without .exe.
 func name(w word) string {
@@ -854,7 +1027,12 @@ func (p *parser) add(w word, k Kind) {
 		return
 	}
 	if w.glob && !w.dynamic {
-		if matches := p.glob(w.text); len(matches) > 0 {
+		matches, ok := p.glob(w.text)
+		if !ok {
+			p.res.unknown++ // over the budget: what it matches is not known
+			return
+		}
+		if len(matches) > 0 {
 			for _, m := range matches {
 				p.res.add(m, k)
 			}
@@ -881,21 +1059,65 @@ func (p *parser) resolve(w word) (string, bool) {
 	return Abs(dir, w.text)
 }
 
-// glob expands a pattern, within the cap on matches.
-func (p *parser) glob(pattern string) []string {
+// maxGlobEntries caps the directory entries a command's globs read, in all:
+// a glob over a whole drive must not cost seconds on every Bash call. Tests
+// lower it.
+var maxGlobEntries = 2000
+
+// glob expands a pattern, segment by segment, reading at most the budget of
+// directory entries. ok is false past the budget. No match returns none, and
+// the caller takes the word as written, as bash does.
+func (p *parser) glob(pattern string) (matches []string, ok bool) {
 	abs, ok := p.resolve(word{text: pattern})
 	if !ok || p.res.globbed >= maxGlob {
-		return nil
+		return nil, true
 	}
-	matches, err := filepath.Glob(abs)
-	if err != nil {
-		return nil
+	vol := filepath.VolumeName(abs)
+	sep := string(filepath.Separator)
+	bases := []string{vol + sep}
+	segs := strings.Split(strings.TrimPrefix(abs[len(vol):], sep), sep)
+	for i, seg := range segs {
+		var next []string
+		for _, b := range bases {
+			if !strings.ContainsAny(seg, "*?[") {
+				c := filepath.Join(b, seg)
+				// A fixed last part must exist, as filepath.Glob has it.
+				if i == len(segs)-1 {
+					if p.res.entries++; p.res.entries > maxGlobEntries {
+						return nil, false
+					}
+					if _, err := os.Lstat(c); err != nil {
+						continue
+					}
+				}
+				next = append(next, c)
+				continue
+			}
+			f, err := os.Open(b)
+			if err != nil {
+				continue
+			}
+			es, _ := f.ReadDir(maxGlobEntries - p.res.entries + 1)
+			f.Close()
+			if p.res.entries += len(es); p.res.entries > maxGlobEntries {
+				return nil, false
+			}
+			for _, e := range es {
+				if m, _ := filepath.Match(seg, e.Name()); m {
+					next = append(next, filepath.Join(b, e.Name()))
+				}
+			}
+		}
+		if bases = next; len(bases) == 0 {
+			return nil, true
+		}
 	}
-	if room := maxGlob - p.res.globbed; len(matches) > room {
-		matches = matches[:room]
+	sort.Strings(bases)
+	if room := maxGlob - p.res.globbed; len(bases) > room {
+		bases = bases[:room]
 	}
-	p.res.globbed += len(matches)
-	return matches
+	p.res.globbed += len(bases)
+	return bases, true
 }
 
 // home is the home directory ~ stands for.

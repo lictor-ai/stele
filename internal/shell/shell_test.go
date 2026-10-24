@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -152,6 +153,37 @@ func TestTargets(t *testing.T) {
 		{command: "echo one \\\n  > a.go", want: []Target{at("a.go", R)}},
 		{command: "echo x > a.go\r\necho y > a.go", want: []Target{at("a.go", R)}},
 
+		// PWD is the directory the command has moved to, not stele's.
+		{command: "echo > $PWD/a.go", want: []Target{at("a.go", R)}},
+		{command: "cd sub && echo > ${PWD}/a.go", want: []Target{at("sub/a.go", R)}},
+		{command: "cd $X; echo > $PWD/a.go", unknown: 1},
+		{command: "echo > $OLDPWD/a.go", unknown: 1},
+
+		// An unquoted heredoc's body runs its substitutions; a quoted one's does not.
+		{command: "cat <<EOF\n$(echo x > in.go)\n`echo y > bt.go`\nEOF\necho > after.go", want: []Target{at("in.go", R), at("bt.go", R), at("after.go", R)}},
+		{command: "cat <<'EOF'\n$(echo x > in.go)\nEOF", want: nil},
+		{command: "cat <<EOF\n\\$(echo x > no.go)\nEOF", want: nil},
+
+		// A function body's cd stays in the function; its writes still count.
+		{command: "f() { cd sub; echo > in.go; }; echo > out.go", want: []Target{at("sub/in.go", R), at("out.go", R)}},
+		{command: "function f { cd sub; }; echo > out.go", want: []Target{at("out.go", R)}},
+		{command: "function f() { cd sub; }\necho > out.go", want: []Target{at("out.go", R)}},
+
+		// A case pattern's ) closes nothing.
+		{command: "(case x in a) cd sub;; (b) true;; esac; echo > in.go); echo > out.go", want: []Target{at("sub/in.go", R), at("out.go", R)}},
+		{command: "case $x in *.go) echo > g;; *) echo > h;; esac", want: []Target{at("g", R), at("h", R)}},
+
+		// More wrappers.
+		{command: "timeout 10 tee f", want: []Target{at("f", T)}},
+		{command: "timeout -s KILL --kill-after=5 1m sed -i s/a/b/ f", want: []Target{at("f", S)}},
+		{command: "stdbuf -oL tee f", want: []Target{at("f", T)}},
+		{command: "stdbuf -o L tee f", want: []Target{at("f", T)}},
+		{command: "ionice -c 3 tee f", want: []Target{at("f", T)}},
+
+		// $[ … ] is arithmetic.
+		{command: "echo $[ 1 > 2 ]", want: nil},
+		{command: "echo $[1>2] > f", want: []Target{at("f", R)}},
+
 		// Removals and copies, which only matter for stele's own files.
 		{command: "rm -f stele.json", want: []Target{at("stele.json", Remove)}},
 		{command: "rm -rf -- .stele", want: []Target{at(".stele", Remove)}},
@@ -239,6 +271,34 @@ func TestTargetsGlob(t *testing.T) {
 	want = []Target{{Path: filepath.Join(dir, "src", "*.go"), Kind: Redirect}}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("quoted (-want +got):\n%s", diff)
+	}
+}
+
+// A glob reads at most a budget of directory entries: past it, its target is
+// unknown, so a glob over a whole drive costs no more than a small one.
+func TestTargetsGlobBudget(t *testing.T) {
+	old := maxGlobEntries
+	maxGlobEntries = 100
+	t.Cleanup(func() { maxGlobEntries = old })
+	dir := t.TempDir()
+	for i := range 15 {
+		for j := range 15 {
+			if err := os.MkdirAll(filepath.Join(dir, fmt.Sprint("d", i), fmt.Sprint("e", j)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	start := time.Now()
+	got, unknown := Targets("rm -f */*/*.xyz; echo > */*/*/*.q", dir)
+	if d := time.Since(start); d > 50*time.Millisecond {
+		t.Errorf("globs over the budget took %v", d)
+	}
+	if len(got) != 0 || unknown != 2 {
+		t.Errorf("over the budget: %v, unknown %d; want none, 2 unknown", got, unknown)
+	}
+	// Within it, a glob still matches.
+	if got, _ := Targets("echo > d1/*", dir); len(got) != 15 {
+		t.Errorf("within the budget: %d matches, want 15", len(got))
 	}
 }
 
