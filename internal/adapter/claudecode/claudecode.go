@@ -8,6 +8,10 @@
 //     call, and Claude reads permissionDecisionReason. stele denies only to
 //     show rules, and otherwise leaves permissionDecision unset: "allow"
 //     would skip the user's own permission prompts.
+//   - permissionDecision "ask" makes Claude Code ask the user, showing
+//     permissionDecisionReason in the prompt, even in auto mode. With no one
+//     to answer (claude -p) the call is refused and Claude reads the reason.
+//     When hooks disagree, deny wins over ask.
 //   - A PostToolUse hook runs after the tool. A top-level decision "block"
 //     cannot undo it: it adds reason next to the tool result, for Claude.
 //     PostToolUse fires concurrently when Claude makes parallel tool calls.
@@ -174,6 +178,10 @@ type Answer struct {
 	// reads.
 	Deny   bool
 	Reason string
+	// Ask, when set, makes Claude Code ask the user before a PreToolUse call,
+	// showing Ask in the permission prompt. Deny wins over it, as in Claude
+	// Code. It is ignored after a write.
+	Ask string
 	// Context is added to Claude's context alongside the tool result.
 	Context string
 	// Warning is shown to the user, not to Claude.
@@ -199,11 +207,16 @@ func Render(event string, a Answer) []byte {
 	if a.Deny && post {
 		out.Decision, out.Reason = "block", a.Reason
 	}
-	if (a.Deny && !post) || a.Context != "" {
+	ask := !post && !a.Deny && a.Ask != ""
+	if (a.Deny && !post) || ask || a.Context != "" {
 		s := &specific{HookEventName: event, AdditionalContext: a.Context}
-		if a.Deny && !post {
+		switch {
+		case a.Deny && !post:
 			s.PermissionDecision = "deny"
 			s.PermissionDecisionReason = a.Reason
+		case ask:
+			s.PermissionDecision = "ask"
+			s.PermissionDecisionReason = a.Ask
 		}
 		out.HookSpecificOutput = s
 	}

@@ -711,7 +711,10 @@ type Report struct {
     Violations []Finding    // Violation + Blocking + rule excerpt
     Skipped    []Skip       // reported, never a pass; no effect on the exit code
     Truncated  int          // violations past 100 for one rule in one file
+    RuleFilesChanged []RuleFileChange // --base only, omitted when empty: stele.md and stele.json added, modified or deleted; no effect on the exit code (#52)
 }
+
+type RuleFileChange struct{ File, Change string } // Change: added, modified, deleted
 
 func Run(ctx context.Context, root string, idx index.Index, files []string, cs map[string]Checker) (Report, error)
 func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker) Report // pure
@@ -727,6 +730,10 @@ func Contain(spans []Span, line int) bool // binary search over merged spans
 func Excerpt(body string) string
 func Own(file string) bool
 ```
+
+A field added to the report, like `rule_files_changed`, keeps `"v": 1`: it is
+optional, readers ignore keys they do not know, and no existing field changes.
+`v` moves only when a field changes meaning or goes away (D50).
 
 `Run` groups rules by their `check` key and calls each checker once, with only
 its own rules and only the files that match at least one of their `scope`s; the
@@ -964,6 +971,25 @@ Verified against the Claude Code documentation rather than assumed.
 `additionalContext` (reaches the agent alongside the tool result) and a top-level
 `systemMessage` (reaches the user). stele never answers `permissionDecision:
 "allow"`: that would skip the user's own permission prompts.
+
+**Output to ask** (#52): a Write, Edit or MultiEdit to one of stele's own files
+(`stele.md`, `stele.json`, `stele.lock`, `.stele/`) answers `permissionDecision:
+"ask"`, before `stele.json` is read. Names count at any depth, a subproject's too,
+and symlinks and junctions on the way are followed, from inside a project or
+outside every project. A hard link or an 8.3 short name, which only a same-file
+test tells, is caught for the root's `stele.md`, `stele.json`, `stele.lock` and
+`.stele/` only. The ask comes before `stele.json`
+is read, so `backstop` and `block_on_error` change nothing. Claude Code shows
+`permissionDecisionReason` to the user in the prompt; with no one to answer
+(`claude -p`) the call is refused. A deny from another hook wins over it. The
+prompt text is the asset `ask-message.tmpl`.
+
+```json
+{"hookSpecificOutput": {
+   "hookEventName": "PreToolUse",
+   "permissionDecision": "ask",
+   "permissionDecisionReason": "<the ask message>"}}
+```
 
 **After a write** (`PostToolUse`, #29) the input also carries `tool_response`,
 `tool_use_id` and `duration_ms`. Of these stele reads only the
@@ -1256,6 +1282,7 @@ internal/install/assets/
   block-message.txt  → the permissionDecisionReason text
   violation-message.tmpl → the reason after a write that breaks a rule (#29)
   stele-header.md.tmpl   → the header comment in a new stele.md (#12)
+  ask-message.tmpl       → the prompt before a write to stele's own files (#52)
 ```
 
 `.stele/.gitignore` is one line, `*`, written by `index.EnsureDir`, which both

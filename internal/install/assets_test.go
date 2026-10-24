@@ -32,10 +32,22 @@ func TestBlockMessage(t *testing.T) {
 // The templates are embedded as checked out; .gitattributes keeps them LF on
 // every platform, so the agent never reads a stray \r.
 func TestAssetsHaveLFLineEnds(t *testing.T) {
-	for name, s := range map[string]string{"block-message": blockMessage, "violation-message": violationMessage, "stele-header.md": steleHeader} {
+	for name, s := range map[string]string{"block-message": blockMessage, "violation-message": violationMessage, "stele-header.md": steleHeader, "ask-message": askMessage} {
 		if strings.Contains(s, "\r") {
 			t.Errorf("%s.tmpl has CR line ends", name)
 		}
+	}
+}
+
+func TestAskMessage(t *testing.T) {
+	got := AskMessage("sub/stele.json")
+	for _, want := range []string{"sub/stele.json", "stele's own files", "asks every time", "only if you asked"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ask message lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "{{") {
+		t.Errorf("ask message has template text left:\n%s", got)
 	}
 }
 
