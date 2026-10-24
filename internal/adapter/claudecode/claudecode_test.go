@@ -182,8 +182,6 @@ func TestRender(t *testing.T) {
 	}
 }
 
-// After a write, a block cannot stop the tool: it sends the reason back to
-// Claude as a top-level decision.
 // At the start of a session, context reaches Claude before the first prompt.
 func TestRenderSessionStart(t *testing.T) {
 	got := string(Render("SessionStart", Answer{Context: "write with Write"}))
@@ -193,6 +191,8 @@ func TestRenderSessionStart(t *testing.T) {
 	}
 }
 
+// After a write, a block cannot stop the tool: it sends the reason back to
+// Claude as a top-level decision.
 func TestRenderPostToolUse(t *testing.T) {
 	tests := []struct {
 		name string
