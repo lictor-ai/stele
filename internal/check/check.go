@@ -100,6 +100,17 @@ type Report struct {
 	// Truncated counts the violations left out past maxPerFile for one rule
 	// in one file.
 	Truncated int `json:"truncated"`
+	// RuleFilesChanged is set only by stele check --base, and has no effect
+	// on the exit code.
+	RuleFilesChanged []RuleFileChange `json:"rule_files_changed,omitempty"`
+}
+
+// RuleFileChange is a stele.md or stele.json that stele check --base found
+// changed: reviewers must see a change to the rules, or to how strictly they
+// are enforced.
+type RuleFileChange struct {
+	File   string `json:"file"`   // relative to the root, / separators
+	Change string `json:"change"` // "added", "modified" or "deleted"
 }
 
 // ReportVersion is the report format's version (D50).
