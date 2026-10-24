@@ -20,10 +20,18 @@ import (
 // denied. The agent often issues several writes at once, and their hooks run
 // before it reads any deny reason; the window denies the whole batch, so the
 // agent reads the rules once and retries all of it. A model can retry within
-// the window, so a retry is recognised by its file, not by time: a write to
-// a file whose write was denied comes after that deny's reason was read.
+// the window, so a retry is recognised by its file: a write to a file whose
+// write was denied at least RetryAfter ago comes after that deny's reason
+// was read.
 // A time before a rule was shown (the clock moved back) is outside it.
 const Window = 3 * time.Second
+
+// RetryAfter is how long after a deny a write to the same file counts as the
+// agent's retry. The hooks of parallel tool calls run within milliseconds of
+// each other; a retry needs a model round trip, and the fastest seen took
+// 1.2 s. A write to the denied file sooner than this is a parallel write,
+// denied as any other in the window.
+const RetryAfter = 500 * time.Millisecond
 
 // Rule is a rule that applies to the file about to be written.
 type Rule struct {
@@ -58,10 +66,12 @@ func Decide(in Input, st session.State, p enforce.Policy) (Decision, session.Sta
 		st.Denied = nil
 	}
 	shown := st.Shown[in.AgentID]
-	// A retry: this file's write was denied, so the agent has read that
-	// reason, which held every rule for the file shown at or before it.
+	// A retry: this file's write was denied at least RetryAfter ago, so the
+	// agent has read that reason, which held every rule for the file shown
+	// at or before it. Sooner is a parallel write to the same file, and a
+	// deny in the future (the clock moved back) proves nothing.
 	deniedAt, retry := st.Denied[in.AgentID][in.File]
-	retry = retry && in.File != ""
+	retry = retry && in.File != "" && in.Now.Sub(deniedAt) >= RetryAfter
 
 	var show []Rule
 	var fresh []string

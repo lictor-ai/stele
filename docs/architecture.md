@@ -526,7 +526,7 @@ The order is the whole behaviour:
 2. no rules apply to the file           → allow
 3. PromptID differs from the state      → a new turn: forget what was shown and denied
 4. for each rule: not shown to AgentID  → show it, record it at Now
-                  a retry of a denied file, and the rule
+                  a retry (File denied ≥ RetryAfter ago), and the rule
                   shown at or before that deny          → read: skip it
                   0 ≤ Now − shown < Window → show it again (same batch)
 5. nothing to show                      → allow
@@ -543,12 +543,16 @@ in one message, and their hooks run before it reads any deny reason; within the
 window every write that needs the same rules is denied too, so the agent reads
 them once and retries the batch. It does not slide: a rule is stamped when first
 shown. A model can retry within three seconds, so a retry is recognised by its
-file, not by time: a write to a file whose write was denied comes after that
-deny's reason, which held every rule for the file shown at or before it (#51). It
-compares two stored times, so a clock jump cannot break it. A first write to a
-third file while the window is open is still denied once. A time before a rule
-was shown means the clock moved back, and counts as outside the window, so a
-jump back never causes a deny loop (#53).
+file: a write to a file whose write was denied at least `RetryAfter` (500 ms)
+ago comes after that deny's reason, which held every rule for the file shown at
+or before it (#51). The hooks of parallel tool calls run within milliseconds of
+each other, and a retry needs a model round trip (the fastest seen took 1.2 s),
+so a second write to the same file sooner than that is a parallel one, denied
+as any other in the window. A deny dated in the future, after the clock moved
+back, is not a retry either. A first write to a third file while the window is
+open is still denied once. A time before a rule was shown means the clock moved
+back, and counts as outside the window, so a jump back never causes a deny loop
+(#53).
 
 **Failures** — no key, a session that cannot be saved, an invalid `stele.json`,
 `stele.md` broken with no good index behind it — go to `failure`: with

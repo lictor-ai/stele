@@ -102,7 +102,7 @@ Scope globs:
 
 ## What the agent sees
 
-- **Before a write.** The first write in a turn to a file with rules the agent hasn't seen this turn is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent. A retry of the denied write goes through; parallel writes in the same message to other files are denied too, once.
+- **Before a write.** The first write in a turn to a file with rules the agent hasn't seen this turn is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent. A retry of the denied write goes through; parallel writes in the same message, to other files or to the same one, are denied too, once.
 - **After a write.** A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
 

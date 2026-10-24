@@ -68,6 +68,24 @@ func TestDecide(t *testing.T) {
 			wantDenied: denied("", t0, "a.go"),
 		},
 		{
+			name:       "a parallel write to the denied file, sooner than RetryAfter, is denied too",
+			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(50 * time.Millisecond)},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			p:          on,
+			wantDeny:   true,
+			wantRules:  []Rule{sqlRule},
+			wantShown:  shown("", t0, "sql"),
+			wantDenied: denied("", t0.Add(50*time.Millisecond), "a.go"),
+		},
+		{
+			name:       "a write to the denied file at exactly RetryAfter is a retry",
+			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(RetryAfter)},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			p:          on,
+			wantShown:  shown("", t0, "sql"),
+			wantDenied: denied("", t0, "a.go"),
+		},
+		{
 			name:       "within the window, a parallel write to another file is denied too",
 			in:         Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule}, Now: t0.Add(time.Second)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
@@ -243,6 +261,33 @@ func cloneState(st session.State) session.State {
 	return st
 }
 
+// A deny dated in the future (the clock moved back since) is not a retry, so
+// a rule shown since, and not read, is not let through by it.
+func TestDecideDenyInTheFuture(t *testing.T) {
+	r1 := Rule{ID: "r1", Text: "one"}
+	r2 := Rule{ID: "r2", Text: "two"}
+	nine := t0
+	eight := t0.Add(-time.Hour)
+	var st session.State
+	decide := func(file string, at time.Time, rules ...Rule) Decision {
+		t.Helper()
+		var d Decision
+		d, st = Decide(Input{PromptID: "p1", File: file, Rules: rules, Now: at}, st, on)
+		return d
+	}
+	if d := decide("a.go", nine, r1); !d.Deny {
+		t.Fatal("a.go at 9:00: allowed, want denied with r1")
+	}
+	// The clock moves back to 8:00, and r2 is added, covering a.go and c.go.
+	if d := decide("c.go", eight, r2); !d.Deny {
+		t.Fatal("c.go at 8:00: allowed, want denied with r2")
+	}
+	d := decide("a.go", eight.Add(100*time.Millisecond), r1, r2)
+	if diff := cmp.Diff([]Rule{r2}, d.Rules, cmpopts.EquateEmpty()); !d.Deny || diff != "" {
+		t.Errorf("a.go at 8:00:00.1: deny %v, rules (-want +got):\n%s", d.Deny, diff)
+	}
+}
+
 // TestDecideBatch chains Decide over a batch of parallel writes and their
 // retries, as the hook sees them.
 func TestDecideBatch(t *testing.T) {
@@ -259,6 +304,7 @@ func TestDecideBatch(t *testing.T) {
 		wantDeny bool
 	}{
 		{"a.go", 0, true},                        // the first write shows the rule
+		{"a.go", 50 * time.Millisecond, true},    // a parallel write to the same file
 		{"b.go", 200 * time.Millisecond, true},   // a parallel write, before the reason was read
 		{"a.go", 2 * time.Second, false},         // the retry of a
 		{"b.go", 2100 * time.Millisecond, false}, // the retry of b

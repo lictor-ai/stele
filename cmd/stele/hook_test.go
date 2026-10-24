@@ -117,6 +117,13 @@ func TestHookShowsRules(t *testing.T) {
 		}
 	}
 
+	// A parallel write to the same file, its hook milliseconds later, is
+	// denied too: the agent has not read the reason yet.
+	advance(50 * time.Millisecond)
+	if o, _ := hook(t, write(goFile, "p1", "")); o.HookSpecificOutput.PermissionDecision != "deny" {
+		t.Error("a parallel write to the same file went through before the rules were read")
+	}
+
 	// A parallel write to another file in the same batch is denied too.
 	advance(time.Second)
 	otherFile := filepath.Join(root, "internal", "db", "other.go")
