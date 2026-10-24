@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/lictor-ai/stele/internal/adapter/claudecode"
 	"github.com/lictor-ai/stele/internal/source/stelemd"
 )
 
@@ -57,10 +58,13 @@ func TestInit(t *testing.T) {
 	want := []string{
 		"created .stele/.gitignore",
 		"created stele.md",
-		"added stele hooks (PreToolUse, PostToolUse) to " + filepath.Join(".claude", "settings.json"),
+		"added stele hooks (PreToolUse, PostToolUse, SessionStart, SubagentStart) to " + filepath.Join(".claude", "settings.json"),
 	}
 	if diff := cmp.Diff(want, changes); diff != "" {
 		t.Errorf("changes mismatch (-want +got):\n%s", diff)
+	}
+	if got := read(t, filepath.Join(root, ".claude", "settings.json")); !strings.Contains(got, `"SessionStart"`) || !strings.Contains(got, `"SubagentStart"`) {
+		t.Errorf("settings.json lacks the session hooks:\n%s", got)
 	}
 	if got := read(t, filepath.Join(root, "stele.md")); got != string(Header("v1.2.0")) {
 		t.Errorf("stele.md = %q", got)
@@ -173,8 +177,8 @@ func TestInitFromACommitKeepsAReleaseStamp(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := read(t, settings)
-	if strings.Count(got, "--installed=v1.2.0") != 2 || strings.Contains(got, "devel") {
-		t.Errorf("repaired settings.json = %s, want both hooks stamped v1.2.0", got)
+	if strings.Count(got, "--installed=v1.2.0") != len(claudecode.Events()) || strings.Contains(got, "devel") {
+		t.Errorf("repaired settings.json = %s, want every hook stamped v1.2.0", got)
 	}
 }
 

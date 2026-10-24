@@ -123,7 +123,7 @@ func Init(root, version string) (changes, notes []string, err error) {
 		if err := safefile.ReplacePerm(settings, out, mode); err != nil {
 			return changes, notes, err
 		}
-		changes = append(changes, "added stele hooks (PreToolUse, PostToolUse) to "+claudecode.SettingsFile)
+		changes = append(changes, "added stele hooks ("+strings.Join(claudecode.Events(), ", ")+") to "+claudecode.SettingsFile)
 	}
 
 	local := filepath.Join(claudeDir, "settings.local.json")

@@ -34,6 +34,60 @@ const fresh = `{
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "stele hook --installed=v1.2.0",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "stele hook --installed=v1.2.0",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+`
+
+// beforeSessions is what Install wrote before stele registered SessionStart
+// and SubagentStart: the write hooks only.
+const beforeSessions = `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "stele hook --installed=v1.2.0",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "stele hook --installed=v1.2.0",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
@@ -116,7 +170,7 @@ func TestInstallKeepsUserSettings(t *testing.T) {
 
 	// Uninstall gives back the file it started from.
 	back, removed, empty, err := Uninstall(out)
-	if err != nil || removed != 2 || empty {
+	if err != nil || removed != 4 || empty {
 		t.Fatalf("Uninstall = removed %d, empty %v, err %v", removed, empty, err)
 	}
 	if diff := cmp.Diff(user, string(back)); diff != "" {
@@ -154,7 +208,7 @@ func TestInstallReplacesOldStamps(t *testing.T) {
 	s["hooks"]["PreToolUse"] = append(s["hooks"]["PreToolUse"], s["hooks"]["PreToolUse"][0])
 	dup, _ := json.Marshal(s)
 	out, changed, _, err = Install(dup, "v1.2.0")
-	if err != nil || !changed || strings.Count(string(out), "stele hook") != 2 {
+	if err != nil || !changed || strings.Count(string(out), "stele hook") != 4 {
 		t.Errorf("Install over duplicates = changed %v, err %v:\n%s", changed, err, out)
 	}
 
@@ -164,8 +218,38 @@ func TestInstallReplacesOldStamps(t *testing.T) {
 	delete(one["hooks"], "PostToolUse")
 	half, _ := json.Marshal(one)
 	out, changed, _, err = Install(half, "v1.2.0")
-	if err != nil || !changed || strings.Count(string(out), "stele hook --installed=v1.2.0") != 2 {
+	if err != nil || !changed || strings.Count(string(out), "stele hook --installed=v1.2.0") != 4 {
 		t.Errorf("Install over one event = changed %v, err %v:\n%s", changed, err, out)
+	}
+}
+
+// An install from before stele registered the session events is out of date
+// even with the same stamp: a devel build stamps devel every time (#41), so
+// the stamp alone would never add them.
+func TestInstallAddsNewEvents(t *testing.T) {
+	out, changed, _, err := Install([]byte(beforeSessions), "v1.2.0")
+	if err != nil || !changed {
+		t.Fatalf("Install = changed %v, err %v", changed, err)
+	}
+	if diff := cmp.Diff(fresh, string(out)); diff != "" {
+		t.Errorf("mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// A stele group whose matcher the user changed is rewritten with stele's own.
+func TestInstallRestoresMatcher(t *testing.T) {
+	edited := strings.Replace(fresh, `"matcher": "Write|Edit|MultiEdit"`, `"matcher": "Write"`, 1)
+	out, changed, _, err := Install([]byte(edited), "v1.2.0")
+	if err != nil || !changed {
+		t.Fatalf("Install = changed %v, err %v", changed, err)
+	}
+	if diff := cmp.Diff(fresh, string(out)); diff != "" {
+		t.Errorf("mismatch (-want +got):\n%s", diff)
+	}
+	// A session group with a matcher is not the one init writes either.
+	matched := strings.Replace(fresh, "\"SessionStart\": [\n      {\n", "\"SessionStart\": [\n      {\n        \"matcher\": \"startup\",\n", 1)
+	if _, changed, _, _ := Install([]byte(matched), "v1.2.0"); !changed {
+		t.Error("a SessionStart group with a matcher counts as installed")
 	}
 }
 
@@ -183,7 +267,7 @@ func TestInstallLeavesHandWrittenHooks(t *testing.T) {
 	}
 	// Uninstall leaves it too.
 	back, removed, _, err := Uninstall(out)
-	if err != nil || removed != 2 || !strings.Contains(string(back), `"stele hook"`) {
+	if err != nil || removed != 4 || !strings.Contains(string(back), `"stele hook"`) {
 		t.Errorf("Uninstall = removed %d, err %v:\n%s", removed, err, back)
 	}
 }
@@ -196,7 +280,8 @@ func TestUninstall(t *testing.T) {
 		wantEmpty   bool
 		want        string // "" when the output is not compared
 	}{
-		{name: "fresh", in: fresh, wantRemoved: 2, wantEmpty: true, want: "{}\n"},
+		{name: "fresh", in: fresh, wantRemoved: 4, wantEmpty: true, want: "{}\n"},
+		{name: "before the session events", in: beforeSessions, wantRemoved: 2, wantEmpty: true, want: "{}\n"},
 		{
 			name: "shared group keeps the user's handler",
 			in: `{"hooks":{"PreToolUse":[{"matcher":"Write|Edit|MultiEdit","hooks":[` +
