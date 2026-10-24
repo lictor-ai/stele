@@ -23,6 +23,28 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "stele hook --installed=devel",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "stele hook --installed=devel",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
