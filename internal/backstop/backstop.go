@@ -46,12 +46,16 @@ type Input struct {
 	File     string    // root-relative path of the file written; "" disables retry detection
 	Rules    []Rule    // every rule that applies to the file
 	Now      time.Time // when the hook runs
+	// Fit returns how many of the rules to show, in order, fit in the
+	// message; nil fits them all. With none, the deny shows only a count.
+	Fit func([]Rule) int
 }
 
 // Decision is the hook's answer.
 type Decision struct {
 	Deny  bool
 	Rules []Rule // when denying, the rules to show, in input order
+	More  int    // rules left out of the message; they stay unseen
 }
 
 // Decide returns the decision for one write, and the state to save before the
@@ -60,11 +64,7 @@ func Decide(in Input, st session.State, p enforce.Policy) (Decision, session.Sta
 	if !p.Backstop || len(in.Rules) == 0 {
 		return Decision{}, st
 	}
-	if in.PromptID != st.PromptID {
-		st.PromptID = in.PromptID
-		st.Shown = nil
-		st.Denied = nil
-	}
+	newTurn(&st, in.PromptID)
 	shown := st.Shown[in.AgentID]
 	// A retry: this file's write was denied at least RetryAfter ago, so the
 	// agent has read that reason, which held every rule for the file shown
@@ -90,13 +90,51 @@ func Decide(in Input, st session.State, p enforce.Policy) (Decision, session.Sta
 	if len(show) == 0 {
 		return Decision{}, st
 	}
+	// Only the rules the message holds are shown: the rest stay unseen, so
+	// the next write shows them.
+	k := fit(in.Fit, show)
+	more := len(show) - k
+	show, fresh = show[:k], kept(fresh, show[:k])
 
 	// Copy before writing, so the caller's state is never changed in place.
 	st.Shown = with(st.Shown, in.AgentID, fresh, in.Now)
 	if in.File != "" {
 		st.Denied = with(st.Denied, in.AgentID, []string{in.File}, in.Now)
 	}
-	return Decision{Deny: true, Rules: show}, st
+	return Decision{Deny: true, Rules: show, More: more}, st
+}
+
+// fit returns how many of rs f fits: all with no f.
+func fit(f func([]Rule) int, rs []Rule) int {
+	if f == nil {
+		return len(rs)
+	}
+	return min(max(f(rs), 0), len(rs))
+}
+
+// kept returns the ids of ids that are among rs.
+func kept(ids []string, rs []Rule) []string {
+	in := make(map[string]bool, len(rs))
+	for _, r := range rs {
+		in[r.ID] = true
+	}
+	var out []string
+	for _, id := range ids {
+		if in[id] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// newTurn forgets what the last turn showed and denied when prompt starts a
+// new one. Everything a turn records is cleared here, so a record of either
+// kind of write cannot outlive its turn.
+func newTurn(st *session.State, prompt string) {
+	if prompt != st.PromptID {
+		st.PromptID = prompt
+		st.Shown, st.Denied, st.BashDenied = nil, nil, nil
+	}
 }
 
 // inWindow reports whether now is within Window after at. A now before at

@@ -22,8 +22,9 @@ type registration struct{ Event, Matcher string }
 // registrations are the hooks init registers: before a write to show the
 // rules, after it to check them (ADR-0004), and at the start of a session or
 // subagent to tell the agent to write files with Write and Edit only (#50).
+// One group per event: Install counts exactly one stele handler per event.
 var registrations = []registration{
-	{"PreToolUse", writeTools},
+	{"PreToolUse", preTools},
 	{"PostToolUse", writeTools},
 	{"SessionStart", ""},
 	{"SubagentStart", ""},
@@ -31,6 +32,10 @@ var registrations = []registration{
 
 // writeTools is the tools the write hooks handle, an exact list.
 const writeTools = "Write|Edit|MultiEdit"
+
+// preTools adds Bash before a tool runs only: stele reads the command for
+// the files it writes (#57). Nothing runs after a Bash command.
+const preTools = writeTools + "|Bash"
 
 // events are the events of registrations, in order.
 var events = func() []string {

@@ -35,6 +35,7 @@ internal/source/      the Source slot: Rule, the Source interface
 internal/lock/        stele.lock: identity, reconciliation
 internal/safefile/    crash-safe replace, create-if-absent, lock files, safe dirs and bounded reads (§7)
 internal/scope/       scope globs: which rules apply to a file
+internal/shell/       the files a Bash command writes, read from its text — pure logic (#57)
 internal/sign/        the per-machine key that signs generated files (D57)
 internal/index/       index.json: load, save
 internal/compile/     the one place that turns sources into an index
@@ -554,6 +555,14 @@ open is still denied once. A time before a rule was shown means the clock moved
 back, and counts as outside the window, so a jump back never causes a deny loop
 (#53).
 
+**The message holds what fits.** Claude Code passes a hook text on in full only
+up to 10,000 characters. A deny reason holds the rules that fit, kept whole and
+in order, within `install.MaxMessage` (`install.FitRules`, through
+`Input.Fit`), and says how many more there are. Only the rules it holds are
+marked shown; the rest stay unseen, so the next write, the retry, is denied
+with them. A Bash command writing into several projects shares one message
+budget across them. The first message shows at least one rule, however long.
+
 **Failures** — no key, a session that cannot be saved, an invalid `stele.json`,
 `stele.md` broken with no good index behind it — go to `failure`: with
 `block_on_error` off, allow and warn the user (`systemMessage`); with it on, deny
@@ -1040,18 +1049,52 @@ unchecked. Invalid rules are left to `stele check`. `PostToolUse` fires
 concurrently for parallel tool calls, so the post-write path keeps no session
 state.
 
-**Configuration** written by `init` (#12): the same command on `PreToolUse` and,
-for the post-write check (#29), on `PostToolUse`, and with no matcher on
-`SessionStart` and `SubagentStart` (#50, D60):
+**Before a Bash command** (#57, D61) `tool_input` carries the command line:
+
+```json
+{"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": "/repo",
+ "tool_input": {"command": "cat > a.go <<'EOF'\n…\nEOF", "description": "…",
+                "run_in_background": false}}
+```
+
+The hook reads the command, never runs it: `internal/shell` lexes it (quotes,
+heredoc bodies skipped but for an unquoted one's substitutions, `$(…)` and
+backticks, `[[ ]]`, `(( ))` and `$[ ]`, `cd`, which a function body or a
+subshell keeps to itself, `case` patterns, simple `NAME=value`, `$PWD` from the
+directory tracked, wrappers such as `sudo`, `env` and `timeout`, globs reading
+at most 2,000 directory entries a command) and returns the files it writes by
+redirection, `tee`, `sed -i` and `perl -i`, and those `rm`, `mv`, `cp`, `ln`
+and `truncate` touch.
+A command that writes nothing costs a parse: no key, no index, no file. A
+target that is one of stele's own files asks, as a Write does (#52). A target
+a scoped rule covers is denied, once per file, per agent and per turn
+(`backstop.DecideBash`, `State.BashDenied`), with the rules not yet shown and
+a pointer to Write and Edit (`bash-message.tmpl`); the same command run at
+least `RetryAfter` later goes through, with a note to run `stele check`. Only a
+scoped rule counts, so `go test > out.txt` is not stopped by unscoped rules.
+The deny is also recorded as the file's Write deny, so the Write the agent
+makes instead is its retry. Whether a file has rules is known only from the
+index, so a failure of stele here warns and never blocks, even with
+`block_on_error`. Nothing is registered after a Bash command: Claude Code's
+`tool_response.bashEditDiff` lists the files one changed, but it is a beta,
+recorded only in auto mode or with a user setting, and would cost a second
+process on every Bash call.
+
+**Configuration** written by `init` (#12): the same command on `PreToolUse`,
+which also matches Bash (#57), and, for the post-write check (#29), on
+`PostToolUse`, and with no matcher on `SessionStart` and `SubagentStart` (#50,
+D60):
 
 ```json
 {"hooks": {
   "PreToolUse": [{
-    "matcher": "Write|Edit|MultiEdit",
+    "matcher": "Write|Edit|MultiEdit|Bash",
     "hooks": [{"type": "command",
                "command": "stele hook --installed=v0.3.0",
                "timeout": 10}]}],
-  "PostToolUse": [ the same group ],
+  "PostToolUse": [{
+    "matcher": "Write|Edit|MultiEdit",
+    "hooks": [ the same handler ]}],
   "SessionStart": [{
     "hooks": [ the same handler ]}],
   "SubagentStart": [ the same group as SessionStart ]}}
@@ -1354,6 +1397,7 @@ string literals scattered through the code, so they can be revised and diffed.
 | sinks / `stele push` | The test plugin as a sink: offset advances only on success, no record sent twice, `brief` stripped unless `share_briefs`. |
 | `status` | Temp directory: JSON shape and `v`, plugin found and missing, stale index. |
 | `regex` | Table-driven over `Match`: line and column, multiple matches, multi-line content, CRLF, multibyte text, BOM, invalid UTF-8, binary skip, invalid pattern. |
+| `shell` | Table-driven over `Targets`: redirections, heredoc bodies, quotes, `[[ ]]` and `(( ))`, substitutions, variables, `cd`, `tee`, `sed -i`, `perl -i`, removals and copies, devices, Windows and Git Bash paths, caps. A fuzz test: it never panics, and stays fast. |
 | `backstop.Decide` | Table-driven over the full cross-product of state, policy, error and `HasRules`. Pure, so no fixtures. |
 | `matcher` | Table-driven. Cap, truncation, empty selection. |
 | `index`, `session`, `journal` | Temp directories. Concurrent-write tests for the replace path, including a locked target. |

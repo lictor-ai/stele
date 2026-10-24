@@ -33,6 +33,14 @@ func TestParse(t *testing.T) {
 			want: Event{Name: "PostToolUse", SessionID: "s1", AgentID: "a1", Cwd: cwd, ToolName: "Edit", File: abs, NewText: []string{"y"}, ReplaceAll: []bool{false}},
 		},
 		{
+			name: "bash",
+			payload: map[string]any{
+				"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": cwd, "tool_name": "Bash", "tool_use_id": "toolu_2",
+				"tool_input": map[string]any{"command": "cat > a.go <<EOF\nx\nEOF", "description": "write a.go", "run_in_background": true},
+			},
+			want: Event{Name: "PreToolUse", SessionID: "s1", Cwd: cwd, ToolName: "Bash", Command: "cat > a.go <<EOF\nx\nEOF", Background: true},
+		},
+		{
 			name: "multiedit",
 			payload: map[string]any{
 				"hook_event_name": "PreToolUse", "tool_name": "MultiEdit",
@@ -109,7 +117,7 @@ func TestParse(t *testing.T) {
 			payload: map[string]any{
 				"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": map[string]any{"command": "ls"},
 			},
-			want: Event{Name: "PreToolUse", ToolName: "Bash"},
+			want: Event{Name: "PreToolUse", ToolName: "Bash", Command: "ls"},
 		},
 		{
 			name: "session start: no tool, the directory Claude Code runs in",

@@ -1,0 +1,15 @@
+stele stopped this Bash command: it writes {{.Paths}}, which this project has rules for. A file written through Bash is never shown its rules or checked.
+
+Write it with the Write or Edit tool instead (MultiEdit too): stele shows you the rules first and checks what you wrote. If the file must come from the command itself, such as generated code, run the same command again: it goes through, unchecked, and then run stele check on the file.
+{{- if .Note}}
+
+Note: {{.Note}}
+{{- end}}
+{{range .Rules}}
+---
+{{.Text}}
+{{end -}}
+{{- if .More}}
+
+And {{.More}} more rules: they will be shown on your next write.
+{{- end}}

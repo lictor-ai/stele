@@ -13,7 +13,7 @@ const fresh = `{
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit",
+        "matcher": "Write|Edit|MultiEdit|Bash",
         "hooks": [
           {
             "type": "command",
@@ -233,6 +233,21 @@ func TestInstallAddsNewEvents(t *testing.T) {
 	}
 	if diff := cmp.Diff(fresh, string(out)); diff != "" {
 		t.Errorf("mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// An install from before Bash was hooked (#57) is out of date: init adds it.
+func TestInstallAddsBash(t *testing.T) {
+	before := strings.Replace(fresh, `"matcher": "Write|Edit|MultiEdit|Bash"`, `"matcher": "Write|Edit|MultiEdit"`, 1)
+	out, changed, _, err := Install([]byte(before), "v1.2.0")
+	if err != nil || !changed {
+		t.Fatalf("Install = changed %v, err %v", changed, err)
+	}
+	if diff := cmp.Diff(fresh, string(out)); diff != "" {
+		t.Errorf("mismatch (-want +got):\n%s", diff)
+	}
+	if _, changed, _, _ := Install(out, "v1.2.0"); changed {
+		t.Error("a second Install changed the settings")
 	}
 }
 

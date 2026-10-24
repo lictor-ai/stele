@@ -1,0 +1,15 @@
+{
+  "session_id": "abc123",
+  "transcript_path": "/home/user/.claude/projects/proj/abc123.jsonl",
+  "cwd": "/home/user/proj",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "prompt_id": "p1",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "cat > internal/db/query.go <<'EOF'\npackage db\nEOF",
+    "description": "Write the query file",
+    "timeout": 120000
+  },
+  "tool_use_id": "toolu_01ABC"
+}
