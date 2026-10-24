@@ -117,19 +117,25 @@ func TestCheckSkipsNestedRepositories(t *testing.T) {
 	}
 }
 
-// A worktree without stele.md is its own root: the main checkout's rules
-// are not applied to it, and git runs in it.
+// A worktree without rules is its own root: the main checkout's rules are
+// not applied to it, and the check passes cleanly.
 func TestCheckInWorktree(t *testing.T) {
 	main := gitProject(t, checkRules)
 	wt := worktree(t, main, "wt2")
-	if err := os.Remove(filepath.Join(wt, "stele.md")); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"stele.md", "stele.lock"} {
+		if err := os.Remove(filepath.Join(wt, name)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	writeAt(t, wt, "a.go", "password = 1\n")
 
+	// A valid root with no rules: its own stele.lock, for no rules.
 	t.Chdir(wt)
-	_, out, _ := runCmd("check", "a.go")
-	if strings.Contains(out, "a.go:1:1") {
-		t.Errorf("stele check in a worktree applied the main checkout's rules: %q", out)
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile in the worktree = %d, stderr %q", code, errOut)
+	}
+	code, out, errOut := runCmd("check", "a.go")
+	if code != exitOK || errOut != "" || strings.Contains(out, "a.go:1:1") {
+		t.Errorf("stele check in a worktree without rules = %d, stdout %q, stderr %q; want 0, no violation, nothing on stderr", code, out, errOut)
 	}
 }
