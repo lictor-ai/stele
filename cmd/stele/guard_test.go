@@ -55,6 +55,9 @@ func TestHookAsksForOwnFiles(t *testing.T) {
 		"sub/stele.md", "sub/stele.json", "sub/.stele/x",
 		// Windows writes these to the real file.
 		"stele.json.", "stele.md::$DATA",
+		// Claude Code's settings load stele's hooks, and reload mid-session (#56).
+		".claude/settings.json", ".claude/settings.local.json", "sub/.claude/settings.json",
+		".claude/settings.json.", ".claude/settings.local.json::$DATA",
 	}
 	for _, tool := range []string{"Write", "Edit", "MultiEdit"} {
 		for _, rel := range own {
@@ -67,7 +70,7 @@ func TestHookAsksForOwnFiles(t *testing.T) {
 			})
 		}
 	}
-	for _, rel := range []string{"notstele.md", "docs/stele.md.bak"} {
+	for _, rel := range []string{"notstele.md", "docs/stele.md.bak", ".claude/agents/x.md", ".claude/settings.json.bak", "settings.json"} {
 		t.Run("not "+rel, func(t *testing.T) {
 			root := project(t, hookRules)
 			if o, _ := hook(t, preWrite("Write", filepath.Join(root, rel))); o.HookSpecificOutput.PermissionDecision == "ask" {
@@ -105,6 +108,9 @@ func TestHookAsksWhateverTheConfig(t *testing.T) {
 		"backstop off": func(t *testing.T, root string) {
 			writeAt(t, root, "stele.json", `{"backstop": false}`)
 		},
+		"backstop off, settings": func(t *testing.T, root string) {
+			writeAt(t, root, "stele.json", `{"backstop": false}`)
+		},
 		"stele.json invalid": func(t *testing.T, root string) {
 			writeAt(t, root, "stele.json", `{"backstop": `)
 		},
@@ -118,8 +124,12 @@ func TestHookAsksWhateverTheConfig(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			root := project(t, hookRules)
 			setup(t, root)
-			o, out := hook(t, preWrite("Edit", filepath.Join(root, "stele.json")))
-			if !asks(t, o, "stele.json") {
+			file := "stele.json"
+			if strings.HasSuffix(name, "settings") {
+				file = ".claude/settings.json"
+			}
+			o, out := hook(t, preWrite("Edit", filepath.Join(root, filepath.FromSlash(file))))
+			if !asks(t, o, file) {
 				t.Errorf("%s: %s, want ask", name, out)
 			}
 		})
@@ -265,4 +275,80 @@ func TestHookAfterAnAllowedRulesWrite(t *testing.T) {
 	if !strings.Contains(o.HookSpecificOutput.PermissionDecisionReason, "Keep functions short.") {
 		t.Errorf("the next write does not show the new rule:\n%s", o.HookSpecificOutput.PermissionDecisionReason)
 	}
+}
+
+// userConfig points Claude Code's user settings at a temp directory, so no
+// test reads or writes the real ~/.claude.
+func userConfig(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	return dir
+}
+
+// inSession is a PreToolUse payload for a session running in cwd.
+func inSession(tool, file, cwd string) map[string]any {
+	p := preWrite(tool, file)
+	p["cwd"] = cwd
+	return p
+}
+
+// The settings files a session in a stele project loads are asked for too,
+// though they lie outside it: settings.local.json sits at the git root, and
+// the user's settings.json applies everywhere (#56).
+func TestHookAsksForSessionSettings(t *testing.T) {
+	clock(t, time.Now())
+	cfg := userConfig(t)
+	g := project(t, "") // a git root without stele
+	if err := os.MkdirAll(filepath.Join(g, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeAt(t, g, "pkg/stele.md", hookRules)
+	pkg := filepath.Join(g, "pkg")
+	for _, c := range []struct {
+		file, cwd string
+		want      bool
+	}{
+		{filepath.Join(g, ".claude", "settings.local.json"), pkg, true},
+		{filepath.Join(g, ".claude", "settings.json"), pkg, true},
+		{filepath.Join(pkg, ".claude", "settings.json"), pkg, true},
+		{filepath.Join(pkg, ".claude", "settings.json"), "", true},
+		{filepath.Join(g, "other", ".claude", "settings.json"), pkg, false},
+		{filepath.Join(filepath.Dir(g), ".claude", "settings.json"), pkg, false},
+		{filepath.Join(g, ".claude", "settings.local.json"), g, false}, // not a stele session
+		{filepath.Join(cfg, "settings.json"), pkg, true},
+		{filepath.Join(cfg, "settings.local.json"), pkg, false},
+		{filepath.Join(cfg, "settings.json"), g, false},
+	} {
+		o, out := hook(t, inSession("Edit", c.file, c.cwd))
+		if got := o.HookSpecificOutput.PermissionDecision == "ask"; got != c.want {
+			t.Errorf("Edit %s from %s: ask = %v, want %v (%s)", c.file, c.cwd, got, c.want, out)
+		}
+	}
+}
+
+// Links and hard links to the root's settings file are asked for.
+func TestHookAsksForSettingsThroughLinks(t *testing.T) {
+	clock(t, time.Now())
+	userConfig(t)
+	t.Run("link from outside", func(t *testing.T) {
+		root := project(t, hookRules)
+		writeAt(t, root, ".claude/settings.json", "{}\n")
+		l := filepath.Join(t.TempDir(), "s.json")
+		link(t, filepath.Join(root, ".claude", "settings.json"), l, false)
+		if o, out := hook(t, preWrite("Write", l)); o.HookSpecificOutput.PermissionDecision != "ask" {
+			t.Errorf("write through a link to .claude/settings.json: %s, want ask", out)
+		}
+	})
+	t.Run("hard link", func(t *testing.T) {
+		root := project(t, hookRules)
+		writeAt(t, root, ".claude/settings.json", "{}\n")
+		l := filepath.Join(root, "s.json")
+		if err := os.Link(filepath.Join(root, ".claude", "settings.json"), l); err != nil {
+			t.Skipf("cannot make a hard link: %v", err)
+		}
+		if o, out := hook(t, preWrite("Write", l)); o.HookSpecificOutput.PermissionDecision != "ask" {
+			t.Errorf("write to a hard link of .claude/settings.json: %s, want ask", out)
+		}
+	})
 }
