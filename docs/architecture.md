@@ -1295,7 +1295,7 @@ stele hook         read a Claude Code hook payload on stdin, decide
 Code reads `.claude/settings.json` from the directory it starts in. They print
 that directory first, and a note when an ancestor holds `.git`, `stele.md` or
 `stele.json`. `init` then prints one line per thing it wrote; run again, it
-writes nothing unless the hooks carry another version. Both `init` and `uninstall` exit 0, or 2 when
+writes nothing unless the stamp it would write differs from the one there. Both `init` and `uninstall` exit 0, or 2 when
 they could not run. The version is set at release with `-ldflags "-X
 main.version=..."`, else read from the build info, else `devel`; `init`
 stamps `devel` for any version that is not a release.
