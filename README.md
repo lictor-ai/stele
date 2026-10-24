@@ -97,7 +97,7 @@ Scope globs:
 - A leading `/` anchors at the root: `/*.go`.
 - A trailing `/` matches everything under a directory: `migrations/`.
 - `{a,b}` matches either: `src/**/*.{go,ts}`.
-- A leading `!` excludes: `["internal/**/*.go", "!**/*_test.go"]`. Order does not matter, and a scope of only exclusions means every other file.
+- A leading `!` excludes: `["internal/**/*.go", "!**/*_test.go"]`. Order does not matter, and a scope of only exclusions means every other file. To match a file whose name starts with `!`, write `\!`.
 - On Windows and macOS, matching ignores case.
 
 ## What the agent sees
