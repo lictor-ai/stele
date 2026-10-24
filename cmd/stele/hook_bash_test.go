@@ -130,14 +130,21 @@ func TestHookBashOutsideProjects(t *testing.T) {
 func TestHookBashAsksForOwnFiles(t *testing.T) {
 	root := project(t, hookRules)
 	clock(t, time.Now())
+	// Never the real user's settings.
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	t.Setenv("CFG", cfg)
 	for command, rel := range map[string]string{
-		"echo '# x' >> stele.md":       "stele.md",
-		"sed -i s/a/b/ stele.json":     "stele.json",
-		"rm .stele/index.json":         ".stele/index.json",
-		"cp x sub/stele.md":            "sub/stele.md",
-		"mv stele.lock old.lock":       "stele.lock",
-		"truncate -s 0 stele.lock":     "stele.lock",
-		"cd sub && touch x > stele.md": "sub/stele.md",
+		"echo '{}' > .claude/settings.json":                     ".claude/settings.json",
+		"sed -i s/a/b/ .claude/settings.local.json":             ".claude/settings.local.json",
+		`echo '{"disableAllHooks": true}' > $CFG/settings.json`: "settings.json",
+		"echo '# x' >> stele.md":                                "stele.md",
+		"sed -i s/a/b/ stele.json":                              "stele.json",
+		"rm .stele/index.json":                                  ".stele/index.json",
+		"cp x sub/stele.md":                                     "sub/stele.md",
+		"mv stele.lock old.lock":                                "stele.lock",
+		"truncate -s 0 stele.lock":                              "stele.lock",
+		"cd sub && touch x > stele.md":                          "sub/stele.md",
 	} {
 		o, out := hook(t, bash(command, root, "p1", ""))
 		if !asks(t, o, rel) {

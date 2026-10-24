@@ -146,13 +146,31 @@ func TestCheckInWorktree(t *testing.T) {
 	}
 	writeAt(t, wt, "a.go", "password = 1\n")
 
-	// A valid root with no rules: its own stele.lock, for no rules.
+	// No rule files at all: nothing to check (#49).
 	t.Chdir(wt)
+	code, out, errOut := runCmd("check", "a.go")
+	if code != exitOK || errOut != "" || strings.Contains(out, "a.go:1:1") || !strings.Contains(out, "nothing to check") {
+		t.Errorf("stele check in a worktree without rules = %d, stdout %q, stderr %q; want 0, nothing to check, nothing on stderr", code, out, errOut)
+	}
+
+	// Compiled, it is a stele project with no rules.
 	if code, _, errOut := runCmd("compile"); code != exitOK {
 		t.Fatalf("compile in the worktree = %d, stderr %q", code, errOut)
 	}
-	code, out, errOut := runCmd("check", "a.go")
-	if code != exitOK || errOut != "" || strings.Contains(out, "a.go:1:1") {
-		t.Errorf("stele check in a worktree without rules = %d, stdout %q, stderr %q; want 0, no violation, nothing on stderr", code, out, errOut)
+	code, out, errOut = runCmd("check", "a.go")
+	if code != exitOK || errOut != "" || strings.Contains(out, "a.go:1:1") || !strings.Contains(out, "0 rules valid") {
+		t.Errorf("stele check after compile = %d, stdout %q, stderr %q; want 0, 0 rules valid", code, out, errOut)
+	}
+}
+
+// A submodule without rules has nothing to check, from inside it.
+func TestCheckInSubmoduleWithoutRules(t *testing.T) {
+	root := project(t, checkRules)
+	writeAt(t, root, "vendor/lib/.git", "gitdir: x\n")
+	writeAt(t, root, "vendor/lib/x.go", "password = 1\n")
+	t.Chdir(filepath.Join(root, "vendor", "lib"))
+	code, out, errOut := runCmd("check", "x.go")
+	if code != exitOK || !strings.Contains(out, "nothing to check") || strings.Contains(out, "x.go:1:1") {
+		t.Errorf("check in a submodule = %d, stdout %q, stderr %q; want 0 and nothing to check", code, out, errOut)
 	}
 }

@@ -13,13 +13,23 @@ import (
 
 // ownNames are stele's own files at any depth: the root's, a subproject's, or
 // one a write would create to start a subproject, which would have no rules.
-var ownNames = []string{"stele.md", enforce.FileName, "stele.lock", ".stele", "**/.stele/"}
+// Claude Code's project settings count too: they load stele's hooks, and
+// Claude Code reloads them mid-session, so an edit can switch stele off at
+// once (#56).
+var ownNames = []string{
+	"stele.md", enforce.FileName, "stele.lock", ".stele", "**/.stele/",
+	"**/.claude/settings.json", "**/.claude/settings.local.json",
+}
+
+// settingsNames are the files in .claude that Claude Code loads settings from.
+var settingsNames = []string{"settings.json", "settings.local.json"}
 
 // guarded reports whether a write to file, rel to root, changes one of
 // stele's own files. Names count at any depth, a subproject's too, and so do
 // symlinks and junctions on the way, followed everywhere. A hard link or an
 // 8.3 short name, which only a same-file test can tell, is caught for the
-// root's stele.md, stele.json, stele.lock and .stele/ only. A change there
+// root's stele.md, stele.json, stele.lock, .stele/ and .claude settings files
+// only. A change there
 // can weaken stele or turn it off, so the user is asked every time (#52).
 func guarded(root, rel, file string) bool {
 	if ownName(rel) {
@@ -41,13 +51,25 @@ func guarded(root, rel, file string) bool {
 			}
 		}
 	}
+	// A new settings file in the root's .claude under another name.
+	if dot, err := os.Stat(filepath.Join(root, ".claude")); err == nil {
+		if info, err := os.Stat(filepath.Dir(file)); err == nil && os.SameFile(info, dot) {
+			base := cleanRel(filepath.Base(file))
+			for _, name := range settingsNames {
+				if strings.EqualFold(base, name) {
+					return true
+				}
+			}
+		}
+	}
 	// The root's own files under another name: a hard link, or an 8.3 short
 	// name.
 	info, err := os.Stat(file)
 	if err != nil {
 		return false
 	}
-	for _, name := range []string{"stele.md", enforce.FileName, "stele.lock"} {
+	for _, name := range []string{"stele.md", enforce.FileName, "stele.lock",
+		claudecode.SettingsFile, filepath.Join(".claude", "settings.local.json")} {
 		if own, err := os.Stat(filepath.Join(root, name)); err == nil && os.SameFile(info, own) {
 			return true
 		}
@@ -56,19 +78,9 @@ func guarded(root, rel, file string) bool {
 }
 
 // ownName reports whether rel, relative to a root, names one of stele's own
-// files. Each segment is first cleaned as Windows cleans it: trailing dots
-// and spaces go, and so does a :stream, so stele.json. and stele.md::$DATA
-// reach the real file. The clean-up runs everywhere: an extra prompt is
-// harmless.
+// files, after cleanRel.
 func ownName(rel string) bool {
-	segs := strings.Split(rel, "/")
-	for i, s := range segs {
-		if j := strings.IndexByte(s, ':'); j >= 0 {
-			s = s[:j]
-		}
-		segs[i] = strings.TrimRight(s, ". ")
-	}
-	clean := strings.Join(segs, "/")
+	clean := cleanRel(rel)
 	for _, p := range ownNames {
 		if scope.Match(p, clean) {
 			return true
@@ -77,11 +89,96 @@ func ownName(rel string) bool {
 	return false
 }
 
+// cleanRel cleans each segment of a slash path as Windows cleans it: trailing
+// dots and spaces go, and so does a :stream, so stele.json. and
+// stele.md::$DATA reach the real file. The clean-up runs everywhere: an extra
+// prompt is harmless.
+func cleanRel(rel string) string {
+	segs := strings.Split(rel, "/")
+	for i, s := range segs {
+		if j := strings.IndexByte(s, ':'); j >= 0 {
+			s = s[:j]
+		}
+		segs[i] = strings.TrimRight(s, ". ")
+	}
+	return strings.Join(segs, "/")
+}
+
+// sessionSettings reports whether file is a settings file Claude Code loads
+// for the session in ev.Cwd, when that session is in a stele project (#56):
+// .claude/settings.json and settings.local.json in each directory from the
+// session's up to the top of its git checkout (settings.local.json sits at
+// the git root), and the user's settings.json, which applies everywhere.
+func sessionSettings(ev claudecode.Event, file string) bool {
+	if ev.Cwd == "" {
+		return false
+	}
+	root, _, ok := target(claudecode.Event{File: filepath.Join(ev.Cwd, "x")})
+	if !ok {
+		return false
+	}
+	top := root
+	if git, ok := walkUp(root, ".git"); ok {
+		top = git
+	}
+	for d := filepath.Clean(ev.Cwd); ; d = filepath.Dir(d) {
+		if rel, ok := below(d, file); ok {
+			clean := cleanRel(rel)
+			for _, name := range settingsNames {
+				if scope.Match("/.claude/"+name, clean) {
+					return true
+				}
+			}
+		}
+		if d == top || filepath.Dir(d) == d {
+			break
+		}
+	}
+	cfg := os.Getenv("CLAUDE_CONFIG_DIR")
+	if cfg == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		cfg = filepath.Join(home, ".claude")
+	}
+	cfg, err := filepath.Abs(cfg) // a relative CLAUDE_CONFIG_DIR is the process's
+	if err != nil {
+		return false
+	}
+	rel, ok := below(cfg, file)
+	return ok && scope.Match("/settings.json", cleanRel(rel))
+}
+
+// loadsSettings reports whether a write to file, or through the links on its
+// way, lands on a settings file the session loads.
+func loadsSettings(ev claudecode.Event, file string) bool {
+	if sessionSettings(ev, file) {
+		return true
+	}
+	r, ok := resolve(file)
+	return ok && r != file && sessionSettings(ev, r)
+}
+
+// below returns file relative to dir, with / separators; ok is false when
+// file is not under dir.
+func below(dir, file string) (string, bool) {
+	rel, err := filepath.Rel(dir, file)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
 // askOutside answers a write to file outside every stele project: ask when
-// a link leads it to one of a project's own files (#52), else nothing.
+// it is a settings file the session loads, or a link leads it to one of a
+// project's own files (#52, #56), else nothing.
 func askOutside(ev claudecode.Event) claudecode.Answer {
 	if !writes[ev.ToolName] {
 		return claudecode.Answer{}
+	}
+	if loadsSettings(ev, ev.File) {
+		return claudecode.Answer{Ask: install.AskMessage(showPath(filepath.ToSlash(ev.File)))}
 	}
 	r, ok := resolve(ev.File)
 	if !ok || r == ev.File {

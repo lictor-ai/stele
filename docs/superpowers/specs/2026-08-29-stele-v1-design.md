@@ -682,6 +682,11 @@ and writes nothing. It fails when:
 A stale lock is an error and not a warning: CI would otherwise report violations
 against ids that exist on nobody's machine.
 
+A root with no `stele.md`, `stele.json` or `stele.lock` is not a stele project:
+`stele check` says there is nothing to check and exits 0 (#49). It still selects
+files, so a bad path or ref is exit 2, and it still reports subprojects and, with
+`--base`, rule-file changes.
+
 `stele compile` checks the rules the same way with the built-in checkers (#54):
 it writes `stele.lock` and the index anyway, so an invalid rule keeps its id and
 the valid ones are enforced, prints each problem, and exits 1. The post-write
@@ -714,7 +719,7 @@ same as JSON for other tools, with `"v": 1` and the `project` id at the top
 
 | Code | Meaning |
 | :-- | :-- |
-| 0 | Rules are valid and no blocking violation was found. Non-blocking ones are printed as warnings. |
+| 0 | Rules are valid, or there are none, and no blocking violation was found. Non-blocking ones are printed as warnings. |
 | 1 | A rule is invalid, or a blocking violation was found. |
 | 2 | stele or a plugin could not run: a missing executable, a protocol error, a crash. |
 

@@ -108,7 +108,7 @@ Scope globs:
 - **Before a write.** The first write in a turn to a file with rules the agent hasn't seen this turn is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent. A retry of the denied write goes through; parallel writes in the same message, to other files or to the same one, are denied too, once.
 - **After a write.** A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
-- **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` says. A change there can weaken stele or turn it off. Allow it only if you asked for it.
+- **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` says. So does a write to Claude Code's settings files, which run stele's hooks: `.claude/settings.json` and `.claude/settings.local.json` anywhere in the project or from the session's directory up to the git root, and your user `settings.json`. A change there can weaken stele or turn it off. Allow it only if you asked for it.
 
 ## CI: stele check
 
@@ -121,7 +121,7 @@ Scope globs:
 
 Add `--format json` for JSON. Deleted files are skipped.
 
-`stele check` first checks the rules: `stele.md` must parse, every rule must be valid, and `stele.lock` must be committed and current. Then it checks the files:
+`stele check` first checks the rules: `stele.md` must parse, every rule must be valid, and `stele.lock` must be committed and current. In a checkout with no `stele.md`, `stele.json` or `stele.lock` (a submodule, a worktree of a branch without rules, a repository that adds the CI job before its `stele.md`), it says `nothing to check` and exits 0; with `--base` it still reports a deleted `stele.md`. Then it checks the files:
 
 ```
 $ stele check
@@ -137,7 +137,7 @@ With `--base`, `stele check` also says when the branch adds, changes or deletes 
 
 | Exit | Meaning |
 |---|---|
-| 0 | Rules are valid and there is no blocking violation |
+| 0 | Rules are valid (or there are none) and there is no blocking violation |
 | 1 | A rule is invalid, `stele.lock` is out of date, or there is a blocking violation |
 | 2 | stele couldn't run: bad flags, no git, unknown `--base` ref, no merge base |
 
@@ -187,11 +187,11 @@ Optional, committed next to `stele.md`. These are the defaults:
 6. **After an Edit, only the lines it wrote are checked.** If stele can't locate them (Claude Code sent no patch and the new text appears more than once), nothing is checked after that edit. Older violations in the file are left to `stele check`.
 7. **Binary files and files over 32 MiB are skipped.** The skip is reported, not silent.
 8. **Output is capped.** `stele check` shows at most 100 violations per rule and file; the agent gets at most 20 per message.
-9. **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too. So is a git worktree or submodule (a directory with its own `.git`): it gets no rules from an outer `stele.md`, only from its own.
+9. **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too. So is a git worktree or submodule (a directory with its own `.git`): it gets no rules from an outer `stele.md`, only from its own. `stele check` there says nothing to check until it has its own `stele.md`, `stele.json` or `stele.lock`.
 10. **Nothing leaves the machine.** stele makes no network calls. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 11. **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
 12. **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about.
-13. **Asking before a write to stele's own files covers Write, Edit and MultiEdit only, and their names and links.** A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock` and `.stele/`. A Bash command that visibly writes, removes, moves or copies onto one of them is asked about too; other Bash forms, a NotebookEdit, or an edit to `.claude/settings.json` that removes the hooks, are not. With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
+13. **Asking before a write to stele's own files covers Write, Edit and MultiEdit, and their names and links.** A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock`, `.stele/` and `.claude` settings files. A Bash command that visibly writes, removes, moves or copies onto one of them is asked about too. Not asked about: other Bash forms, a NotebookEdit, managed settings, settings passed with `--settings` or the environment, and a session started above the stele project with hooks registered there by hand. With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
 
 ## License
 

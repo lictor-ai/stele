@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/lictor-ai/stele/internal/adapter/claudecode"
@@ -24,6 +25,11 @@ func beforeBash(ev claudecode.Event) claudecode.Answer {
 	rels := map[string][]string{}
 	for _, t := range targets {
 		root, rel, ok := target(claudecode.Event{File: t.Path})
+		// The Claude Code settings the session loads, wherever they are (#56).
+		if !(ok && guarded(root, rel, t.Path)) && loadsSettings(ev, t.Path) {
+			asks = append(asks, filepath.ToSlash(t.Path))
+			continue
+		}
 		if !ok {
 			// Outside every project, but a link may lead into one.
 			if r, ok := resolve(t.Path); ok && r != t.Path {

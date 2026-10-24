@@ -89,7 +89,7 @@ func TestAssetsHaveLFLineEnds(t *testing.T) {
 
 func TestAskMessage(t *testing.T) {
 	got := AskMessage("sub/stele.json")
-	for _, want := range []string{"sub/stele.json", "stele's own files", "asks every time", "only if you asked"} {
+	for _, want := range []string{"sub/stele.json", "stele's own files", "settings", "asks every time", "only if you asked"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("ask message lacks %q:\n%s", want, got)
 		}
