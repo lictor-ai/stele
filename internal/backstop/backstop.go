@@ -60,11 +60,7 @@ func Decide(in Input, st session.State, p enforce.Policy) (Decision, session.Sta
 	if !p.Backstop || len(in.Rules) == 0 {
 		return Decision{}, st
 	}
-	if in.PromptID != st.PromptID {
-		st.PromptID = in.PromptID
-		st.Shown = nil
-		st.Denied = nil
-	}
+	newTurn(&st, in.PromptID)
 	shown := st.Shown[in.AgentID]
 	// A retry: this file's write was denied at least RetryAfter ago, so the
 	// agent has read that reason, which held every rule for the file shown
@@ -97,6 +93,16 @@ func Decide(in Input, st session.State, p enforce.Policy) (Decision, session.Sta
 		st.Denied = with(st.Denied, in.AgentID, []string{in.File}, in.Now)
 	}
 	return Decision{Deny: true, Rules: show}, st
+}
+
+// newTurn forgets what the last turn showed and denied when prompt starts a
+// new one. Everything a turn records is cleared here, so a record of either
+// kind of write cannot outlive its turn.
+func newTurn(st *session.State, prompt string) {
+	if prompt != st.PromptID {
+		st.PromptID = prompt
+		st.Shown, st.Denied, st.BashDenied = nil, nil, nil
+	}
 }
 
 // inWindow reports whether now is within Window after at. A now before at

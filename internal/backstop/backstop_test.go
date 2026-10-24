@@ -258,6 +258,7 @@ func cloneState(st session.State) session.State {
 	}
 	st.Shown = cp(st.Shown)
 	st.Denied = cp(st.Denied)
+	st.BashDenied = cp(st.BashDenied)
 	return st
 }
 

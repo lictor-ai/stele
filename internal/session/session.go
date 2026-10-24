@@ -74,6 +74,10 @@ type State struct {
 	// time. A later write to that file is the agent's retry after reading
 	// the reason.
 	Denied map[string]map[string]time.Time `json:"denied,omitempty"`
+	// BashDenied records, for each agent this turn, the files a Bash command
+	// was stopped from writing and when (#57): agent id to root-relative file
+	// to time. The same command run again is let through.
+	BashDenied map[string]map[string]time.Time `json:"bash_denied,omitempty"`
 	// VersionWarned is the version mismatch the user was last warned of,
 	// so the warning comes once a session.
 	VersionWarned string `json:"version_warned,omitempty"`
