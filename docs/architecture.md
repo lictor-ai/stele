@@ -991,9 +991,13 @@ for the post-write check (#29), on `PostToolUse`:
 
 The matcher is an exact list of tools. The default timeout is 600 seconds, so
 the explicit 10 matters. `--installed=` marks the entry as `init`'s and stamps
-the version that wrote it: when it differs from the running binary, the hook
-warns the user once a session (in `systemMessage`, recorded in the session
-state) to run `stele init` again. A `devel` build never warns.
+the version that wrote it. Only a release (`vX.Y.Z` or `vX.Y.Z-pre`,
+`install.Released`) is stamped; a build from a commit (a pseudo-version) or
+with local changes (`+dirty`) stamps `devel`, and never replaces a release's
+stamp, so the committed file does not change with every commit. When both the
+stamp and the running binary are releases and differ, the hook warns the user
+once a session (in `systemMessage`, recorded in the session state) to run
+`stele init` again; otherwise it never warns.
 
 Four things the documentation settles that the spec had to guess at:
 
@@ -1293,7 +1297,8 @@ that directory first, and a note when an ancestor holds `.git`, `stele.md` or
 `stele.json`. `init` then prints one line per thing it wrote; run again, it
 writes nothing unless the hooks carry another version. Both `init` and `uninstall` exit 0, or 2 when
 they could not run. The version is set at release with `-ldflags "-X
-main.version=..."`, else read from the build info, else `devel`.
+main.version=..."`, else read from the build info, else `devel`; `init`
+stamps `devel` for any version that is not a release.
 
 Standard-library `flag` and a switch on `os.Args[1]`. Eight subcommands with a
 handful of flags does not justify a CLI framework.
