@@ -190,6 +190,26 @@ func TestRunScope(t *testing.T) {
 	}
 }
 
+func TestRunScopeExclusion(t *testing.T) {
+	idx := index.Index{Rules: []index.Entry{
+		entry("go", "Go, not tests.", []string{"**/*.go", "!**/*_test.go"}, map[string]string{"check": "fake"}),
+	}}
+	f := &fake{name: "fake", found: []Violation{
+		{RuleID: "go", File: "a.go", Line: 1, Column: 1},
+		{RuleID: "go", File: "a_test.go", Line: 1, Column: 1}, // excluded: dropped
+	}}
+	r, err := Run(context.Background(), "root", idx, []string{"a.go", "a_test.go"}, map[string]Checker{"fake": f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff([]string{"a.go"}, f.gotFiles); diff != "" {
+		t.Errorf("checked files (-want +got):\n%s", diff)
+	}
+	if len(r.Violations) != 1 || r.Violations[0].File != "a.go" {
+		t.Errorf("violations = %+v, want only a.go", r.Violations)
+	}
+}
+
 func TestRunNoFilesNoCall(t *testing.T) {
 	idx := index.Index{Rules: []index.Entry{
 		entry("go", "Go only.", []string{"*.go"}, map[string]string{"check": "fake"}),

@@ -1,6 +1,7 @@
 package scope
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,64 @@ func TestApplies(t *testing.T) {
 	}
 	if Applies([]string{"*.ts"}, "a/b.go") {
 		t.Error("no pattern matches")
+	}
+}
+
+func TestAppliesExclusions(t *testing.T) {
+	caseSensitive(t)
+	goNoTests := []string{"internal/**/*.go", "!**/*_test.go"}
+	tests := []struct {
+		patterns []string
+		file     string
+		want     bool
+	}{
+		{goNoTests, "internal/a/x.go", true},
+		{goNoTests, "internal/a/x_test.go", false},
+		{goNoTests, "cmd/x.go", false},
+		// Order does not matter.
+		{[]string{"!**/*_test.go", "internal/**/*.go"}, "internal/a/x.go", true},
+		{[]string{"!**/*_test.go", "internal/**/*.go"}, "internal/a/x_test.go", false},
+		// Only exclusions: every other file.
+		{[]string{"!docs/"}, "a.go", true},
+		{[]string{"!docs/"}, "docs/x.md", false},
+		// Several exclusions, braces, anchors.
+		{[]string{"**/*.go", "!**/*_{test,mock}.go", "!/vendor/"}, "a_mock.go", false},
+		{[]string{"**/*.go", "!**/*_{test,mock}.go", "!/vendor/"}, "vendor/a.go", false},
+		{[]string{"**/*.go", "!**/*_{test,mock}.go", "!/vendor/"}, "x/vendor/a.go", true},
+		// A broken or over-cap exclusion excludes nothing: it never hides a rule.
+		{[]string{"**/*.go", `!["`}, "a.go", true},
+		{[]string{"**/*.go", "!" + strings.Repeat("a", maxPattern) + "*"}, strings.Repeat("a", maxPattern) + "x.go", true},
+		// A literal ! file is matched by escaping it.
+		{[]string{`\!x`}, "!x", true},
+		{nil, "a.go", true},
+	}
+	for _, tt := range tests {
+		if got := Applies(tt.patterns, tt.file); got != tt.want {
+			t.Errorf("Applies(%q, %q) = %v, want %v", tt.patterns, tt.file, got, tt.want)
+		}
+	}
+}
+
+func TestAppliesExclusionFoldsCase(t *testing.T) {
+	old := foldCase
+	t.Cleanup(func() { foldCase = old })
+	foldCase = true
+	if Applies([]string{"**/*.go", "!**/*_TEST.go"}, "a/x_test.go") {
+		t.Error("with case folding, !**/*_TEST.go should exclude a/x_test.go")
+	}
+}
+
+func TestValidate(t *testing.T) {
+	for _, ok := range [][]string{nil, {"*.go", "docs/"}, {"!x", "*.go"}, {`\!x`}} {
+		if err := Validate(ok); err != nil {
+			t.Errorf("Validate(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"!", "! x", "!  ", "!!x"} {
+		err := Validate([]string{"*.go", bad})
+		if err == nil || !strings.Contains(err.Error(), strconv.Quote(bad)) {
+			t.Errorf("Validate(%q) = %v, want an error naming it", bad, err)
+		}
 	}
 }
 

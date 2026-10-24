@@ -183,6 +183,23 @@ func TestHookAllows(t *testing.T) {
 	})
 }
 
+// A rule whose scope excludes a file is neither shown before a write to it
+// nor checked after.
+func TestHookScopeExclusion(t *testing.T) {
+	const rules = "scope: [\"internal/**/*.go\", \"!**/*_test.go\"]\ncheck: regex\npattern: fmt\\.Print\n\nNo printing under internal/.\n"
+	clock(t, time.Now())
+	root := project(t, rules)
+	if _, out := hook(t, write(filepath.Join(root, "internal", "x_test.go"), "p1", "")); out != "" {
+		t.Errorf("before a write to an excluded file: stdout %q, want nothing", out)
+	}
+	if _, out := postHook(t, root, "post-write", "internal/x_test.go", "package x\n\nfunc f() { fmt.Println() }\n"); out != "" {
+		t.Errorf("after a write to an excluded file: stdout %q, want nothing", out)
+	}
+	if o, _ := postHook(t, root, "post-write", "internal/x.go", "package x\n\nfunc f() { fmt.Println() }\n"); o.Decision != "block" {
+		t.Errorf("after a write to an included file: decision %q, want block", o.Decision)
+	}
+}
+
 // A stele.md that stops parsing keeps the last good rules in force, and the
 // agent is told what is wrong.
 func TestHookKeepsLastGoodRules(t *testing.T) {

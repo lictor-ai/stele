@@ -28,6 +28,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/source"
 )
 
@@ -244,6 +245,9 @@ func parseRule(lines []string, first int) (r source.Rule, ok bool, err error) {
 			if key == "tags" {
 				r.Tags = list
 			} else {
+				if err := scope.Validate(list); err != nil {
+					return fail(i, "%s: %v", key, err)
+				}
 				r.Scope = list
 			}
 		default:
