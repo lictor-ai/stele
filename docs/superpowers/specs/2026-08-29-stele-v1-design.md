@@ -278,12 +278,15 @@ A metadata key is lowercase letters, digits, `_` and `-`, starting with a letter
 followed by `:` and then a space or the end of the line. So a body that opens
 with `Note: ...` is still body, because `Note` is not a key, and so is one that
 opens with `https://...`, because no space follows the colon. A value is the rest
-of the line, trimmed, with one pair of matching outer quotes removed.
+of the line, trimmed. For `description`, `check` and `blocking`, and for each item
+of a `tags` or `scope` list, one pair of matching outer quotes is removed. Every
+other key is a checker's, and keeps its value as written, quotes included:
+`pattern: "net/http"` matches the text `"net/http"`, quotes included.
 
 `[a, b]` is a list. Commas inside quotes or braces do not split an item, so
 `["src/**/*.{go,ts}"]` is one glob. For `tags` and `scope`, a value without
 brackets is a list of one item: `tags: db` is `tags: [db]`. Other keys keep their
-value as written, brackets included.
+value as written, brackets and quotes included.
 
 HTML comments before a rule's metadata are skipped, and a block holding only
 comments is not a rule. Text after a comment's `-->` on the same line belongs to
@@ -760,7 +763,7 @@ From ADR-0002, `docs/adr/0002-engine-and-extension-points.md`:
 | D43 | Only plugins listed in `stele.json` and found on `PATH` run. Never an executable inside the repository. | — |
 | D44 | Agent adapters are compiled into the binary and are always free. | — |
 | D45 | External plugins never run on the hot path. `request` refreshes built-in sources only. | — |
-| D46 | Unknown metadata keys are kept and passed to checkers. `check` and `blocking` are the keys stele itself reads. | — |
+| D46 | Unknown metadata keys are kept and passed to checkers. `check` and `blocking` are the keys stele itself reads. The other keys' values are kept as written, without unquoting (#40). | — |
 | D47 | `stele check` validates the rules and runs checkers on changed files, failing CI on invalid rules and blocking violations. | design doc §8.2, rules checked by running a command |
 | D48 | Free if a single developer would want it. Paid only for needs that only an organization has. | — |
 
