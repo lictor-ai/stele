@@ -79,7 +79,21 @@ Never put credentials in source code.
 				Meta: map[string]string{
 					"check":   "regex",
 					"pattern": `(?i)(password|api_key|secret)\s*[:=]\s*"[^"]{8,}"`,
-					"owner":   "platform-team",
+					"owner":   `"platform-team"`,
+				},
+			})},
+		},
+		{
+			name: "stele's keys are unquoted, checker keys kept as written",
+			src:  "check: \"regex\"\nblocking: 'false'\npattern: \"net/http\"\nmessage: \"net\" is banned, use \"x\"\nowner: \"platform-team\"\n\nBody.\n",
+			want: []source.Rule{rule(0, 1, source.Rule{
+				Body: "Body.",
+				Meta: map[string]string{
+					"check":    "regex",
+					"blocking": "false",
+					"pattern":  `"net/http"`,
+					"message":  `"net" is banned, use "x"`,
+					"owner":    `"platform-team"`,
 				},
 			})},
 		},

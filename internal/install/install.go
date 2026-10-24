@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -36,8 +37,21 @@ func Header(version string) []byte {
 // maxSettings caps the settings file init reads.
 const maxSettings = 1 << 20
 
+var (
+	semverRE = regexp.MustCompile(`^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
+	// golang.org/x/mod/module's pseudoVersionRE, without build metadata:
+	// Released refuses any "+".
+	pseudoRE = regexp.MustCompile(`^v[0-9]+\.(0\.0-|\d+\.\d+-([^+]*\.)?0\.)\d{14}-[A-Za-z0-9]+$`)
+)
+
+// Released reports whether v is a tagged release: vX.Y.Z or vX.Y.Z-pre, not
+// a pseudo-version, and no +build (Go adds +dirty to a build with local
+// changes, which is not the tagged code). Anything else stamps as devel.
+func Released(v string) bool { return semverRE.MatchString(v) && !pseudoRE.MatchString(v) }
+
 // Init sets stele up under root (spec §6, ADR-0004): the Claude Code hooks
-// before and after a write, stamped with version, .stele/ and, only when
+// before and after a write, stamped with version when it is a release and
+// with devel otherwise, .stele/ and, only when
 // there is none, stele.md. Every check comes before the first write, so a
 // refusal leaves the repository untouched. changes say what it wrote; notes
 // what the user should know.
@@ -47,8 +61,15 @@ func Init(root, version string) (changes, notes []string, err error) {
 	steleDir := filepath.Join(root, index.Dir)
 	steleMD := filepath.Join(root, "stele.md")
 
+	// A build from a commit stamps devel, so builds from two commits agree
+	// and the committed settings do not change with every commit (#41).
+	stamp := version
+	if !Released(stamp) {
+		stamp = "devel"
+	}
+
 	// Check.
-	hooks, _, _, _ := claudecode.Install(nil, version)
+	hooks, _, _, _ := claudecode.Install(nil, stamp)
 	byHand := fmt.Sprintf("; add these hooks to %s by hand:\n%s", claudecode.SettingsFile, hooks)
 	if err := plainDir(claudeDir); err != nil {
 		return nil, nil, fmt.Errorf("%w: stele will not write through it%s", err, byHand)
@@ -63,7 +84,10 @@ func Init(root, version string) (changes, notes []string, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	out, changed, notes, err := claudecode.Install(data, version)
+	if v, ok := claudecode.Installed(data); ok && Released(v) && !Released(version) {
+		stamp = v // a build from a commit never replaces a release's stamp
+	}
+	out, changed, notes, err := claudecode.Install(data, stamp)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: %w; fix it and run stele init again", claudecode.SettingsFile, err)
 	}
@@ -80,7 +104,7 @@ func Init(root, version string) (changes, notes []string, err error) {
 	if createMD {
 		// The one file stele creates and never writes again (D38): Create
 		// fails rather than replace whatever appeared meanwhile.
-		err := safefile.Create(steleMD, Header(version), 0o644)
+		err := safefile.Create(steleMD, Header(stamp), 0o644)
 		switch {
 		case errors.Is(err, fs.ErrExist):
 			notes = append(notes, "kept the existing stele.md")
@@ -103,7 +127,7 @@ func Init(root, version string) (changes, notes []string, err error) {
 	}
 
 	local := filepath.Join(claudeDir, "settings.local.json")
-	if l, err := safefile.ReadRegular(local, maxSettings); err == nil && claudecode.OtherSteleHook(l, version) {
+	if l, err := safefile.ReadRegular(local, maxSettings); err == nil && claudecode.OtherSteleHook(l, stamp) {
 		notes = append(notes, filepath.Join(".claude", "settings.local.json")+" runs another stele hook: remove it there, or stele runs twice")
 	}
 	return changes, notes, nil

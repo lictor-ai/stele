@@ -304,8 +304,10 @@ func written(ev claudecode.Event, content []byte) []check.Span {
 // passes through PreToolUse, so the post-write path does not repeat it. A
 // matching version costs a string compare; only a mismatch reads anything.
 func versionWarning(ev claudecode.Event, installed string) string {
+	// Only two different releases warn: a build from a commit, or with local
+	// changes, stamps devel and is never told to re-run init (#41).
 	running := binaryVersion()
-	if installed == "" || installed == running || running == "devel" {
+	if installed == running || !install.Released(installed) || !install.Released(running) {
 		return ""
 	}
 	root, _, ok := target(ev)

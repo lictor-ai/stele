@@ -123,6 +123,11 @@ func TestSessionsAreSeparate(t *testing.T) {
 
 // Concurrent read-modify-write updates lose nothing.
 func TestUpdateConcurrent(t *testing.T) {
+	// Twenty updates queue on one lock; on a loaded machine the last one can
+	// wait longer than a hook would. The test is about lost updates.
+	old := lockWait
+	lockWait = time.Minute
+	t.Cleanup(func() { lockWait = old })
 	root := t.TempDir()
 	const n = 20
 	var wg sync.WaitGroup

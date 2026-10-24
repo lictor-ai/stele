@@ -83,7 +83,7 @@ func TestLoadNoIndex(t *testing.T) {
 	}{
 		{name: "missing"},
 		{name: "not JSON", content: "{"},
-		{name: "other version", content: `{"version": 2, "project": "p", "sources": {}, "rules": []}`},
+		{name: "other version", content: `{"version": 99, "project": "p", "sources": {}, "rules": []}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

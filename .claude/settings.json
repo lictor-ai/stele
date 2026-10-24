@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "stele hook --installed=v0.0.0-20261023085801-32b83aefb0cb",
+            "command": "stele hook --installed=devel",
             "timeout": 10
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "stele hook --installed=v0.0.0-20261023085801-32b83aefb0cb",
+            "command": "stele hook --installed=devel",
             "timeout": 10
           }
         ]

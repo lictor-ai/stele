@@ -7,7 +7,9 @@
 // A key is lowercase letters, digits, _ and -, starting with a letter, and is
 // followed by a colon and then whitespace or the end of the line. So a body
 // opening with "Note: ..." or a URL is still body. A value is the rest of the
-// line, trimmed, with one pair of matching outer quotes removed.
+// line, trimmed. The values of description, check and blocking, and each item
+// of tags and scope, lose one pair of matching outer quotes. Every other key is
+// kept as written, for its checker.
 //
 // HTML comments before a rule's metadata are skipped, so the header comment
 // stele init writes is not a rule. As in a code block, a --- inside a comment
@@ -250,7 +252,13 @@ func parseRule(lines []string, first int) (r source.Rule, ok bool, err error) {
 			if r.Meta == nil {
 				r.Meta = map[string]string{}
 			}
-			r.Meta[key] = unquote(value)
+			// check and blocking are stele's own keys (D46) and are unquoted.
+			// Every other key belongs to a checker, which gets it as written:
+			// pattern: "net/http" keeps its quotes.
+			if key == "check" || key == "blocking" {
+				value = unquote(value)
+			}
+			r.Meta[key] = value
 		}
 	}
 	if i > start && i < len(lines) && strings.TrimSpace(lines[i]) != "" {
@@ -300,7 +308,8 @@ func skipPreamble(lines []string) (out []string, i, unclosed int) {
 	return lines, i, -1
 }
 
-// unquote trims s and removes one pair of matching outer quotes.
+// unquote trims s and removes one pair of matching outer quotes. It is used
+// only for stele's own keys; checker keys are kept as written.
 func unquote(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') && s[len(s)-1] == s[0] {
