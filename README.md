@@ -86,7 +86,7 @@ Never put credentials in code, config or tests. Read them from the environment.
 |---|---|
 | `scope` | Path globs: `["a", "b"]` or one bare value. No scope means every file. |
 | `check` | `regex`, the only checker. Any other value is an invalid rule. |
-| `pattern` | A Go (RE2) regular expression, for `check: regex`, taken as written: quotes are part of it, so `pattern: "net/http"` matches only the quoted import. |
+| `pattern` | A Go (RE2) regular expression, for `check: regex`, taken as written: quotes are part of it, so `pattern: "net/http"` matches `"net/http"` with its quotes, as in an import, not a bare mention of net/http. |
 | `message` | What a violation says. Default: the start of the rule. Taken as written, quotes included. |
 | `blocking` | `true` (the default with `check`) or `false`. |
 

@@ -281,7 +281,7 @@ opens with `https://...`, because no space follows the colon. A value is the res
 of the line, trimmed. For `description`, `check` and `blocking`, and for each item
 of a `tags` or `scope` list, one pair of matching outer quotes is removed. Every
 other key is a checker's, and keeps its value as written, quotes included:
-`pattern: "net/http"` matches the quoted import path.
+`pattern: "net/http"` matches the text `"net/http"`, quotes included.
 
 `[a, b]` is a list. Commas inside quotes or braces do not split an item, so
 `["src/**/*.{go,ts}"]` is one glob. For `tags` and `scope`, a value without
