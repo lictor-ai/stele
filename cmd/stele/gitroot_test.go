@@ -117,6 +117,23 @@ func TestCheckSkipsNestedRepositories(t *testing.T) {
 	}
 }
 
+// git lists an untracked nested repository as one directory entry,
+// nested/: the skip names it without counting it as a file.
+func TestCheckUntrackedNestedRepository(t *testing.T) {
+	root := gitProject(t, checkRules)
+	nested := filepath.Join(root, "nested")
+	writeAt(t, root, "nested/a.go", "password = 1\n")
+	gitT(t, nested, "init", "-q")
+
+	code, out, errOut := runCmd("check")
+	if code != exitOK {
+		t.Fatalf("check = %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if !strings.Contains(out, "nested/: skipped, it has its own .git\n") || strings.Contains(out, "skipped 1 file") {
+		t.Errorf("stdout = %q, want nested/ skipped without a file count", out)
+	}
+}
+
 // A worktree without rules is its own root: the main checkout's rules are
 // not applied to it, and the check passes cleanly.
 func TestCheckInWorktree(t *testing.T) {

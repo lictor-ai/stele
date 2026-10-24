@@ -320,7 +320,19 @@ func printCheck(w io.Writer, lf lock.File, rep check.Report, subs []subproject, 
 		skipped[s.File] = true
 	}
 	for _, sp := range subs {
-		fmt.Fprintf(w, "%s/: skipped %s, it has its own %s\n", showPath(sp.dir), plural(len(sp.files), "file"), sp.has)
+		// git lists an untracked nested repository as one entry, nested/:
+		// a directory, not a file to count.
+		n := 0
+		for _, f := range sp.files {
+			if !strings.HasSuffix(f, "/") {
+				n++
+			}
+		}
+		if n == 0 {
+			fmt.Fprintf(w, "%s/: skipped, it has its own %s\n", showPath(sp.dir), sp.has)
+			continue
+		}
+		fmt.Fprintf(w, "%s/: skipped %s, it has its own %s\n", showPath(sp.dir), plural(n, "file"), sp.has)
 	}
 	files -= len(skipped)
 
