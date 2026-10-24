@@ -37,6 +37,29 @@ func BlockMessage(path string, rules []BlockRule, note string) string {
 	return strings.TrimSpace(b.String())
 }
 
+// bashMessage is what the agent reads when the hook stops a Bash command
+// that writes files with rules (#57): use Write or Edit, which stele sees.
+//
+//go:embed assets/bash-message.tmpl
+var bashMessage string
+
+var bashTemplate = template.Must(template.New("bash-message").Parse(bashMessage))
+
+// BashMessage renders the message for a Bash command that writes paths.
+// rules are those the agent has not seen; note is as for BlockMessage.
+func BashMessage(paths []string, rules []BlockRule, note string) string {
+	var b strings.Builder
+	err := bashTemplate.Execute(&b, struct {
+		Paths string
+		Rules []BlockRule
+		Note  string
+	}{strings.Join(paths, ", "), rules, note})
+	if err != nil {
+		panic(err) // the template is compiled in and tested
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // askMessage is what the user reads in Claude Code's permission prompt when
 // the agent writes one of stele's own files.
 //

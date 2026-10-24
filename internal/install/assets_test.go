@@ -44,6 +44,27 @@ func TestMessagesSayWriteAndEdit(t *testing.T) {
 	}
 }
 
+func TestBashMessage(t *testing.T) {
+	got := BashMessage([]string{"internal/x.go", "a.go"}, []BlockRule{{ID: "a", Text: "Never build SQL by string concatenation."}}, "")
+	for _, want := range []string{
+		"internal/x.go, a.go",
+		"Write or Edit",
+		"run the same command again",
+		"stele check",
+		"Never build SQL by string concatenation.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("message lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Note:") || strings.Contains(got, "{{") {
+		t.Errorf("message is not rendered clean:\n%s", got)
+	}
+	if note := BashMessage([]string{"a.go"}, nil, "stele.md:3: rule has no body"); !strings.Contains(note, "Note: stele.md:3: rule has no body") || strings.Contains(note, "---") {
+		t.Errorf("with a note and no rule:\n%s", note)
+	}
+}
+
 func TestSessionContext(t *testing.T) {
 	got := SessionContext()
 	for _, want := range []string{"stele", "Write", "Edit", "Bash", "cat >", "sed -i"} {
@@ -59,7 +80,7 @@ func TestSessionContext(t *testing.T) {
 // The templates are embedded as checked out; .gitattributes keeps them LF on
 // every platform, so the agent never reads a stray \r.
 func TestAssetsHaveLFLineEnds(t *testing.T) {
-	for name, s := range map[string]string{"block-message": blockMessage, "violation-message": violationMessage, "stele-header.md": steleHeader, "ask-message": askMessage, "session-context": sessionContext} {
+	for name, s := range map[string]string{"block-message": blockMessage, "violation-message": violationMessage, "stele-header.md": steleHeader, "ask-message": askMessage, "session-context": sessionContext, "bash-message": bashMessage} {
 		if strings.Contains(s, "\r") {
 			t.Errorf("%s.tmpl has CR line ends", name)
 		}
