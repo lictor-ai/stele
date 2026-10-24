@@ -58,7 +58,7 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 		return exitOK
 	}
 	ev, err := claudecode.Parse(data)
-	if err != nil || ev.File == "" {
+	if err != nil || (ev.File == "" && !startsSession(ev.Name)) {
 		return exitOK
 	}
 	// Go exits 2 on a panic, which would block the write: a bug in stele
@@ -84,6 +84,8 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 		w, c := invalidRules(ev, room)
 		a.Warning = joinLines(a.Warning, w)
 		a.Context = joinNotes(a.Context, c)
+	case startsSession(ev.Name):
+		a = sessionStart(ev)
 	default:
 		return exitOK
 	}

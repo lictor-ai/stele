@@ -15,12 +15,34 @@ import (
 // that the team commits next to stele.md.
 var SettingsFile = filepath.Join(".claude", "settings.json")
 
-// events are the hooks init registers: before a write to show the rules,
-// after it to check them (ADR-0004).
-var events = []string{"PreToolUse", "PostToolUse"}
+// registration is one hook init registers: an event, and the matcher of its
+// group, "" for an event that takes none.
+type registration struct{ Event, Matcher string }
 
-// matcher is the tools the hook handles, an exact list.
-const matcher = "Write|Edit|MultiEdit"
+// registrations are the hooks init registers: before a write to show the
+// rules, after it to check them (ADR-0004), and at the start of a session or
+// subagent to tell the agent to write files with Write and Edit only (#50).
+var registrations = []registration{
+	{"PreToolUse", writeTools},
+	{"PostToolUse", writeTools},
+	{"SessionStart", ""},
+	{"SubagentStart", ""},
+}
+
+// writeTools is the tools the write hooks handle, an exact list.
+const writeTools = "Write|Edit|MultiEdit"
+
+// events are the events of registrations, in order.
+var events = func() []string {
+	var es []string
+	for _, r := range registrations {
+		es = append(es, r.Event)
+	}
+	return es
+}()
+
+// Events returns the events init registers stele hook on, in order.
+func Events() []string { return append([]string(nil), events...) }
 
 // installedFlag marks stele's own handlers and stamps them with the version
 // that wrote them. Settings files are JSON, which has no comments, and
@@ -95,25 +117,29 @@ func (h handler) stamp() (version string, ok bool) {
 // command is the command init writes for version.
 func command(version string) string { return "stele hook " + installedFlag + version }
 
-// Install returns settings with stele's hooks on PreToolUse and PostToolUse,
-// stamped with version. Empty settings are {}. changed is false, and out is
-// settings unchanged, when exactly one stele handler per event already
-// carries this version. Otherwise every stele handler is removed and one
-// group per event appended. notes name stele hooks written by hand, which are
-// left alone. Malformed settings are an error, never rewritten.
+// Install returns settings with stele's hooks on every event of
+// registrations, stamped with version. Empty settings are {}. changed is
+// false, and out is settings unchanged, when each event already has exactly
+// one stele handler, carrying this version, in a group with the registered
+// matcher. Otherwise every stele handler is removed and one group per event
+// appended. notes name stele hooks written by hand, which are left alone.
+// Malformed settings are an error, never rewritten.
 func Install(settings []byte, version string) (out []byte, changed bool, notes []string, err error) {
 	f, err := parseSettings(settings)
 	if err != nil {
 		return nil, false, nil, err
 	}
-	for _, ev := range events {
+	for _, r := range registrations {
 		var stamped []string
-		for _, g := range f.groups[ev] {
+		for _, g := range f.groups[r.Event] {
 			for _, h := range g.handlers {
 				if v, ok := h.stamp(); ok {
+					if g.matcher() != r.Matcher {
+						v = "" // in a group init did not write: out of date
+					}
 					stamped = append(stamped, v)
 				} else if h.runsStele() {
-					notes = append(notes, fmt.Sprintf("%s already runs a stele hook stele init did not write; it is left alone, so stele will run twice", ev))
+					notes = append(notes, fmt.Sprintf("%s already runs a stele hook stele init did not write; it is left alone, so stele will run twice", r.Event))
 				}
 			}
 		}
@@ -125,19 +151,19 @@ func Install(settings []byte, version string) (out []byte, changed bool, notes [
 		return settings, false, notes, nil
 	}
 	f.removeStele()
-	fresh, err := marshal(struct {
-		Matcher string `json:"matcher"`
-		Hooks   []any  `json:"hooks"`
-	}{matcher, []any{struct {
-		Type    string `json:"type"`
-		Command string `json:"command"`
-		Timeout int    `json:"timeout"`
-	}{"command", command(version), 10}}})
-	if err != nil {
-		return nil, false, nil, err
-	}
-	for _, ev := range events {
-		f.groups[ev] = append(f.groups[ev], &group{raw: fresh})
+	for _, r := range registrations {
+		fresh, err := marshal(struct {
+			Matcher string `json:"matcher,omitempty"`
+			Hooks   []any  `json:"hooks"`
+		}{r.Matcher, []any{struct {
+			Type    string `json:"type"`
+			Command string `json:"command"`
+			Timeout int    `json:"timeout"`
+		}{"command", command(version), 10}}})
+		if err != nil {
+			return nil, false, nil, err
+		}
+		f.groups[r.Event] = append(f.groups[r.Event], &group{raw: fresh})
 	}
 	out, err = f.render()
 	return out, err == nil, notes, err
@@ -406,6 +432,18 @@ func parseSettings(data []byte) (*settingsFile, error) {
 		}
 	}
 	return f, nil
+}
+
+// matcher returns the group's matcher, "" when it has none or it is not a
+// string.
+func (g *group) matcher() string {
+	raw, ok := g.fields.get("matcher")
+	if !ok {
+		return ""
+	}
+	var m string
+	json.Unmarshal(raw, &m)
+	return m
 }
 
 // parseGroup reads one matcher group. A group that is not an object is left

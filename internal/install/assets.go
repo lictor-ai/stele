@@ -117,6 +117,17 @@ func renderViolations(path string, vs []Violation, more int, blocking bool) stri
 	return strings.TrimSpace(b.String())
 }
 
+// sessionContext is what the agent reads at the start of a session or
+// subagent in a stele project: write files with Write and Edit, which stele
+// sees, not through Bash, which it does not (#50).
+//
+//go:embed assets/session-context.tmpl
+var sessionContext string
+
+// SessionContext returns the text the agent reads when a session or subagent
+// starts.
+func SessionContext() string { return strings.TrimSpace(sessionContext) }
+
 // truncate cuts s to n characters, marking the cut with "…".
 func truncate(s string, n int) string {
 	if utf8.RuneCountInString(s) <= n {

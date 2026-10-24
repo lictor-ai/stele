@@ -29,10 +29,37 @@ func TestBlockMessage(t *testing.T) {
 	}
 }
 
+// Agents write whole files through Bash, which skips stele (#50): every text
+// stele hands the agent says to use Write and Edit.
+func TestMessagesSayWriteAndEdit(t *testing.T) {
+	const want = "Write files with Write and Edit only, not through Bash."
+	for name, s := range map[string]string{
+		"block":               BlockMessage("a.go", []BlockRule{{Text: "r"}}, ""),
+		"violation":           ViolationMessage("a.go", []Violation{{Line: 1, Column: 1, RuleID: "r", Excerpt: "e", Message: "e"}}, 0, true),
+		"violation, no block": ViolationMessage("a.go", []Violation{{Line: 1, Column: 1, RuleID: "r", Excerpt: "e", Message: "e"}}, 0, false),
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("%s message lacks %q:\n%s", name, want, s)
+		}
+	}
+}
+
+func TestSessionContext(t *testing.T) {
+	got := SessionContext()
+	for _, want := range []string{"stele", "Write", "Edit", "Bash", "cat >", "sed -i"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("session context lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "{{") || got != strings.TrimSpace(got) {
+		t.Errorf("session context is not rendered clean:\n%q", got)
+	}
+}
+
 // The templates are embedded as checked out; .gitattributes keeps them LF on
 // every platform, so the agent never reads a stray \r.
 func TestAssetsHaveLFLineEnds(t *testing.T) {
-	for name, s := range map[string]string{"block-message": blockMessage, "violation-message": violationMessage, "stele-header.md": steleHeader, "ask-message": askMessage} {
+	for name, s := range map[string]string{"block-message": blockMessage, "violation-message": violationMessage, "stele-header.md": steleHeader, "ask-message": askMessage, "session-context": sessionContext} {
 		if strings.Contains(s, "\r") {
 			t.Errorf("%s.tmpl has CR line ends", name)
 		}

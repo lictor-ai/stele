@@ -30,7 +30,7 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "PostToolUse", "session_id": "s1", "agent_id": "a1", "cwd": cwd,
 				"tool_name": "Edit", "tool_input": map[string]any{"file_path": "internal/db.go", "old_string": "x", "new_string": "y"},
 			},
-			want: Event{Name: "PostToolUse", SessionID: "s1", AgentID: "a1", ToolName: "Edit", File: abs, NewText: []string{"y"}, ReplaceAll: []bool{false}},
+			want: Event{Name: "PostToolUse", SessionID: "s1", AgentID: "a1", Cwd: cwd, ToolName: "Edit", File: abs, NewText: []string{"y"}, ReplaceAll: []bool{false}},
 		},
 		{
 			name: "multiedit",
@@ -48,7 +48,7 @@ func TestParse(t *testing.T) {
 				"tool_input":    map[string]any{"file_path": abs, "content": "package db"},
 				"tool_response": map[string]any{"filePath": abs, "type": "create"},
 			},
-			want: Event{Name: "PostToolUse", SessionID: "s1", ToolName: "Write", File: abs, NewText: []string{"package db"}},
+			want: Event{Name: "PostToolUse", SessionID: "s1", Cwd: cwd, ToolName: "Write", File: abs, NewText: []string{"package db"}},
 		},
 		{
 			name: "edit that deletes text",
@@ -110,6 +110,14 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": map[string]any{"command": "ls"},
 			},
 			want: Event{Name: "PreToolUse", ToolName: "Bash"},
+		},
+		{
+			name: "session start: no tool, the directory Claude Code runs in",
+			payload: map[string]any{
+				"hook_event_name": "SessionStart", "session_id": "s1", "transcript_path": "/t.jsonl",
+				"cwd": cwd, "source": "startup", "model": "claude-sonnet-5-5",
+			},
+			want: Event{Name: "SessionStart", SessionID: "s1", Cwd: cwd},
 		},
 	}
 	for _, tt := range tests {
@@ -186,6 +194,15 @@ func TestRender(t *testing.T) {
 				t.Errorf("Render =\n%s\nwant\n%s", got, tt.want)
 			}
 		})
+	}
+}
+
+// At the start of a session, context reaches Claude before the first prompt.
+func TestRenderSessionStart(t *testing.T) {
+	got := string(Render("SessionStart", Answer{Context: "write with Write"}))
+	want := `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"write with Write"}}` + "\n"
+	if got != want {
+		t.Errorf("Render =\n%s\nwant\n%s", got, want)
 	}
 }
 

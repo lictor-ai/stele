@@ -1026,7 +1026,8 @@ concurrently for parallel tool calls, so the post-write path keeps no session
 state.
 
 **Configuration** written by `init` (#12): the same command on `PreToolUse` and,
-for the post-write check (#29), on `PostToolUse`:
+for the post-write check (#29), on `PostToolUse`, and with no matcher on
+`SessionStart` and `SubagentStart` (#50, D60):
 
 ```json
 {"hooks": {
@@ -1035,8 +1036,26 @@ for the post-write check (#29), on `PostToolUse`:
     "hooks": [{"type": "command",
                "command": "stele hook --installed=v0.3.0",
                "timeout": 10}]}],
-  "PostToolUse": [ the same group ]}}
+  "PostToolUse": [ the same group ],
+  "SessionStart": [{
+    "hooks": [ the same handler ]}],
+  "SubagentStart": [ the same group as SessionStart ]}}
 ```
+
+**At the start of a session or subagent** the payload names no file, only
+`cwd`. The hook finds the root from `cwd` and, in a stele project, answers with
+`hookSpecificOutput.additionalContext`: the agent is to create and change
+files with Write and Edit only, never through Bash, which skips both write
+hooks (#50). Claude Code adds it before the first prompt, and SessionStart
+fires again after `/clear` and compaction. The text is the asset
+`session-context.tmpl`; the deny and violation messages carry the same
+sentence. It reads nothing but the root: no key, no index, no session state.
+Outside a stele project it says nothing. A monorepo whose only `stele.md` is in
+a subdirectory gets no context when Claude Code starts at the top.
+
+`init` is up to date only when each of these events has exactly one stele
+handler, with this version, in a group with the registered matcher; so a
+re-run adds events a newer stele registers, even with a `devel` stamp.
 
 The matcher is an exact list of tools. The default timeout is 600 seconds, so
 the explicit 10 matters. `--installed=` marks the entry as `init`'s and stamps

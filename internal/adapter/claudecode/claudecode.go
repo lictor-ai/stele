@@ -21,7 +21,9 @@
 //     patch that does not add up is ignored and stele falls back on the
 //     tool's new_string.
 //   - additionalContext reaches Claude alongside the tool result; systemMessage
-//     reaches the user.
+//     reaches the user. A SessionStart or SubagentStart hook's
+//     additionalContext reaches Claude at the start of the conversation, before
+//     the first prompt; SessionStart fires again after /clear and compaction.
 //   - Exit code 0 with JSON on stdout is the only path stele uses. Exit 2
 //     would block regardless of the JSON, and any other code is ignored.
 package claudecode
@@ -35,10 +37,11 @@ import (
 
 // Event is one hook call, as stele needs it.
 type Event struct {
-	Name      string // hook_event_name: "PreToolUse", "PostToolUse"
+	Name      string // hook_event_name: "PreToolUse", "PostToolUse", "SessionStart", "SubagentStart"
 	SessionID string
 	PromptID  string // the user turn; empty before the first prompt
 	AgentID   string // empty for the main agent
+	Cwd       string // the directory Claude Code runs in
 	ToolName  string
 	// File is the absolute path of the file the tool writes, or "" when the
 	// tool writes no file stele knows how to find.
@@ -143,6 +146,7 @@ func Parse(stdin []byte) (Event, error) {
 		SessionID: p.SessionID,
 		PromptID:  p.PromptID,
 		AgentID:   p.AgentID,
+		Cwd:       p.Cwd,
 		ToolName:  p.ToolName,
 	}
 	if f := p.ToolInput.FilePath; f != "" {

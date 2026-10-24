@@ -29,11 +29,11 @@ $ stele init
 stele init in /home/you/project
 created .stele/.gitignore
 created stele.md
-added stele hooks (PreToolUse, PostToolUse) to .claude/settings.json
+added stele hooks (PreToolUse, PostToolUse, SessionStart, SubagentStart) to .claude/settings.json
 ```
 
 - It works on the current directory only, and says so if a parent directory looks like the repository root (not when the current directory is a git worktree or submodule).
-- It adds `stele hook --installed=<version>` to `.claude/settings.json` on `PreToolUse` and `PostToolUse` (matcher `Write|Edit|MultiEdit`, timeout 10 s). The rest of the file is kept. `<version>` is the release tag, or `devel` for a build from a commit (`go install ./cmd/stele` in a clone, or `@latest` before a tag); a build from a commit never replaces a release's stamp.
+- It adds `stele hook --installed=<version>` to `.claude/settings.json` on `PreToolUse` and `PostToolUse` (matcher `Write|Edit|MultiEdit`, timeout 10 s), and on `SessionStart` and `SubagentStart`. The rest of the file is kept. `<version>` is the release tag, or `devel` for a build from a commit (`go install ./cmd/stele` in a clone, or `@latest` before a tag); a build from a commit never replaces a release's stamp.
 - It creates `stele.md` only if there is none. stele never writes `stele.md` or `stele.json` after that.
 - Running it again prints `up to date, nothing written`.
 
@@ -104,6 +104,7 @@ Scope globs:
 
 ## What the agent sees
 
+- **When a session or subagent starts.** The agent is told to create and change files with Write and Edit only, never through Bash: stele sees only those.
 - **Before a write.** The first write in a turn to a file with rules the agent hasn't seen this turn is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent. A retry of the denied write goes through; parallel writes in the same message, to other files or to the same one, are denied too, once.
 - **After a write.** A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
@@ -179,7 +180,7 @@ Optional, committed next to `stele.md`. These are the defaults:
 ## Limits
 
 1. **If `stele` is missing from `PATH`, or the hook crashes or times out, writes go through.** `block_on_error` only acts when stele runs and fails, so it can't prevent this.
-2. **Only Write, Edit and MultiEdit are hooked.** A file written through Bash (`sed -i`, `cat >`) or NotebookEdit gets no rules and no check. `stele check` in CI is the only catch.
+2. **Only Write, Edit and MultiEdit are hooked.** The agent is told at the start of each session to write files with those only, and agents mostly do; but a file it still writes through Bash (`sed -i`, `cat >`) or NotebookEdit gets no rules and no check. `stele check` in CI is the only catch.
 3. **The agent can ignore the rules.** It is shown them and told about violations, but it can still choose not to follow them.
 4. **A regex check only catches what a pattern can express.** It matches text, not code, so it also fires in comments and strings. RE2 has no lookaround or backreferences. The pattern runs over the whole file: use `(?m)` for `^` and `$` to mean line start and end.
 5. **A rule with no `scope`, or only `!` exclusions, is shown for every other file.** Keep such rules few. Rules are chosen by path, not by task.
