@@ -796,6 +796,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D58 | v1 is for one developer. Rules are chosen by `scope`, not by a model: a `PreToolUse` hook denies a write that brings rules not yet shown this turn, with those rules as the reason; a `PostToolUse` hook runs built-in checks on the written file and reports violations. The MCP server, matcher subagent, logging, plugins and sinks move to the "team" milestone, with D12–D15, D30, D33–D35 and D39; D16, D29 and D37 are amended. | ADR-0004 |
 | D59 | A `scope` item starting with `!` excludes: a rule applies to a file that matches no exclusion and at least one other item; a scope of only exclusions applies to every other file. Order does not matter. A broken exclusion excludes nothing. | e2e 2026-10-23, What to change 1 (#39) |
 | D60 | `init` also registers `stele hook` on `SessionStart` and `SubagentStart`. In a stele project it answers with context telling the agent to create and change files with Write and Edit only, never through Bash, which skips both hooks; the deny and violation messages say it too. Bash writes are still not seen. | tests of v1.0.0-dev.0 (#50) |
+| D61 | `init` also registers `stele hook` on `PreToolUse` for Bash. The hook lexes the command, never runs it, and finds the files it writes by redirection, `tee`, `sed -i` and `perl -i`. A write into a file a scoped rule covers is denied once per file, per agent, per turn, with the rules not yet shown and a pointer to Write and Edit; run again, it goes through unchecked. A write, removal or copy onto one of stele's own files asks. Nothing runs after a Bash command, and a failure of stele only warns. | tests of v1.0.0-dev.0 (#57) |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 
@@ -920,6 +921,13 @@ in v1 because it is free, has no dependencies, and covers the rules that really
 are textual — secrets, banned imports, banned calls. Anything subtler belongs in
 a checker plugin.
 
+**Bash is read, not watched (D61).** The hook reads a Bash command for the files
+it writes; it does not run it or look at the disk after. Scripts, generators,
+`xargs`, `find -exec`, `$VAR` targets it cannot resolve, brace expansion and
+background jobs that `cd` elsewhere are not seen, nor are writes into files only
+unscoped rules cover, which a log usually is. A command it stops goes through
+the second time, unchecked. NotebookEdit and PowerShell are not hooked.
+
 **A plugin is per machine, but `stele.json` is shared.** Listing a checker in
 `stele.json` makes `stele check` fail for every teammate who has not installed
 it. That is deliberate (§8), and the error says what to install, but it is still
@@ -940,6 +948,7 @@ is the point.
 | D39 | **Team milestone, not v1 (D58).** Circuit breaker at 3 blocks | How often it trips, and whether real failures are caught sooner |
 | `O-CORPUS` | Full corpus | The corpus size where match quality falls off |
 | `O-LOG-VOLUME` | Nothing acts on the logs | Enough turns for the counts to mean something |
+| `O-BASH-DIFF` | Bash writes found by reading the command (D61) | Claude Code's `bashEditDiff`, listing the files a Bash command changed, leaving beta and being recorded outside auto mode |
 
 One cheap piece of evidence is unassigned and worth gathering before v2 reopens
 `O-ENTRY`: **count how many real repositories already carry `.cursor/rules` or

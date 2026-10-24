@@ -180,7 +180,7 @@ Optional, committed next to `stele.md`. These are the defaults:
 ## Limits
 
 1. **If `stele` is missing from `PATH`, or the hook crashes or times out, writes go through.** `block_on_error` only acts when stele runs and fails, so it can't prevent this.
-2. **Only Write, Edit and MultiEdit are hooked.** The agent is told at the start of each session to write files with those only, and agents mostly do; but a file it still writes through Bash (`sed -i`, `cat >`) or NotebookEdit gets no rules and no check. `stele check` in CI is the only catch.
+2. **Only Write, Edit and MultiEdit are checked.** The agent is told at the start of each session to write files with those only. A Bash command that writes, by redirection, `tee`, `sed -i` or `perl -i`, into a file a scoped rule covers is stopped once per file each turn: the agent gets the rules and is told to use Write or Edit; run again, the command goes through unchecked. stele reads the command, it does not run it, so scripts, generators, `xargs`, `find -exec`, `$VAR` targets, brace expansion and writes into files only unscoped rules cover are not seen. NotebookEdit and PowerShell are not hooked. `stele check` in CI is the only catch.
 3. **The agent can ignore the rules.** It is shown them and told about violations, but it can still choose not to follow them.
 4. **A regex check only catches what a pattern can express.** It matches text, not code, so it also fires in comments and strings. RE2 has no lookaround or backreferences. The pattern runs over the whole file: use `(?m)` for `^` and `$` to mean line start and end.
 5. **A rule with no `scope`, or only `!` exclusions, is shown for every other file.** Keep such rules few. Rules are chosen by path, not by task.
@@ -191,7 +191,7 @@ Optional, committed next to `stele.md`. These are the defaults:
 10. **Nothing leaves the machine.** stele makes no network calls. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 11. **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
 12. **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about.
-13. **Asking before a write to stele's own files covers Write, Edit and MultiEdit only, and their names and links.** A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock` and `.stele/`. A Bash command, a NotebookEdit, or an edit to `.claude/settings.json` that removes the hooks, is not asked about. With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
+13. **Asking before a write to stele's own files covers Write, Edit and MultiEdit only, and their names and links.** A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock` and `.stele/`. A Bash command that visibly writes, removes, moves or copies onto one of them is asked about too; other Bash forms, a NotebookEdit, or an edit to `.claude/settings.json` that removes the hooks, are not. With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
 
 ## License
 

@@ -150,7 +150,9 @@ last good rules apply.
   what a regex cannot catch.
 * The hooks see Write and Edit only. A file written through Bash (`cat > f`,
   `sed -i`) or NotebookEdit gets no rules and no check; `stele check` in CI is the
-  only catch there. A model denied a Write may fall back to Bash.
+  only catch there. A model denied a Write may fall back to Bash. Narrowed by
+  D61 (#57): a Bash command that writes a file a scoped rule covers is stopped
+  once, and the agent sent to Write and Edit.
 * `scope` changes meaning: in the spec it is "a hint to the matcher, not a hard
   filter". In v1 it is the filter, so a broad scope shows a rule more often and a
   narrow one hides it. §3 says so.
