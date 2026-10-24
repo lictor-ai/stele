@@ -5,6 +5,9 @@
 // The pattern runs over the whole file, so ^ and $ match per line only with
 // (?m). An optional `message` key replaces the default message, the rule's
 // excerpt.
+//
+// Lines and columns are 1-based; a column counts characters, and a leading
+// UTF-8 byte order mark is not part of the text.
 package regex
 
 import (
@@ -15,6 +18,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"regexp"
+	"unicode/utf8"
 
 	"github.com/lictor-ai/stele/internal/check"
 	"github.com/lictor-ai/stele/internal/safefile"
@@ -31,21 +35,31 @@ const binaryPrefix = 8 << 10
 // maxFile caps the files Check reads; larger ones are skipped. Tests lower it.
 var maxFile int64 = 32 << 20
 
-// Location is where a match starts: 1-based, with the column in bytes.
+// bom is a UTF-8 byte order mark. A leading one is not part of the text.
+var bom = []byte("\xef\xbb\xbf")
+
+// Location is where a match starts, 1-based. Column counts characters
+// (Unicode code points): a tab is one, and so is each byte that is not valid
+// UTF-8, as the regexp stepped over it.
 type Location struct{ Line, Column int }
 
-// Match returns where each match of re in content starts.
+// Match returns where each match of re in content starts. A leading UTF-8 byte
+// order mark is not part of the text: re does not see it, and columns on line 1
+// do not count it.
 func Match(re *regexp.Regexp, content []byte) []Location {
+	content, _ = bytes.CutPrefix(content, bom)
 	var locs []Location
-	line, lineStart, scanned := 1, 0, 0
+	line, col, pos := 1, 1, 0 // col is the column of byte pos
 	for _, m := range re.FindAllIndex(content, -1) {
-		for ; scanned < m[0]; scanned++ {
-			if content[scanned] == '\n' {
-				line++
-				lineStart = scanned + 1
+		for pos < m[0] {
+			if i := bytes.IndexByte(content[pos:m[0]], '\n'); i >= 0 {
+				line, col, pos = line+1, 1, pos+i+1
+				continue
 			}
+			col += utf8.RuneCount(content[pos:m[0]])
+			pos = m[0]
 		}
-		locs = append(locs, Location{Line: line, Column: m[0] - lineStart + 1})
+		locs = append(locs, Location{Line: line, Column: col})
 	}
 	return locs
 }
