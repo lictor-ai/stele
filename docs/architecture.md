@@ -984,6 +984,21 @@ is read, so `backstop` and `block_on_error` change nothing. Claude Code shows
 (`claude -p`) the call is refused. A deny from another hook wins over it. The
 prompt text is the asset `ask-message.tmpl`.
 
+Claude Code's settings files ask too (#56): `.claude/settings.json` and
+`.claude/settings.local.json` at any depth in a stele project, those the
+session loads from its `cwd` up to the top of its git checkout
+(`settings.local.json` sits at the git root, so a nested stele root would miss
+it), and the user's `settings.json` (`$CLAUDE_CONFIG_DIR`, else `~/.claude`),
+whenever the session's `cwd` is in a stele project. Claude Code reloads
+settings mid-session, so removing stele's entries or adding `disableAllHooks`
+switches stele off at once. Its own protection of `.claude` is not enough: it
+is silent in `bypassPermissions`, goes to the classifier in `auto`, and can be
+turned off for a session ("allow … this project's .claude folder"). Every edit
+asks, without reading the file: `disableAllHooks` in any loaded file switches
+stele off, whether the file holds stele's entries or not. The `ConfigChange`
+hook was considered and left out: it cannot stop the file on disk changing,
+cannot tell the user's edits from the agent's, and its reason is never shown.
+
 ```json
 {"hookSpecificOutput": {
    "hookEventName": "PreToolUse",
