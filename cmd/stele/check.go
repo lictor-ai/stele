@@ -356,7 +356,6 @@ func printCheck(w io.Writer, lf lock.File, rep check.Report, subs []subproject, 
 	}
 }
 
-// where says which rule in which source an id is, as printCompile does.
 // printProblems prints one line per invalid rule, as stele check and stele
 // compile do.
 func printProblems(w io.Writer, lf lock.File, ps []check.Problem) {
@@ -365,6 +364,7 @@ func printProblems(w io.Writer, lf lock.File, ps []check.Problem) {
 	}
 }
 
+// where says which rule in which source an id is, as printCompile does.
 func where(lf lock.File, id string) string {
 	for _, e := range lf.Rules {
 		if e.ID == id {
