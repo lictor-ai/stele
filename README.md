@@ -129,7 +129,7 @@ main.go:7:10: error 2de7574e-7106-4986-8ce6-996d06e2703a "Never put credentials 
 checked 1 file: 2 errors
 ```
 
-A non-blocking violation prints `warning` instead of `error`.
+A non-blocking violation prints `warning` instead of `error`. Lines and columns start at 1; a column counts characters.
 
 | Exit | Meaning |
 |---|---|

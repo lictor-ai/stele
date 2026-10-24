@@ -723,7 +723,9 @@ executable it looked for.
 **The `regex` checker.** Built in. It reads the rule's `pattern` as a Go regular
 expression (RE2 syntax) and reports one violation per match, with the line and
 column where the match starts. An optional `message` key replaces the default
-message, which is the rule's excerpt.
+message, which is the rule's excerpt. The column counts characters (Unicode
+code points), so a tab is one; a leading UTF-8 byte order mark is not part of
+the text: patterns do not see it and columns do not count it.
 
 `stele check` reads rules from the index it just planned, never from rule files
 (D40). It does not touch the hook, the session state or the log. The log records
