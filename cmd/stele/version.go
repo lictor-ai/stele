@@ -7,7 +7,9 @@ import "runtime/debug"
 var version = ""
 
 // binaryVersion is this stele's version: the ldflags value, else the module
-// version from the build info (go install ...@v0.3.0), else "devel".
+// version from the build info (go install ...@v0.3.0), else "devel". A
+// build from a commit reports a pseudo-version here; install.Released
+// decides what counts as a release for the stamp and the warning.
 func binaryVersion() string {
 	if version != "" {
 		return version

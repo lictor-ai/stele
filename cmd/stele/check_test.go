@@ -276,6 +276,22 @@ func TestCheckAll(t *testing.T) {
 	}
 }
 
+// A pattern keeps its quotes (#40): "net/http" matches the import, not every
+// mention of net/http.
+func TestCheckQuotedPattern(t *testing.T) {
+	root := project(t, "check: regex\npattern: \"net/http\"\n\nDo not import net/http.\n")
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile = %d, stderr %q", code, errOut)
+	}
+	writeAt(t, root, "a.go", "package a\n\nimport \"net/http\"\n")
+	writeAt(t, root, "b.go", "package a\n\n// see the net/http docs\n")
+
+	code, out, errOut := runCmd("check", "a.go", "b.go")
+	if code != exitFailed || !strings.Contains(out, "a.go:3:8: error") || strings.Contains(out, "b.go") {
+		t.Errorf("check = %d, stdout %q, stderr %q, want a.go:3:8 only", code, out, errOut)
+	}
+}
+
 func TestCheckPaths(t *testing.T) {
 	root := project(t, checkRules) // no git: paths need none
 	if code, _, errOut := runCmd("compile"); code != exitOK {
