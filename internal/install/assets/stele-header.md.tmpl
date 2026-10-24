@@ -15,6 +15,8 @@ key: value lines, then a blank line, then the rule in plain prose:
 scope     path globs. Before the agent writes a matching file, it is shown
           the rule. A rule with no scope is shown for every file: keep few.
 check     regex: stele checks each write, and stele check in CI, for pattern.
+pattern   the regex for check: regex (Go RE2), taken as written: quotes
+          are part of it.
 message   what a violation says; the start of the rule by default.
 blocking  true (the default with check) or false: whether a violation
           blocks the agent and fails stele check.
