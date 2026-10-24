@@ -29,8 +29,9 @@ const (
 	fileName = "index.json"
 	// purpose is what the index is signed as.
 	purpose = "index"
-	// Version is the index format this stele reads and writes.
-	Version = 1
+	// Version is the index format this stele reads and writes. 2: checker
+	// keys are kept as written (#40), so an index from version 1 is rebuilt.
+	Version = 2
 	// maxSize caps the index. Thousands of rules fit in a few megabytes.
 	maxSize = 64 << 20
 )
