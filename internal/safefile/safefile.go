@@ -27,6 +27,17 @@ func Replace(path string, data []byte) error {
 // rewrites but does not own, such as Claude Code's settings, which may hold
 // secrets.
 func ReplacePerm(path string, data []byte, perm os.FileMode) error {
+	return replace(path, data, perm, transientWait)
+}
+
+// ReplaceNow is Replace without waiting for a reader to close the file: for
+// a best-effort write on the hook's path, where waiting would hold up the
+// agent and a skip costs nothing.
+func ReplaceNow(path string, data []byte) error {
+	return replace(path, data, 0o644, 0)
+}
+
+func replace(path string, data []byte, perm os.FileMode, wait time.Duration) error {
 	// Anything but a plain file where the file belongs (a directory, a
 	// symlink, a junction) is never stele's: .stele/ is not covered by the
 	// repository's .gitignore, so a clone can commit one. Move it aside so
@@ -55,7 +66,7 @@ func ReplacePerm(path string, data []byte, perm os.FileMode) error {
 	// A reader with the target open makes the rename fail on Windows until
 	// it closes the file, so retry that, and only that, for as long as
 	// ReadRegular would.
-	deadline := time.Now().Add(transientWait)
+	deadline := time.Now().Add(wait)
 	backoff := time.Millisecond
 	for {
 		err = os.Rename(tmp.Name(), path)

@@ -30,11 +30,14 @@ stele init in /home/you/project
 created .stele/.gitignore
 created stele.md
 added stele hooks (PreToolUse, PostToolUse, SessionStart, SubagentStart) to .claude/settings.json
+wrote stele.lock
+wrote .claude/rules/stele-rules.md
 ```
 
 - It works on the current directory only, and says so if a parent directory looks like the repository root (not when the current directory is a git worktree or submodule).
 - It adds `stele hook --installed=<version>` to `.claude/settings.json` on `PreToolUse` and `PostToolUse` (matcher `Write|Edit|MultiEdit`, timeout 10 s), and on `SessionStart` and `SubagentStart`. The rest of the file is kept. `<version>` is the release tag, or `devel` for a build from a commit (`go install ./cmd/stele` in a clone, or `@latest` before a tag); a build from a commit never replaces a release's stamp.
 - It creates `stele.md` only if there is none. stele never writes `stele.md` or `stele.json` after that.
+- It compiles the rules: `stele.lock`, and `.claude/rules/stele-rules.md`, which Claude Code loads at the start of every session and subagent, like `CLAUDE.md`. So the agent has the rules before its first write.
 - Running it again prints `up to date, nothing written`.
 
 Then write your rules in `stele.md` and run `stele compile`:
@@ -42,16 +45,16 @@ Then write your rules in `stele.md` and run `stele compile`:
 ```
 $ stele compile
 3 rules: 0 matched by text, 0 by position, 3 new, 0 dropped
-wrote stele.lock and .stele/index.json
+wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
 ```
 
-**Commit** `stele.md`, `stele.lock`, `.claude/settings.json`, and `stele.json` if you have one. **Don't commit** `.stele/`; it ignores itself.
+**Commit** `stele.md`, `stele.lock`, `.claude/rules/stele-rules.md`, `.claude/settings.json`, and `stele.json` if you have one. **Don't commit** `.stele/`; it ignores itself. Don't edit `.claude/rules/stele-rules.md`: `stele compile` writes it from `stele.md`.
 
 If a rule can't be used — a `check` other than `regex`, a pattern that doesn't compile or matches empty text, a `blocking` that isn't `true` or `false` — `stele compile` names it and exits 1. It still writes `stele.lock`, so the rule keeps its id, and the hook enforces the other rules and tells you once a session.
 
-The hook also recompiles when `stele.md` changes, so edits take effect on the next write. Commit the updated `stele.lock`.
+The hook also recompiles when `stele.md` changes, so edits take effect on the next write. Commit the updated `stele.lock` and `.claude/rules/stele-rules.md`. A session keeps the rules file it loaded at its start: a rule changed since is shown again before the next write it applies to.
 
-To remove stele: `stele uninstall`. It removes stele's hooks and `.stele/`, and keeps `stele.md`, `stele.lock` and `stele.json`.
+To remove stele: `stele uninstall`. It removes stele's hooks, `.claude/rules/stele-rules.md` and `.stele/`, and keeps `stele.md`, `stele.lock` and `stele.json`.
 
 ## Writing stele.md
 
@@ -104,11 +107,11 @@ Scope globs:
 
 ## What the agent sees
 
-- **When a session or subagent starts.** The agent is told to create and change files with Write and Edit only, never through Bash: stele sees only those.
+- **When a session or subagent starts.** Claude Code loads `.claude/rules/stele-rules.md`, every rule with its scope, as it loads `CLAUDE.md`. The agent is also told to create and change files with Write and Edit only, never through Bash: stele sees only those.
 - **Before a write.** The first write in a turn to a file with rules the agent hasn't seen this turn is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent; rules that do not fit in one message (about 9,000 bytes) are shown on the next write. A retry of the denied write goes through; parallel writes in the same message, to other files or to the same one, are denied too, once.
 - **After a write.** A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
-- **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` says. So does a write to Claude Code's settings files, which run stele's hooks: `.claude/settings.json` and `.claude/settings.local.json` anywhere in the project or from the session's directory up to the git root, and your user `settings.json`. A change there can weaken stele or turn it off. Allow it only if you asked for it.
+- **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock`, `.claude/rules/stele-rules.md` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` says. So does a write to Claude Code's settings files, which run stele's hooks: `.claude/settings.json` and `.claude/settings.local.json` anywhere in the project or from the session's directory up to the git root, and your user `settings.json`. A change there can weaken stele or turn it off. Allow it only if you asked for it.
 
 ## CI: stele check
 
@@ -121,7 +124,7 @@ Scope globs:
 
 Add `--format json` for JSON. Deleted files are skipped.
 
-`stele check` first checks the rules: `stele.md` must parse, every rule must be valid, and `stele.lock` must be committed and current. In a checkout with no `stele.md`, `stele.json` or `stele.lock` (a submodule, a worktree of a branch without rules, a repository that adds the CI job before its `stele.md`), it says `nothing to check` and exits 0; with `--base` it still reports a deleted `stele.md`. Then it checks the files:
+`stele check` first checks the rules: `stele.md` must parse, every rule must be valid, and `stele.lock` and `.claude/rules/stele-rules.md` must be committed and current. After upgrading to a stele that writes the rules file, run `stele compile` and commit it, or `stele check` fails. The file is current when it holds the same rules in the same order; a newer stele's wording of its intro alone doesn't make it stale. A file at that path that stele didn't write (no `<!-- Generated by stele` first line) is left alone, and `stele check` fails until you rename it. A rules file over 40,000 characters gets a note: every session loads it whole. In a checkout with no `stele.md`, `stele.json` or `stele.lock` (a submodule, a worktree of a branch without rules, a repository that adds the CI job before its `stele.md`), it says `nothing to check` and exits 0; with `--base` it still reports a deleted `stele.md`. Then it checks the files:
 
 ```
 $ stele check
@@ -138,7 +141,7 @@ With `--base`, `stele check` also says when the branch adds, changes or deletes 
 | Exit | Meaning |
 |---|---|
 | 0 | Rules are valid (or there are none) and there is no blocking violation |
-| 1 | A rule is invalid, `stele.lock` is out of date, or there is a blocking violation |
+| 1 | A rule is invalid, `stele.lock` or `.claude/rules/stele-rules.md` is out of date, or there is a blocking violation |
 | 2 | stele couldn't run: bad flags, no git, unknown `--base` ref, no merge base |
 
 GitHub Actions:

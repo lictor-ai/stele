@@ -68,7 +68,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	// 1. The rules.
 	var r compile.Result
 	if !none {
-		r, err = compile.Plan(context.Background(), root, sources(), uuid.NewString)
+		r, err = compile.Plan(context.Background(), root, sources(), generated(), uuid.NewString)
 		if err != nil {
 			var pe *source.ParseError
 			if !errors.As(err, &pe) && !errors.Is(err, lock.ErrDuplicateID) && !errors.Is(err, lock.ErrInvalid) {
@@ -80,6 +80,19 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		if r.LockChanged {
 			return ruleFileProblem(root, *format, fmt.Sprintf("%s is out of date with the rules: run stele compile and commit %s",
 				lock.FileName, lock.FileName), stdout, stderr)
+		}
+		// A stale rules file would deliver old rules to every session.
+		for _, f := range r.Files {
+			switch {
+			case f.Foreign:
+				return ruleFileProblem(root, *format, notStele(f.Path), stdout, stderr)
+			case f.Changed:
+				return ruleFileProblem(root, *format, fmt.Sprintf("%s is out of date with the rules: run stele compile and commit %s",
+					f.Path, f.Path), stdout, stderr)
+			}
+		}
+		for _, n := range generatedNotes(r.Files) {
+			fmt.Fprintf(stderr, "stele check: %s\n", n)
 		}
 	}
 

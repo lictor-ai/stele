@@ -204,9 +204,14 @@ func usesStele(root string) bool {
 // freshIndex returns the index, rebuilt from stele.md when it changed. When
 // stele.md stops parsing, the last good index stays in force and note says
 // what is wrong, so the rules are still enforced while the file is being
-// fixed (ADR-0004).
+// fixed (ADR-0004). A rules file that cannot be written is no failure: the
+// index is saved and the hook still shows every rule.
 func freshIndex(root string, key []byte) (idx index.Index, note string, err error) {
-	idx, _, err = compile.EnsureFresh(context.Background(), root, plugin.Builtins(), uuid.NewString, key)
+	idx, _, err = compile.EnsureFresh(context.Background(), root, plugin.Builtins(), generated(), uuid.NewString, key)
+	var ge *compile.GeneratedError
+	if errors.As(err, &ge) {
+		return idx, "", nil
+	}
 	var pe *source.ParseError
 	if !errors.As(err, &pe) {
 		return idx, "", err

@@ -26,7 +26,8 @@ func TestInitAndUninstall(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("init = %d, stderr %q", code, errOut)
 	}
-	for _, want := range []string{"added stele hooks", "created .stele/.gitignore", "created stele.md"} {
+	for _, want := range []string{"added stele hooks", "created .stele/.gitignore", "created stele.md",
+		"wrote stele.lock", "wrote .claude/rules/stele-rules.md"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("init stdout lacks %q:\n%s", want, out)
 		}
@@ -39,11 +40,28 @@ func TestInitAndUninstall(t *testing.T) {
 	}
 
 	code, out, errOut = runCmd("uninstall")
-	if code != exitOK || !strings.Contains(out, "removed stele hooks") || !strings.Contains(out, "removed .stele/") {
+	if code != exitOK || !strings.Contains(out, "removed stele hooks") || !strings.Contains(out, "removed .stele/") ||
+		!strings.Contains(out, "removed .claude/rules/stele-rules.md") {
 		t.Errorf("uninstall = %d, stdout %q, stderr %q", code, out, errOut)
 	}
 	if _, err := os.Stat(filepath.Join(root, "stele.md")); err != nil {
 		t.Errorf("uninstall removed stele.md: %v", err)
+	}
+}
+
+// A stele.md that does not parse leaves init done, with a note: the rules
+// file comes at the next stele compile.
+func TestInitWithBrokenRules(t *testing.T) {
+	root := project(t, "check: regex\n")
+	code, out, errOut := runCmd("init")
+	if code != exitOK || !strings.Contains(out, "added stele hooks") {
+		t.Fatalf("init = %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if !strings.Contains(errOut, "run stele compile to write .claude/rules/stele-rules.md") {
+		t.Errorf("stderr = %q, want a note to run stele compile", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".claude", "rules", "stele-rules.md")); err == nil {
+		t.Error("a rules file was written from rules that do not parse")
 	}
 }
 

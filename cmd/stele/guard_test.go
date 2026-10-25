@@ -58,6 +58,8 @@ func TestHookAsksForOwnFiles(t *testing.T) {
 		// Claude Code's settings load stele's hooks, and reload mid-session (#56).
 		".claude/settings.json", ".claude/settings.local.json", "sub/.claude/settings.json",
 		".claude/settings.json.", ".claude/settings.local.json::$DATA",
+		// The rules file the agent loads at launch (#68).
+		".claude/rules/stele-rules.md", "sub/.claude/rules/stele-rules.md",
 	}
 	for _, tool := range []string{"Write", "Edit", "MultiEdit"} {
 		for _, rel := range own {
@@ -70,7 +72,7 @@ func TestHookAsksForOwnFiles(t *testing.T) {
 			})
 		}
 	}
-	for _, rel := range []string{"notstele.md", "docs/stele.md.bak", ".claude/agents/x.md", ".claude/settings.json.bak", "settings.json"} {
+	for _, rel := range []string{"notstele.md", "docs/stele.md.bak", ".claude/agents/x.md", ".claude/settings.json.bak", "settings.json", ".claude/rules/mine.md"} {
 		t.Run("not "+rel, func(t *testing.T) {
 			root := project(t, hookRules)
 			if o, _ := hook(t, preWrite("Write", filepath.Join(root, rel))); o.HookSpecificOutput.PermissionDecision == "ask" {

@@ -16,7 +16,11 @@ Guideline enforcement for coding agents. Go, single binary.
    chosen by `scope`, delivered and checked by Claude Code hooks; no MCP server
    or matcher in v1. Where it and the spec disagree about v1, it wins. The spec
    carries it as D58.
-5. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+5. `docs/adr/0005-rules-loaded-at-session-start.md` — the rules reach the agent
+   through a generated `.claude/rules/stele-rules.md` that Claude Code loads at
+   launch, and the deny shows only rules a session has not loaded. The spec
+   carries it as D62.
+6. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.

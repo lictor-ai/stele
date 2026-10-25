@@ -46,12 +46,12 @@ func TestCompile(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("compile = %d, stderr %q", code, errOut)
 	}
-	for _, want := range []string{"2 rules: 0 matched by text, 0 by position, 2 new, 0 dropped", "wrote stele.lock and .stele/index.json"} {
+	for _, want := range []string{"2 rules: 0 matched by text, 0 by position, 2 new, 0 dropped", "wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout = %q, want it to contain %q", out, want)
 		}
 	}
-	for _, f := range []string{"stele.lock", ".stele/index.json", ".stele/.gitignore"} {
+	for _, f := range []string{"stele.lock", ".stele/index.json", ".stele/.gitignore", ".claude/rules/stele-rules.md"} {
 		if _, err := os.Stat(filepath.Join(root, f)); err != nil {
 			t.Errorf("%s: %v", f, err)
 		}
@@ -84,7 +84,7 @@ func TestCompileInvalidRule(t *testing.T) {
 	if code != exitFailed {
 		t.Fatalf("compile = %d, stderr %q, want %d for an invalid rule", code, errOut, exitFailed)
 	}
-	for _, want := range []string{"invalid rule ", `"No x."`, "matches empty text", "(stelemd rule 2)", "1 problem in the rules", "wrote stele.lock and .stele/index.json"} {
+	for _, want := range []string{"invalid rule ", `"No x."`, "matches empty text", "(stelemd rule 2)", "1 problem in the rules", "wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout = %q, want it to contain %q", out, want)
 		}

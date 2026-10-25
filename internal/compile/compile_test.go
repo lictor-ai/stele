@@ -111,7 +111,7 @@ func entryIDs(idx index.Index) []string {
 func TestPlanWritesNothing(t *testing.T) {
 	root := t.TempDir()
 	writeRules(t, root, twoRules)
-	r, err := Plan(context.Background(), root, []source.Source{stelemd.New(), newFake()}, ids())
+	r, err := Plan(context.Background(), root, []source.Source{stelemd.New(), newFake()}, nil, ids())
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestPlanApply(t *testing.T) {
 	writeRules(t, root, twoRules)
 	srcs := []source.Source{stelemd.New(), newFake()}
 
-	r, err := Plan(context.Background(), root, srcs, ids())
+	r, err := Plan(context.Background(), root, srcs, nil, ids())
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestPlanApply(t *testing.T) {
 	}
 
 	// Nothing changed, so nothing is rebuilt.
-	again, err := Compile(context.Background(), root, srcs, ids(), testKey)
+	again, err := Compile(context.Background(), root, srcs, nil, ids(), testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestPlanApply(t *testing.T) {
 	}
 	// Plan has no key, so it trusts no index: IndexChanged is always true,
 	// and only LockChanged tells stele check anything.
-	planned, err := Plan(context.Background(), root, srcs, ids())
+	planned, err := Plan(context.Background(), root, srcs, nil, ids())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestRecompileKeepsIDs(t *testing.T) {
 	root := t.TempDir()
 	writeRules(t, root, twoRules)
 	srcs := []source.Source{stelemd.New()}
-	r, err := Plan(context.Background(), root, srcs, ids())
+	r, err := Plan(context.Background(), root, srcs, nil, ids())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestRecompileKeepsIDs(t *testing.T) {
 	// Reword the second rule and add a third.
 	writeRules(t, root, twoRules+"\n---\n\nPrefer table-driven tests.\n")
 	writeRules(t, root, "tags: [db]\n\nNever build SQL by string concatenation.\n\n---\n\nEvery HTTP handler uses the standard middleware.\n\n---\n\nPrefer table-driven tests.\n")
-	next, err := Plan(context.Background(), root, srcs, func() string { return "new" })
+	next, err := Plan(context.Background(), root, srcs, nil, func() string { return "new" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestPlanErrors(t *testing.T) {
 	t.Run("parse error names the line", func(t *testing.T) {
 		root := t.TempDir()
 		writeRules(t, root, "tags: [a]\n")
-		_, err := Plan(context.Background(), root, []source.Source{stelemd.New()}, ids())
+		_, err := Plan(context.Background(), root, []source.Source{stelemd.New()}, nil, ids())
 		var pe *source.ParseError
 		if !errors.As(err, &pe) {
 			t.Fatalf("err = %v, want a *source.ParseError", err)
@@ -238,7 +238,7 @@ func TestPlanErrors(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(root, lock.FileName), []byte(dup), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		_, err := Plan(context.Background(), root, []source.Source{stelemd.New()}, ids())
+		_, err := Plan(context.Background(), root, []source.Source{stelemd.New()}, nil, ids())
 		if !errors.Is(err, lock.ErrDuplicateID) {
 			t.Errorf("err = %v, want ErrDuplicateID", err)
 		}
@@ -250,7 +250,7 @@ func TestEnsureFresh(t *testing.T) {
 	root := t.TempDir()
 	writeRules(t, root, twoRules)
 	org := newFake()
-	r, err := Plan(ctx, root, []source.Source{stelemd.New(), org}, ids())
+	r, err := Plan(ctx, root, []source.Source{stelemd.New(), org}, nil, ids())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestEnsureFresh(t *testing.T) {
 
 	t.Run("unchanged", func(t *testing.T) {
 		md := &counting{Source: stelemd.New()}
-		idx, rebuilt, err := EnsureFresh(ctx, root, []source.Source{md}, ids(), testKey)
+		idx, rebuilt, err := EnsureFresh(ctx, root, []source.Source{md}, nil, ids(), testKey)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -275,7 +275,7 @@ func TestEnsureFresh(t *testing.T) {
 
 	t.Run("edited stele.md keeps external rules", func(t *testing.T) {
 		writeRules(t, root, twoRules+"\n---\n\nPrefer table-driven tests.\n")
-		idx, rebuilt, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, func() string { return "new" }, testKey)
+		idx, rebuilt, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, nil, func() string { return "new" }, testKey)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -308,7 +308,7 @@ func TestEnsureFresh(t *testing.T) {
 		if err := os.Remove(index.Path(root)); err != nil {
 			t.Fatal(err)
 		}
-		idx, rebuilt, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, ids(), testKey)
+		idx, rebuilt, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, nil, ids(), testKey)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -349,7 +349,7 @@ func TestEnsureFreshKeepsExternalIDs(t *testing.T) {
 	writeRules(t, root, twoRules)
 	org := newFake()
 	org.rules[0].ID = "" // an id the lock minted, not one the source supplies
-	if _, err := Compile(ctx, root, []source.Source{stelemd.New(), org}, ids(), testKey); err != nil {
+	if _, err := Compile(ctx, root, []source.Source{stelemd.New(), org}, nil, ids(), testKey); err != nil {
 		t.Fatal(err)
 	}
 	before, err := lock.Load(root)
@@ -361,15 +361,15 @@ func TestEnsureFreshKeepsExternalIDs(t *testing.T) {
 	if err := os.Remove(index.Path(root)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, ids(), testKey); err != nil {
+	if _, _, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, nil, ids(), testKey); err != nil {
 		t.Fatal(err)
 	}
 	writeRules(t, root, twoRules+"\n---\n\nPrefer table-driven tests.\n")
-	if _, _, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, func() string { return "new" }, testKey); err != nil {
+	if _, _, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, nil, func() string { return "new" }, testKey); err != nil {
 		t.Fatal(err)
 	}
 
-	r, err := Compile(ctx, root, []source.Source{stelemd.New(), org}, func() string { return "minted-again" }, testKey)
+	r, err := Compile(ctx, root, []source.Source{stelemd.New(), org}, nil, func() string { return "minted-again" }, testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func TestEnsureFreshConcurrent(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	writeRules(t, root, twoRules)
-	if _, err := Compile(ctx, root, []source.Source{stelemd.New()}, ids(), testKey); err != nil {
+	if _, err := Compile(ctx, root, []source.Source{stelemd.New()}, nil, ids(), testKey); err != nil {
 		t.Fatal(err)
 	}
 	writeRules(t, root, twoRules+"\n---\n\nPrefer table-driven tests.\n")
@@ -396,7 +396,7 @@ func TestEnsureFreshConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, func() string { return fmt.Sprintf("p%d", i) }, testKey)
+			_, _, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, nil, func() string { return fmt.Sprintf("p%d", i) }, testKey)
 			errs <- err
 		}()
 	}
@@ -451,7 +451,7 @@ func TestEnsureFreshIgnoresPlantedIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	idx, rebuilt, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, ids(), testKey)
+	idx, rebuilt, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, nil, ids(), testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
