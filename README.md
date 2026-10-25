@@ -107,7 +107,7 @@ Scope globs:
 
 ## What the agent sees
 
-- **When a session or subagent starts.** Claude Code loads `.claude/rules/stele-rules.md`, every rule with its scope, as it loads `CLAUDE.md`. The agent is also told to create and change files with Write and Edit only, never through Bash: stele sees only those.
+- **When a session or subagent starts.** Claude Code loads `.claude/rules/stele-rules.md`, every rule with its scope, as it loads `CLAUDE.md`. The agent is also told to create and change files with Write and Edit only, never through Bash: stele sees only those. It is told that reading, searching and running commands through Bash is fine.
 - **Before a write.** A rule the agent loaded from `.claude/rules/stele-rules.md` at the start of its session counts as seen until the session ends, as long as the rule hasn't changed since; this needs Claude Code started in the project's root. The first write in a turn to a file with other rules is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent; rules that do not fit in one message (about 9,000 bytes) are shown on the next write. A retry of the denied write goes through; parallel writes in the same message, to other files or to the same one, are denied too, once.
 - **After a write.** A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
