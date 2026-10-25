@@ -142,7 +142,7 @@ gets that wording; a newer one keeps today's.
 
 ### No more `backstop`
 
-`backstop` goes (ADR-0007): the switches replace it.
+`backstop` goes (ADR-0008): the switches replace it.
 
 - `enforce.Policy` loses `Backstop`; `enforce.Load` reads only
   `block_on_error`. Every `Backstop` test goes, in `cmd/stele`
@@ -167,7 +167,7 @@ gets that wording; a newer one keeps today's.
 ## Spec and ADR
 
 ADR-0006, "Switching the write hooks on and off", and D63 in the v1 spec;
-ADR-0007, "No `backstop` key", and D64.
+ADR-0008, "No `backstop` key", and D67.
 Update `docs/architecture.md` (the hook command, `claudecode.Switches`) and
 the README (`stele init`, `stele.json`) with the code.
 
