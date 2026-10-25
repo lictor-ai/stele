@@ -40,10 +40,11 @@ without breaking D38 and without losing the guard.
 
 Both switches are on by default. `init` without a flag keeps the installed
 switches, so an upgrade never turns a hook back on, and it prints them on
-every run. Pre-write off skips the rule deny, for Write, Edit and Bash, and
-priming; the guard and the session guidance stay. Post-write off skips the
-check; the notice about invalid rules stays. The rules file is still written
-(D62). `backstop` keeps its meaning: whether a part that runs may block.
+every run. Pre-write off skips the rule deny, for Write, Edit and Bash; the
+guard, the session guidance and priming stay. Post-write off skips the check
+only: the hook still recompiles after a write, so the index and the rules
+file stay fresh (D62) and the notice about invalid rules is still sent.
+`backstop` keeps its meaning: whether a part that runs may block.
 
 Spec: `docs/superpowers/specs/2026-10-25-hook-switches-design.md` (#71).
 
@@ -60,5 +61,8 @@ Spec: `docs/superpowers/specs/2026-10-25-hook-switches-design.md` (#71).
   README must say which does what.
 * With post-write off, a violation is found only by `stele check`; with both
   off, stele enforces nothing until CI.
-* An older stele run by newer settings ignores the flags and runs both hooks,
-  until `init` is run again with the newer binary.
+* An older stele run by newer settings ignores the flags and runs both hooks.
+  Worse, its `init` takes a flagged handler for one written by hand and adds
+  its own, so the hooks run twice. Released binaries cannot be fixed, so the
+  version warning tells a binary older than the stamp to upgrade, never to
+  run `init`.

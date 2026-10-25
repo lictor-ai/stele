@@ -101,20 +101,37 @@ With pre-write off:
   deny (`backstop.Decide`) is skipped.
 - `PreToolUse` on Bash: a command that writes stele's own files still asks.
   The rule deny (`backstop.DecideBash`) is skipped.
-- `SessionStart` and `SubagentStart` still answer the Write and Edit guidance.
-  Priming is skipped: it only exists to spare a deny.
+- `SessionStart` and `SubagentStart` do exactly what they do today, priming
+  included. `prime` also refreshes the index, rewrites a stale rules file for
+  the next session and records the launch root; and a record of loaded rules
+  costs nothing when no deny reads it, and is right if pre-write is switched
+  back on.
 - The version warning still comes before a write.
 
 With post-write off:
 
-- `PostToolUse` does not check the write. The notice about invalid rules in
-  `stele.md` (`invalidRules`) is still sent: without it, a broken rule would
-  go unnoticed until CI.
+- `PostToolUse` still runs `freshIndex`, then skips only the check. The
+  recompile is what refreshes the index and `.claude/rules/stele-rules.md`
+  after the agent edits `stele.md` (a write to `stele.md` asks before it, so
+  `beforeWrite` never compiles it). `invalidRules` reads that fresh index, and
+  the parse-error note from `freshIndex` ("the last valid rules still apply")
+  is still sent. Without them, a broken rule would go unnoticed until CI.
 
-Delivery does not change: `stele compile`, the recompile and `init` still
-write `.claude/rules/stele-rules.md` (D62). With both switches off, stele
-still delivers the rules and guards its own files; it enforces nothing until
-`stele check`.
+Delivery does not change: `stele compile`, the hook's recompile and `init`
+still write `.claude/rules/stele-rules.md` (D62), whatever the switches. With
+both switches off, stele still delivers the rules, keeps the rules file
+fresh and guards its own files; it enforces nothing until `stele check`.
+
+### An older stele
+
+An older binary's `stamp()` takes exactly three words, so a handler with a
+switch flag looks written by hand to it. Its `init` then keeps that handler
+and adds its own, and the hooks run twice, the older set with both switches
+on; its `uninstall` leaves the flagged handlers. That cannot be changed in
+released binaries. So the version warning must not send an older binary to
+`init`: when the running stele is older than the stamp, the warning says to
+upgrade stele, not to run `stele init`. Only a binary older than the stamp
+gets that wording; a newer one keeps today's.
 
 ### With `backstop`
 
@@ -154,9 +171,12 @@ Unit (`internal/adapter/claudecode`):
   `init` keeps it off; a bad value writes nothing; the state line is printed;
 - pre-write off: a write that needs unseen rules is not denied; a write to
   `stele.md` or `.claude/settings.json` still asks; a Bash write to a scoped
-  file is not denied; `SessionStart` answers the guidance and primes nothing;
-- post-write off: a write with a blocking violation gets no block, and a
-  broken `stele.md` still gets its notice;
+  file is not denied; `SessionStart` answers the guidance and primes as today;
+- post-write off: a write with a blocking violation gets no block; after an
+  edit that breaks `stele.md`, the notice is sent and the index and rules file
+  are refreshed;
+- the version warning tells a binary older than the stamp to upgrade, not to
+  run `init`;
 - both on: today's tests pass unchanged.
 
 Functional (`test/functional`): `install_test.go` for the settings written by
