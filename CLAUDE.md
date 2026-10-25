@@ -23,7 +23,11 @@ Guideline enforcement for coding agents. Go, single binary.
 6. `docs/adr/0006-switching-the-write-hooks.md` — `stele init` switches the
    pre-write deny and the post-write check on and off, as flags on the hook
    command. The spec carries it as D63.
-7. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+7. `docs/adr/0007-publishing-the-rules.md` — `stele publish` sends `stele.md`
+   to a git repository as a merge request; network code only in
+   `internal/publish`, tokens only to github.com and gitlab.com. It amends D53.
+   The spec carries it as D64–D66.
+8. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
@@ -41,4 +45,5 @@ enterprise idea. Do not implement it or use it as a v1 format.
 - Only plugins listed in `stele.json` and found on `PATH` run, never one inside
   the repository (D43).
 - Nothing leaves the machine except through a sink listed in `stele.json`, and
-  only from `stele push` or `stele check --push` (D53).
+  only from `stele push` or `stele check --push` (D53), or from `stele publish`
+  to the `repo` in `stele.json` (D66).
