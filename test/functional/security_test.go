@@ -67,14 +67,12 @@ func TestNothingInTheRepositoryRuns(t *testing.T) {
 	plugin := buildMarker(t, marker)
 
 	// Plant the marker under every name a plugin or git lookup could use,
-	// inside the repository and in a directory on PATH.
-	onPath := t.TempDir()
+	// inside the repository. A plugin listed in stele.json and found on PATH
+	// may run from stele check (D43), so PATH gets its own case below, for
+	// the hook only.
 	names := []string{"stele-evil", "evil", "stele-plugin-evil", "git"}
 	for _, n := range names {
-		for _, dir := range []string{p.dir, p.path(".stele/bin"), p.path("bin"), onPath} {
-			if n == "git" && dir == onPath {
-				continue
-			}
+		for _, dir := range []string{p.dir, p.path(".stele/bin"), p.path("bin")} {
 			copyFile(t, plugin, filepath.Join(dir, n+exe()))
 		}
 	}
@@ -85,7 +83,7 @@ func TestNothingInTheRepositoryRuns(t *testing.T) {
 	}
 	p.write("stele.json", `{"plugins": [{"name": "evil", "kind": "checker", "command": "./evil"}], "checkers": {"evil": "./bin/evil"}}`)
 	p.write("stele.md", goRules+"\n---\ncheck: evil\n\nAn evil checker.\n")
-	p.env = append(p.env, "PATH="+onPath+string(os.PathListSeparator)+os.Getenv("PATH"), "STELE_FT_MARKER="+marker)
+	p.env = append(p.env, "STELE_FT_MARKER="+marker)
 	p.git("add", "stele.md")
 
 	p.stele("compile")
@@ -94,7 +92,21 @@ func TestNothingInTheRepositoryRuns(t *testing.T) {
 	p.stele("check")
 	if _, err := os.Stat(marker); err == nil {
 		data, _ := os.ReadFile(marker)
-		t.Fatalf("stele executed a program from the repository or a plugin: %s", data)
+		t.Fatalf("stele executed a program from the repository: %s", data)
+	}
+
+	// The hook never runs an external plugin, even one listed and on PATH
+	// (D45).
+	onPath := t.TempDir()
+	for _, n := range []string{"stele-evil", "evil", "stele-plugin-evil", "stele-checker-evil"} {
+		copyFile(t, plugin, filepath.Join(onPath, n+exe()))
+	}
+	p.env = append(p.env, "PATH="+onPath+string(os.PathListSeparator)+os.Getenv("PATH"))
+	e := event{Prompt: "t2", File: "b.go", Content: "package a\n"}
+	p.agentWrite(e)
+	if _, err := os.Stat(marker); err == nil {
+		data, _ := os.ReadFile(marker)
+		t.Fatalf("stele hook executed a plugin found on PATH: %s", data)
 	}
 }
 

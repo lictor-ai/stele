@@ -4,9 +4,9 @@
 // stele's packages, so these tests hold whatever the code inside looks like.
 //
 // Measurements (hook latency, bytes and estimated tokens the hook adds to
-// the conversation) are written to results/functional.json and printed with
-// -v. The agent A/B eval, which measures real tokens and time with a model,
-// is in agent/.
+// the conversation) are printed with -v, and saved as JSON to the file named
+// by STELE_FT_MEASURE when it is set. The agent A/B eval, which measures real
+// tokens and time with a model, is in agent/.
 package functional
 
 import (
@@ -126,6 +126,8 @@ func (p *project) git(args ...string) string {
 	p.t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = p.dir
+	// The developer's git config (signing, hooks, templates) stays out.
+	cmd.Env = append(p.env, "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		p.t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -412,7 +414,7 @@ func (p *project) hash(rels ...string) map[string]string {
 	return m
 }
 
-// measurements collects what the tests measure, for results/functional.json.
+// measurements collects what the tests measure, for STELE_FT_MEASURE.
 var measurements = struct {
 	sync.Mutex
 	m map[string]any
@@ -438,8 +440,10 @@ func writeMeasurements() {
 	if err != nil {
 		return
 	}
-	os.MkdirAll("results", 0o755)
-	os.WriteFile(filepath.Join("results", "functional.json"), append(data, '\n'), 0o644)
+	// Only on request: a test run must leave the source tree as it found it.
+	if out := os.Getenv("STELE_FT_MEASURE"); out != "" {
+		os.WriteFile(out, append(data, '\n'), 0o644)
+	}
 }
 
 // tokens estimates the tokens a text costs the model. Close enough to

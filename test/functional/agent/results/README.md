@@ -18,7 +18,7 @@ regraded. Tokens are input + cache writes + cache reads + output, means per run.
 | `6-probes-8x` | `v1.0.0-dev.2` | Haiku / Sonnet | yes | the two probes where claudemd slipped, claudemd and stele × 8 |
 | `7-haiku-read-fix` | dev.2 + session text fix (branch `session-text-bash-reads`) | Haiku 5.5 | yes | stele only, `probe-local-style` × 8; claudemd reused from 6 |
 | `smoke` | | | | single runs that checked the harness |
-| `invalid` | | | | a run cut short by a full disk, and one stopped by hand. Do not use. |
+| `invalid` | | | | not committed: a run cut short by a full disk, and one stopped by hand |
 | `analysis` | | | | why stele lost to CLAUDE.md in 1 and 2 |
 
 ## 1 and 2: stele before dev.2 lost to CLAUDE.md

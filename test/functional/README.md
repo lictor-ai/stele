@@ -20,6 +20,6 @@ go test ./test/functional/ -short           # skips the 2000-file check
 | `perf_test.go` | hook latency cold and warm for 3, 50 and 500 rules; recompile in the hook; post-write on 10 KiB to 16 MiB; bytes and estimated tokens the hook injects |
 
 A line starting `FINDING` in `-v` output is behaviour worth knowing that the spec
-does not forbid. Measurements are written to `results/functional.json`.
+does not forbid. Set `STELE_FT_MEASURE` to a file path to save the measurements there as JSON; `results/` keeps one such file per stele measured.
 
 The agent A/B eval, with a real model, is in [agent/](agent/).

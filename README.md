@@ -185,7 +185,7 @@ Optional, committed next to `stele.md`. These are the defaults:
 [test/functional/](test/functional/) holds two kinds of tests:
 
 - **Black-box tests** of the binary: 50 tests of init, compile, check and the hook, built and run with `go test ./test/functional/`.
-- **An agent eval** that gives headless Claude Code the same coding tasks in three setups and grades every run the same way:
+- **An agent eval** that gives headless Claude Code the same coding tasks in three setups by default and grades every run the same way:
   - no rules;
   - the rules pasted into `CLAUDE.md`;
   - stele.
@@ -200,7 +200,7 @@ Every experiment, with its numbers, is in [test/functional/agent/results/](test/
 
 - **The 9 tasks** range from adding one function to building a small HTTP service. The large ones run under a 74-rule `stele.md`.
 - **The task that pulls against a rule** asks for a test of an HTTP client. The rules forbid a real test server. With the rules in `CLAUDE.md`, the agent used one anyway in 3 of 8 runs. stele flagged each use right after the write, and the agent fixed it.
-- **The hook adds tens of milliseconds per write** on Windows, more with hundreds of rules. [test/functional/results/functional.json](test/functional/results/functional.json) has the measured times.
+- **The hook adds about 0.1 s per write** on Windows: Claude Code runs it before and after every write. With 500 rules it adds up to 0.17 s. The measured times are in [test/functional/results/](test/functional/results/), one file per stele measured.
 
 ## Limits
 

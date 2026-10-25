@@ -45,7 +45,7 @@ type Result struct {
 	RulesTouched bool `json:"rules_touched"` // the agent changed stele.md, CLAUDE.md or .claude/
 
 	Grade
-	Dir string `json:"dir"`
+	Dir string `json:"-"` // the run's temporary tree: local, never saved
 	// Baseline names the results file a run was loaded from, when it was
 	// not run now (-baseline).
 	Baseline string `json:"baseline,omitempty"`
@@ -416,7 +416,7 @@ func writesFile(cmd string) bool {
 
 // rulesTouched reports whether the agent changed the rules or their setup.
 func rulesTouched(repo string, env []string) bool {
-	out, _ := run(repo, env, "git", "status", "--porcelain", "--", "stele.md", "**/stele.md", "CLAUDE.md", "**/CLAUDE.md", ".claude", "stele.json")
+	out, _ := run(repo, env, "git", "status", "--porcelain", "--", "stele.md", "**/stele.md", "CLAUDE.md", "**/CLAUDE.md", ".claude", "stele.json", ":(exclude).claude/rules/stele-rules.md")
 	return strings.TrimSpace(out) != ""
 }
 
