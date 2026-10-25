@@ -24,7 +24,9 @@ Guideline enforcement for coding agents. Go, single binary.
    pre-write deny and the post-write check on and off, as flags on the hook
    command. The spec carries it as D63, which renames the flags `--remind`
    and `--check`.
-7. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+7. `docs/adr/0007-no-backstop-key.md` — `backstop` is removed from `stele.json`;
+   `--remind` and `--check` replace it. The spec carries it as D64.
+8. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
