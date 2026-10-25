@@ -37,6 +37,15 @@ const RetryAfter = 500 * time.Millisecond
 type Rule struct {
 	ID   string
 	Text string // what the agent is shown
+	// Hash is the hash of the rule's block in the rules file Claude Code
+	// loads at launch (#68); "" when it can never count as loaded.
+	Hash string
+}
+
+// loaded reports whether agent loaded r, as it reads now, from the rules
+// file: then it is in the agent's context for the whole session.
+func loaded(st session.State, agent string, r Rule) bool {
+	return r.Hash != "" && st.Primed[agent][r.ID] == r.Hash
 }
 
 // Input is what the hook knows about one write.
@@ -78,6 +87,8 @@ func Decide(in Input, st session.State, p enforce.Policy) (Decision, session.Sta
 	for _, r := range in.Rules {
 		at, seen := shown[r.ID]
 		switch {
+		case loaded(st, in.AgentID, r):
+			// loaded at the session's start, unchanged since
 		case !seen:
 			show = append(show, r)
 			fresh = append(fresh, r.ID)
