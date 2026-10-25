@@ -22,11 +22,12 @@ Guideline enforcement for coding agents. Go, single binary.
    carries it as D62.
 6. `docs/adr/0006-switching-the-write-hooks.md` — `stele init` switches the
    pre-write deny and the post-write check on and off, as flags on the hook
-   command. The spec carries it as D63.
+   command. The spec carries it as D63, which renames the flags `--remind`
+   and `--check`.
 7. `docs/adr/0007-publishing-the-rules.md` — `stele publish` sends `stele.md`
    to a git repository as a merge request; network code only in
-   `internal/publish`, tokens only to github.com and gitlab.com. It amends D53 and D40.
-   The spec carries it as D64–D66.
+   `internal/publish`, tokens only to github.com and gitlab.com. It amends D53
+   and D40. The spec carries it as D64–D66.
 8. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
