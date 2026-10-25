@@ -39,6 +39,9 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 		return exitCantRun
 	}
 	printCompile(stdout, r)
+	for _, n := range generatedNotes(r.Files) {
+		fmt.Fprintf(stderr, "stele compile: %s\n", n)
+	}
 	ps := check.Validate(r.Index, plugin.BuiltinCheckers())
 	if len(ps) == 0 {
 		return exitOK

@@ -83,10 +83,16 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		}
 		// A stale rules file would deliver old rules to every session.
 		for _, f := range r.Files {
-			if f.Changed {
+			switch {
+			case f.Foreign:
+				return ruleFileProblem(root, *format, notStele(f.Path), stdout, stderr)
+			case f.Changed:
 				return ruleFileProblem(root, *format, fmt.Sprintf("%s is out of date with the rules: run stele compile and commit %s",
 					f.Path, f.Path), stdout, stderr)
 			}
+		}
+		for _, n := range generatedNotes(r.Files) {
+			fmt.Fprintf(stderr, "stele check: %s\n", n)
 		}
 	}
 

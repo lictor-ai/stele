@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"unicode/utf8"
+
 	"github.com/lictor-ai/stele/internal/adapter/claudecode"
 	"github.com/lictor-ai/stele/internal/compile"
 	"github.com/lictor-ai/stele/internal/index"
@@ -8,7 +11,10 @@ import (
 
 // generated is what compile writes besides stele.lock and the index: the
 // rules file Claude Code loads at launch, so the agent has the rules before
-// its first write (#68). Every root gets its own, holding its own rules.
+// its first write (#68). Every root gets its own, holding its own rules. A
+// file there without stele's header is the user's, never overwritten, and
+// the file is up to date when it gives the same rules, whatever the intro's
+// words: so a stele of another version does not rewrite a committed file.
 func generated() []compile.Generated {
 	return []compile.Generated{{
 		Path: claudecode.RulesFile,
@@ -19,10 +25,36 @@ func generated() []compile.Generated {
 			}
 			return claudecode.RenderRules(rules)
 		},
+		Owned: claudecode.OwnedRules,
+		Same:  claudecode.SameRules,
 	}}
 }
 
 // ccRule is an index entry as the rules file shows it.
 func ccRule(e index.Entry) claudecode.Rule {
 	return claudecode.Rule{ID: e.ID, Scope: e.Scope, Body: e.Body}
+}
+
+// notStele is the message for a generated file's path holding a file stele
+// did not write.
+func notStele(path string) string {
+	return fmt.Sprintf("%s is not stele's: rename it, then run stele compile", path)
+}
+
+// generatedNotes says what the user should know about the generated files:
+// one that is not stele's, and one large enough to cost context in every
+// session.
+func generatedNotes(files []compile.File) []string {
+	var notes []string
+	for _, f := range files {
+		if f.Foreign {
+			notes = append(notes, notStele(f.Path))
+			continue
+		}
+		if n := utf8.RuneCount(f.Data); n > claudecode.MaxRulesChars {
+			notes = append(notes, fmt.Sprintf("%s is %d characters: every session loads it whole, so its rules cost context on every turn; keep stele.md short",
+				f.Path, n))
+		}
+	}
+	return notes
 }

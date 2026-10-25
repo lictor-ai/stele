@@ -52,10 +52,11 @@ func initCompile(root string) (changes, notes []string) {
 		changes = append(changes, "wrote "+lock.FileName)
 	}
 	for _, f := range r.Files {
-		if f.Changed && ge == nil {
+		if f.Changed && !f.Foreign && ge == nil {
 			changes = append(changes, "wrote "+f.Path)
 		}
 	}
+	notes = generatedNotes(r.Files)
 	if ge != nil {
 		notes = append(notes, fmt.Sprintf("%v: %s", ge, later))
 	}

@@ -173,11 +173,17 @@ func Uninstall(root string) (changes, notes []string, err error) {
 		changes = append(changes, "removed stele hooks from "+claudecode.SettingsFile)
 	}
 
-	// The rules file is stele's, a link a clone committed there too: only
-	// the file or the link goes, never what a link points to.
+	// The rules file goes when stele wrote it, by its header, and so does a
+	// link a clone committed there: only the link, never what it points to.
+	// A file without the header is the user's.
 	if info, err := os.Lstat(rulesFile); err == nil {
-		if info.IsDir() {
-			notes = append(notes, claudecode.RulesFile+" is a directory stele did not make: left it")
+		ours := info.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0
+		if info.Mode().IsRegular() {
+			data, err := safefile.ReadRegular(rulesFile, claudecode.MaxRulesFile)
+			ours = err == nil && claudecode.OwnedRules(data)
+		}
+		if !ours {
+			notes = append(notes, claudecode.RulesFile+" is not stele's: left it")
 		} else if err := os.Remove(rulesFile); err != nil {
 			return changes, notes, err
 		} else {
