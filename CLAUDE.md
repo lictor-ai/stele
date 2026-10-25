@@ -20,7 +20,10 @@ Guideline enforcement for coding agents. Go, single binary.
    through a generated `.claude/rules/stele-rules.md` that Claude Code loads at
    launch, and the deny shows only rules a session has not loaded. The spec
    carries it as D62.
-6. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+6. `docs/adr/0006-switching-the-write-hooks.md` — `stele init` switches the
+   pre-write deny and the post-write check on and off, as flags on the hook
+   command. The spec carries it as D63.
+7. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
