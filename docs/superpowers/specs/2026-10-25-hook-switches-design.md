@@ -31,11 +31,18 @@ nothing turns the post-write check off.
 
 ## What changes
 
-1. `stele init` takes two flags, `--pre-write` and `--post-write`, each `on` or
-   `off`.
+1. `stele init` takes two flags, each `on` or `off`:
+   - `--remind`: before a write, deny it to show the rules the agent has not
+     seen (the pre-write deny).
+   - `--check`: after a write, check the lines written against the rules
+     (the post-write check).
+
+   ADR-0006 called them `--pre-write` and `--post-write`; they were renamed
+   before any code, because those names say when a hook runs, not what it
+   does.
 2. A switch that is off is written as a flag on the `stele hook` command in
    `.claude/settings.json`, on every stele handler:
-   `stele hook --installed=v1.0.0 --pre-write=off`. A switch that is on is not
+   `stele hook --installed=v1.0.0 --remind=off`. A switch that is on is not
    written, so the settings of a project that uses the defaults do not change.
 3. The hook reads the switches from its own arguments and skips the part that
    is off.
@@ -62,14 +69,14 @@ entry, so a missing entry cannot mean "off".
 
 ```
 stele init                      # keeps what is installed; both on in a new project
-stele init --pre-write=off
-stele init --post-write=off --pre-write=on
+stele init --remind=off
+stele init --check=off --remind=on
 ```
 
 - A flag that is not given keeps the switch as the installed handlers have
   it. So running `init` again, to upgrade, never switches a hook back on.
 - A value other than `on` or `off` is a usage error; nothing is written.
-- Every run, changed or not, prints one line: `hooks: pre-write on, post-write
+- Every run, changed or not, prints one line: `hooks: remind on, check
   off`.
 - A change of switches only rewrites the handlers, with the same version stamp
   rules as today (a build from a commit never replaces a release's stamp).
@@ -79,7 +86,7 @@ stele init --post-write=off --pre-write=on
 
 - `Switches` holds the two switches; `Switches{}` with both on is the default.
 - `command(version, sw)` writes `stele hook --installed=<version>` then
-  `--pre-write=off` and/or `--post-write=off`, in that order.
+  `--remind=off` and/or `--check=off`, in that order.
 - `handler.stamp()` accepts the version word followed by those flags, and
   nothing else, and also returns the switches. A handler with any other word
   is still "written by hand".
@@ -93,7 +100,7 @@ stele init --post-write=off --pre-write=on
 
 ### The hook
 
-With pre-write off:
+With `--remind=off` (no deny to show the rules):
 
 - `PreToolUse` on Write, Edit and MultiEdit: the guard for stele's own files
   and for the settings still asks (`guarded`, `loadsSettings`), and a write
@@ -104,11 +111,11 @@ With pre-write off:
 - `SessionStart` and `SubagentStart` do exactly what they do today, priming
   included. `prime` also refreshes the index, rewrites a stale rules file for
   the next session and records the launch root; and a record of loaded rules
-  costs nothing when no deny reads it, and is right if pre-write is switched
+  costs nothing when no deny reads it, and is right if `--remind` is switched
   back on.
 - The version warning still comes before a write.
 
-With post-write off:
+With `--check=off` (no check after a write):
 
 - `PostToolUse` still runs `freshIndex`, then skips only the check. The
   recompile is what refreshes the index and `.claude/rules/stele-rules.md`
@@ -136,10 +143,10 @@ gets that wording; a newer one keeps today's.
 ### With `backstop`
 
 `backstop` stays as it is: the switches decide which parts run, `backstop`
-whether a part that runs may block. So the deny runs only when pre-write is on
+whether a part that runs may block. So the deny runs only when `--remind` is on
 and `backstop` is true, and a violation after a write blocks only when
-post-write is on and `backstop` is true. The README says that
-`--pre-write=off` is the way to stop the deny, and that `backstop: false` also
+`--check` is on and `backstop` is true. The README says that
+`--remind=off` is the way to stop the deny, and that `backstop: false` also
 turns the post-write block into context.
 
 ## Rules this must keep
@@ -167,12 +174,12 @@ Unit (`internal/adapter/claudecode`):
 
 `cmd/stele`:
 
-- `init` with no flag keeps the installed switches; `--pre-write=off` then
+- `init` with no flag keeps the installed switches; `--remind=off` then
   `init` keeps it off; a bad value writes nothing; the state line is printed;
-- pre-write off: a write that needs unseen rules is not denied; a write to
+- `--remind=off`: a write that needs unseen rules is not denied; a write to
   `stele.md` or `.claude/settings.json` still asks; a Bash write to a scoped
   file is not denied; `SessionStart` answers the guidance and primes as today;
-- post-write off: a write with a blocking violation gets no block; after an
+- `--check=off`: a write with a blocking violation gets no block; after an
   edit that breaks `stele.md`, the notice is sent and the index and rules file
   are refreshed;
 - the version warning tells a binary older than the stamp to upgrade, not to
