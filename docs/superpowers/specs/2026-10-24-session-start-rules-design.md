@@ -1,6 +1,6 @@
 # Rules at session start
 
-Status: proposed, not built. Date: 2026-10-24.
+Status: proposed, not built. Date: 2026-10-24, revised 2026-10-25.
 
 ## Why
 
@@ -20,220 +20,218 @@ whole batch again: stele runs write 11.3 files, CLAUDE.md runs 6.3. Every extra
 turn reads the whole cached context again.
 
 Rules that are already in the context cost nothing per turn. So stele should
-send the rules once, when the session starts, and deny a write only for rules
-the agent has not been sent.
+put the rules where Claude Code loads them at session start, as it loads
+CLAUDE.md, and deny a write only for rules the agent has not loaded.
+
+## Why not a SessionStart hook's context
+
+The first version of this spec sent the rules as a `SessionStart` hook's
+`additionalContext`. Claude Code caps every hook string at 10,000 characters,
+with no setting to raise it; past that, Claude gets a file path and a
+2,000-character preview. The eval's `stele.md` is 15.9 KB, so about half the
+rules would not have fit.
+
+A rules file under `.claude/rules/` has no such cap when it loads at launch.
+
+## What Claude Code does, measured
+
+Tested on 2026-10-25 with Claude Code 2.1.310 and haiku, in a scratch repo,
+each result read from the session transcript. Rerun these before building if
+Claude Code has moved on.
+
+| case | result |
+|---|---|
+| `.claude/rules/x.md` with no `paths:` | Loads at launch (`instructions` attachment), before the first prompt. A 16.9 KB file loaded whole, and the first write followed it. |
+| the same file with `paths:` matching the written file | Loads only after the first matching Write (`nested_memory`); Claude then fixed the file with an Edit. Never loads for a Bash write. Not useful here. |
+| the file changes during a turn | Not seen: the turn keeps the version it loaded. |
+| the file changes between two turns of one process | Not seen. |
+| the session is resumed (`--resume`, a new process) | Loaded again, the new version is followed. |
+| a subagent | Loads the file in its own context and follows it, though its prompt said nothing about the rule. |
+| `/compact` | Loaded again from disk: after compaction the new version is followed. |
+| a `SessionStart` hook rewrites the file | Too late: the session had already read the old version. |
+
+So: a session follows the version of the file it read at its start, its
+resume, or its last compaction. stele can't refresh the file in time for that
+session, but it can record which version the session read.
 
 ## What changes
 
-1. A new `SessionStart` hook. `stele init` installs it next to `PreToolUse`
-   and `PostToolUse`. It answers with the project's rules as
-   `additionalContext`.
-2. The session state remembers which rules were sent at session start. Those
-   rules count as seen by the main agent for the whole session, not only for
-   the current turn.
-3. `backstop.Decide` treats a rule sent at session start as already shown. A
-   write needing only such rules is not denied.
-4. Nothing else changes: the post-write check and the deny for rules that were
-   not sent stay as they are.
-
-## Facts about Claude Code this relies on
-
-Check each one against the Claude Code hooks documentation before you build. If
-one is wrong, stop and report back.
-
-- `SessionStart` fires when a session starts, and again on `resume`, `clear`,
-  `compact` and `fork`. Its payload carries `session_id`, `transcript_path`,
-  `cwd`, `hook_event_name` and `source` (one of those five). There is no
-  `prompt_id`, `agent_id` or file.
-- `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"…"}}`
-  puts the text in Claude's context. `claudecode.Render` already writes this
-  shape for any event that has a `Context`.
-- `SessionStart` does not fire for a subagent. A subagent has its own context
-  and does not see the main agent's session-start text.
-- **The size limit.** Claude Code passes any hook's `additionalContext` in full
-  only up to 10,000 characters. Past that, Claude gets a file path and a
-  2,000-character preview (`install.MaxMessage`, `internal/install/assets.go:55`).
-  The test's `stele.md` is 15.9 KB, so the 74 rules do not all fit. See
-  "Budget" below.
+1. `stele compile`, and the hook's recompile (`compile.EnsureFresh`), write
+   `.claude/rules/stele-rules.md`: every rule of the root's `stele.md`, with
+   its scope, and no `paths:` frontmatter. It is committed with `stele.md`
+   and `stele.lock`.
+2. At `SessionStart` (every `source`) and `SubagentStart`, the hook reads that
+   file as it is on disk, which is what the session or subagent just loaded,
+   and records its rules in the session state as primed.
+3. `backstop.Decide` and `backstop.DecideBash` treat a primed rule as already
+   shown, for the whole session, if its text has not changed since. A write
+   needing only such rules is not denied.
+4. Nothing else changes: the post-write check, and the deny for rules that are
+   not primed, stay as they are.
 
 ## Design
 
-### The hook event
+### The generated file
 
-In `cmd/stele/hook.go`, `runHook` returns early when `ev.File == ""`, and sets
-up its `recover` only after that return. Move the `File` check into the
-write cases of the switch, below the `defer`, and add:
+Name: `.claude/rules/stele-rules.md`. Not `stele.md`: `findRoot` treats any
+directory holding a `stele.md` as a project root, so `.claude/rules/stele.md`
+would make `.claude/rules/` a subproject with no rules.
 
-```go
-case ev.Name == "SessionStart":
-    a = sessionStart(ev)
+Content, rendered from a new asset `internal/install/assets/rules-file.tmpl`:
+
+```
+<!-- Generated by stele from stele.md. Do not edit: run stele compile. -->
+This project has rules, enforced by stele. Follow them in every change.
+A rule with a scope applies only to the files it lists; one without applies to every file.
+{{range .Rules}}
+<!-- stele rule {{.ID}} -->
+{{if .Scope}}scope: {{.Scope}}
+{{end}}{{.Text}}
+{{end}}
 ```
 
-so a panic in `sessionStart` is recovered like any other.
+- One block per rule, in index order. A block is everything from its
+  `<!-- stele rule ID -->` line to the next one, or to the end of the file.
+- Check whether `Entry.Body` already holds the scope; if it does, don't print
+  it twice.
+- Only the root's own rules. A subproject's rules are not in it: Claude Code
+  loads a subdirectory's `.claude/rules/` only on demand, after a write. A
+  subproject keeps today's deny.
+- Claude Code may strip the HTML comments before Claude sees them, as it does
+  for CLAUDE.md. That doesn't matter: stele reads the ids itself.
+- No size cap: a file that loads at launch isn't truncated. A very long
+  `stele.md` still costs context on every turn, as a long CLAUDE.md does.
 
-`claudecode.Parse` must keep `cwd` and `source` for this event: add a
-`Source string` field to `Event`, and fill `Cwd` if `Event` does not carry it
-yet.
+Who writes it:
 
-`sessionStart(ev)`:
+- `compile.Apply` writes it with the lock and the index, through `safefile`,
+  only when its bytes change. The writer lives in the Claude Code adapter
+  (`internal/adapter/claudecode`), because the file is Claude Code's format;
+  `compile` gets it as a callback, so `internal/compile` stays agent-agnostic.
+- `stele init` writes it; `stele uninstall` removes it, and `.claude/rules/`
+  if that leaves it empty.
+- It is one of stele's own files: add it to `ownNames` in `cmd/stele/guard.go`,
+  so an agent's write to it asks the user (#61).
+- `stele check` treats it like `stele.lock`: if it doesn't match the rules,
+  that is exit 1, "run stele compile and commit .claude/rules/stele-rules.md".
+  A stale file in a branch would prime nothing wrong (see below), but it
+  would deliver old rules to every session.
 
-1. Find the root with `findRoot(ev.Cwd)` and stop with no answer when
-   `!usesStele(root)`. Only the project at `cwd` gets primed. A subproject with
-   its own `stele.md` keeps the deny for its rules.
-2. Run `enforce.Load`, `loadKey` and `freshIndex`, the same way `beforeWrite`
-   does. On an error, prime nothing and answer only a `Warning` of your own:
-   do not use `failure(...)`. With `block_on_error` on, `failure` returns a
-   deny and no warning, and a deny means nothing at session start.
-3. Choose rules within the budget (below) and render them with a new template,
-   `internal/install/assets/session-rules.tmpl`.
-4. Write the answer, `claudecode.Answer{Context: text}`, to stdout.
-5. Only when that write succeeded, replace `st.Primed` with the chosen rules
-   inside `session.Update`. This is the reverse of `beforeWrite`'s order, for
-   the same reason. A rule that is answered but not recorded would be denied
-   again later, which costs turns but is safe. A rule that is recorded but
-   not answered would never be shown, which is unsafe. If the update fails,
-   leave the answer as it is: the deny still covers those rules.
+D38 holds: stele writes neither `stele.md` nor `stele.json`, nor `CLAUDE.md`.
 
-Prime whatever the `backstop` policy is. Sending rules is delivery, not
-enforcement, so `backstop: false` still gets them.
-
-### Session state
+### Recording what was loaded
 
 Add one field to `session.State`:
 
 ```go
-// Primed records the rules sent to the main agent at session start: rule
-// id to a hash of the text it was sent. They stay in its context for the
-// whole session, so the turn reset does not clear them. A rule whose text
-// changed since is not primed.
-Primed map[string]string `json:"primed,omitempty"`
+// Primed records, per agent ("" for the main agent), the rules in
+// .claude/rules/stele-rules.md as that agent loaded it: rule id to a hash
+// of the block's text. Claude Code loads the file at session start, resume
+// and compaction, and when a subagent starts, and keeps it for the session,
+// so the turn reset does not clear it.
+Primed map[string]map[string]string `json:"primed,omitempty"`
 ```
 
-The hash is of what the agent read: the rule's rendered block (its scope and
-body). `Entry.BodyHash` is not enough: it covers the body only, so a widened
-`scope` would keep its old hash, and the deny would be skipped on files the
-agent was never told the rule covers. `backstop.Rule.Hash` (below) must be
-computed the same way, from the same entry.
+At `SessionStart` (extend `sessionStart` in `cmd/stele/hook_session.go`):
 
-- Do not reset `Primed` when `PromptID` changes. It lasts for the session.
-- Every `SessionStart` replaces it, whatever the `source`. After `compact` or
-  `clear`, the earlier text may be gone from the context, so the new answer is
-  the only thing that counts.
-- If `stele.md` changes during the session, an edited rule (body or scope) no
-  longer matches and is denied as usual. A new rule is not in `Primed`
-  and is denied as usual too.
+1. Find the root from `ev.Cwd` as today; outside a stele project, do nothing.
+2. Read `.claude/rules/stele-rules.md` under the root (`safefile.ReadRegular`,
+   bounded). Split it into blocks by the `<!-- stele rule ID -->` lines, and
+   hash each block's own text. Hash what is in the file, not a hash written
+   in it: a hand-edited block then fails to match the index and is not
+   primed.
+3. Inside `session.Update`, replace `st.Primed[""]` with those ids and hashes.
+   Every `SessionStart` replaces it, whatever the `source`: after `compact`
+   or `clear`, the file was read again.
+4. Then, if the file is stale or missing, run the recompile, which rewrites
+   it for the next session. Never the other way round: the session has
+   already read the file, so recording after a rewrite would prime rules the
+   session never saw.
+5. Answer the existing Write/Edit guidance (`install.SessionContext()`), as
+   today.
 
-### backstop.Decide
+At `SubagentStart` do the same for `st.Primed[ev.AgentID]`; the payload
+carries `agent_id`. This needs `Parse` to keep `agent_id` for that event
+(it already does for tool events).
 
-Add the text hash to `backstop.Rule` (`Hash string`). In `Decide`, for the main
-agent only (`in.AgentID == ""`), skip a rule when
-`st.Primed[r.ID] == r.Hash`. A subagent ignores `Primed`.
+Errors (no key, unreadable file, state not saved): prime nothing and say
+nothing more. The deny still covers every rule. Don't use `failure(...)`: a
+deny means nothing at session start.
 
-Keep the change inside `Decide`, so it stays a table test. New cases:
+Prime whatever the `backstop` policy is. Loading rules is delivery, not
+enforcement.
 
-- a primed rule with a matching hash: no deny;
-- a primed rule whose hash changed: deny;
-- a primed rule in a subagent: deny;
-- a primed rule after a new `PromptID`: still no deny;
-- some rules primed and some not: deny with only the ones not primed.
+The small race: Claude Code reads the file, then the hook reads it. Only
+stele rewrites it, from a hook or `stele compile`; if that happens in
+between, the session primes the newer text it didn't load, for rules that
+changed in those milliseconds. Accept it.
 
-### Budget
+### backstop
 
-The text must stay within `install.MaxMessage` (9,000 bytes) unless the size
-check above shows that `SessionStart` allows more.
+The hash for a rule in the index must be computed the same way as the hash of
+its block in the file: render the rule's block with the same template code,
+then hash it. Add `Hash string` to `backstop.Rule`; the hook fills it from the
+index entry it already turns into a `Rule`.
 
-Choose the rules in this order, and stop adding at the first one that does not
-fit:
+In `Decide`, and in `DecideBash`, a rule counts as seen by an agent when
+`st.Primed[agent][r.ID] == r.Hash`, before any `Shown` or window test. So:
 
-1. blocking rules, in index order: rules with a `check` and without
-   `blocking: false` (`internal/check/check.go:284-296`);
-2. then every other rule, in index order: checked rules with
-   `blocking: false`, and guidance-only rules (no `check`).
+- a primed rule with a matching hash: not shown, no deny;
+- a primed rule whose text or scope changed since the agent loaded the file:
+  hash differs, so shown and denied as today;
+- a rule added since: not in `Primed`, so shown and denied as today;
+- a new turn (`newTurn`): `Primed` is kept;
+- a subagent: its own `Primed[agent_id]`.
 
-Rules that do not fit are not primed, and the deny shows them when the agent
-first writes a file they apply to. That is today's behaviour, applied only to
-the rules that did not fit.
-
-End the text with one line saying how many rules were left out, so the agent
-knows more exist: "N more rules are shown when you write a file they apply to."
-
-### The template
-
-`session-rules.tmpl`, in the same style as `block-message.tmpl`:
-
-```
-This project has rules, enforced by stele. Follow them in every change.
-A rule with a scope applies only to the files it lists; one without applies to every file.
-{{- if .Note}}
-
-Note: {{.Note}}
-{{- end}}
-{{range .Rules}}
----
-{{if .Scope}}scope: {{.Scope}}
-{{end}}{{.Text}}
-{{end -}}
-{{- if .Left}}
-
-{{.Left}} more rules are shown when you write a file they apply to.
-{{- end}}
-```
-
-Check first whether `Entry.Body` already contains the scope. If it does, do not
-print it twice.
-
-The CLAUDE.md arm's header won with similar wording
-(`test/functional/agent/run.go:146`).
+Keep the change inside the two `Decide` functions, so both stay table tests.
 
 ### Install
 
-In `internal/adapter/claudecode/settings.go`:
-
-- add `"SessionStart"` to `events`;
-- the matcher is per event: `Write|Edit|MultiEdit` for the two tool events,
-  and none for `SessionStart`, so every source (including `fork`) is primed;
-- `Install`'s check, one stamped handler per event, already makes `stele init`
-  add the missing `SessionStart` group to an existing install. Add a test for
-  that upgrade.
-
-Update the message at `internal/install/install.go:126`, and every test that
-expects `(PreToolUse, PostToolUse)`.
+The settings change nothing: `SessionStart` and `SubagentStart` are already
+registered with no matcher (#62). `stele init` gains one change line,
+"wrote .claude/rules/stele-rules.md", and `stele uninstall` one removal line.
 
 ## Rules this must keep
 
-- D38: write nothing to `stele.md` or `stele.json`. Do not write `CLAUDE.md`
-  either; it belongs to the user.
-- D40: read rules only from `index.json`, through `freshIndex`.
-- D45: no external plugin runs. `compile.EnsureFresh` with `plugin.Builtins()`
-  is the existing path; keep it.
-- The hook always exits 0 and never panics out (`runHook`'s recover covers the
-  new case).
+- D38: write nothing to `stele.md`, `stele.json` or `CLAUDE.md`.
+- D40: read rules only from the index. The generated file is written from the
+  index; when the hook reads it back, it reads ids and text to compare, never
+  rules to enforce.
+- D45: no external plugin runs in the hook.
+- The hook always exits 0 and never panics out (`runHook`'s recover covers
+  the session events).
 
 ## Spec and ADR
 
-This changes how v1 delivers rules (ADR-0004: "delivered and checked by Claude
-Code hooks", where rules are shown per write). Add a short ADR-0005, "Rules at
-session start", based on `docs/adr/adr-template.md`, and a D-number in the v1
-spec that points to it. Update `docs/architecture.md` where it describes the
-hook events. Ask the user before you change ADR-0004 itself.
+This changes how v1 delivers rules (ADR-0004: rules are shown by the hook,
+per write). Add ADR-0005, "Rules loaded at session start", from
+`docs/adr/adr-template.md`, and D62 in the v1 spec pointing to it (D59 to D61
+are taken). Update `docs/architecture.md`: the files stele writes, the
+session hooks, and `Primed` in the session state. Ask the user before
+changing ADR-0004 itself.
 
 ## Tests
 
 Unit:
 
-- `claudecode.Parse` on a `SessionStart` payload for each `source`;
-- `Render("SessionStart", …)`;
-- `backstop.Decide` table cases above;
-- `sessionStart`: a panic is recovered, `block_on_error` on with a broken
-  index gives a warning and no deny, a failed state update still answers,
-  a widened scope un-primes the rule, no stele project, budget overflow (some rules left out, the
-  "N more" line, only fitting rules in `Primed`), a `stele.md` parse error (the
-  last good index is used and the note is shown), and `compact` replacing
-  `Primed`;
-- `hook` end to end: SessionStart, then a PreToolUse on a file whose rules all
-  fit → no deny; on a file with a left-out rule → deny with only that rule;
-- install: fresh install has three events; an old two-event install is
-  upgraded by `stele init`; uninstall removes all three.
+- the rules-file renderer: one block per rule, ids in order, scope printed
+  once, stable bytes for the same index;
+- splitting a file into blocks: a block edited by hand, a block removed, a
+  foreign file with no ids, an empty file;
+- `backstop.Decide` and `DecideBash` table cases: primed and matching, primed
+  with a changed hash, a rule added since, a new turn, a subagent with and
+  without its own `Primed`;
+- `sessionStart`: a panic is recovered; no key or no file primes nothing and
+  answers the guidance; a stale file is recorded as read, then rewritten;
+  `compact` replaces `Primed`; outside a stele project nothing happens;
+- `SubagentStart` records under its `agent_id`;
+- `compile`: the file is written with the lock, not rewritten when unchanged;
+  `stele check` fails on a stale file;
+- `init` and `uninstall`; the guard asks for a write to the file.
+
+End to end (`cmd/stele`): SessionStart, then a PreToolUse on a file whose
+rules are all primed gives no deny; after `stele.md` changes one rule, a write
+to a file it covers is denied with only that rule.
 
 Functional (`test/functional`): extend `hook_pre_test.go` with the
 SessionStart → write sequence.
@@ -241,15 +239,12 @@ SessionStart → write sequence.
 ## Measuring it
 
 Rerun the agent eval with the same three scenarios, 6 runs per arm. The
-`stele` arm gets the new hook through `stele init`. Add to `Result` in
-`test/functional/agent/run.go`: `primed` (rules sent at start), `primed_bytes`
-and `left_out`.
+`stele` arm gets the generated file through `stele init`. Add to `Result` in
+`test/functional/agent/run.go`: `primed` (rules primed at session start),
+`rules_file_bytes`, and `denies`.
 
 It is a success if the `stele` arm, compared with the 2026-10-24 run:
 
 - averages ≤ 14 turns and ≤ 380k tokens;
 - follows every blocking rule in at least as many runs as the CLAUDE.md arm;
 - averages ≤ 1 deny per run.
-
-If the 9,000-byte budget leaves many rules out in this test, report how many,
-and the denies they caused, before tuning anything.
