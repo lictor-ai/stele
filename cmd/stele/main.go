@@ -21,7 +21,7 @@ type command struct {
 }
 
 var commands = map[string]command{
-	"init":      {"set stele up here: Claude Code hooks, stele.md, .stele/", runInit},
+	"init":      {"set stele up here: Claude Code hooks, stele.md, .stele/, then compile", runInit},
 	"uninstall": {"remove exactly what init wrote", runUninstall},
 	"compile":   {"compile every source into the index", runCompile},
 	"check":     {"validate the rules and run checkers on changed files", runCheck},

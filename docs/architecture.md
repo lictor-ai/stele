@@ -316,19 +316,39 @@ type Result struct {
     Report lock.Report
     LockChanged  bool // the planned lock differs from stele.lock: for check, out of date
     IndexChanged bool // the planned index differs from the one on disk, or there is none
+    Files        []File // the generated files, each with Changed
 }
+
+// Generated is a file rendered from the index for an agent to load (#68).
+// compile knows its path and its bytes, never its format: cmd/ passes
+// Claude Code's rules file from the adapter.
+type Generated struct {
+    Path   string // slash path, relative to the root
+    Render func(index.Index) []byte
+}
+type File struct{ Path string; Data []byte; Changed bool } // Changed: differs from disk, line ends and a BOM aside, or missing
+type GeneratedError struct{ Path string; Err error }      // a file not written; the lock and index are saved
 
 // Plan reads every source and writes nothing.
 // It holds no key, so IndexChanged is always true: stele check never serves the index.
-func Plan(ctx context.Context, root string, srcs []source.Source, newID func() string) (Result, error)
+func Plan(ctx context.Context, root string, srcs []source.Source, gens []Generated, newID func() string) (Result, error)
 // Compile is stele compile: read every source, then Plan and Apply under the compile lock.
-func Compile(ctx context.Context, root string, srcs []source.Source, newID func() string, key sign.Key) (Result, error)
-// Apply writes the lock and the index, each only when it changed, lock first.
+func Compile(ctx context.Context, root string, srcs []source.Source, gens []Generated, newID func() string, key sign.Key) (Result, error)
+// Apply writes the lock, the index and the generated files, each only when it changed, in that order.
 func Apply(root string, r Result, key sign.Key) error
 // EnsureFresh re-reads only builtins, and only those whose fingerprint changed.
 // Rules from every other source are carried over from the current index.
-func EnsureFresh(ctx context.Context, root string, builtins []source.Source, newID func() string, key sign.Key) (index.Index, bool, error)
+// A generated file stale while the index is fresh is rewritten alone.
+func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gens []Generated, newID func() string, key sign.Key) (index.Index, bool, error)
 ```
+
+A generated file is written after the lock and the index, through
+`safefile.Dir` for every directory on the way (a link there is refused) and
+`safefile.Replace`, and only when its bytes change: a checkout that turned its
+line ends into CRLF, or added a byte order mark, is the same file. A file that
+cannot be written is a `*GeneratedError`, returned after the rules are saved;
+the hook treats it as no failure, and `stele check` reports the file as out of
+date.
 
 The `Plan`/`Apply` split is what makes `stele check` possible: CI runs `Plan`,
 inspects the `Report`, and never writes. `EnsureFresh` is the one `request` calls
@@ -786,9 +806,11 @@ characters. Every human-facing id is printed beside one (spec §12).
 
 `Run` takes an `index.Index`, not rule files: `cmd/` calls `compile.Plan` first
 and hands over the planned index (D40). A rule file that does not parse, an
-invalid lock or a lock out of date with the rules stops `stele check` before any
-checker runs: exit 1, on stderr, or in `--format json` as a `Problem` with no
-rule id.
+invalid lock, a lock out of date with the rules, or a generated file
+(`.claude/rules/stele-rules.md`, #68) missing or out of date stops `stele check`
+before any checker runs: exit 1, on stderr, or in `--format json` as a
+`Problem` with no rule id. The generated file is one of stele's own (`Own`):
+it holds every rule's text, so it is never checked against them.
 
 **Choosing files is `cmd/`'s job**, through `git`, run from the root with `-z`:
 
@@ -905,6 +927,26 @@ never rewritten. `backstop.Decide`
 stays agent-neutral. `Parse` drops a UTF-8 byte order mark first: PowerShell adds
 one when it pipes text, and a Windows wrapper script must not disarm stele.
 
+It also owns the rules file Claude Code loads at launch (#68, ADR-0005):
+
+```go
+const RulesFile = ".claude/rules/stele-rules.md"
+type Rule struct{ ID string; Scope []string; Body string }
+func RenderRules(rules []Rule) []byte          // the whole file, from assets/rules-file.tmpl
+func RuleHash(r Rule) string                   // what ReadRules gives r's block; "" if it cannot read back
+func ReadRules(data []byte) map[string]string  // rule id → hash of its block, as the agent read it
+```
+
+The file has no `paths:` frontmatter, so Claude Code loads it whole at launch,
+in each subagent, and again after a resume or a compaction. Each rule is a
+block opened by `<!-- stele rule <id> -->`, then `scope: …` when it has one,
+then its body. `ReadRules` is the only code that hashes a block: line ends, a
+BOM, trailing spaces and blank lines around blocks do not count; any other
+change does; an id found twice is dropped. `RuleHash` renders a rule's block
+and reads it back, so the two sides agree by construction, and a body holding a
+marker line hashes to nothing. The template lives in the adapter, not in
+`internal/install/assets`, because `install` imports the adapter.
+
 ### `internal/install`
 
 ```go
@@ -943,6 +985,13 @@ those (D28):
 directories, the settings file readable) before its first write, then writes
 `.stele/`, `stele.md` and the settings last, so the hooks never run without the
 rest.
+
+Then `stele init` compiles (`cmd/stele`), which writes `stele.lock` and
+`.claude/rules/stele-rules.md` (#68). A compile that fails, a `stele.md` that
+does not parse or no key, is a note: init still exits 0, and the next
+`stele compile` writes them. `uninstall` removes the rules file, a link there
+losing only the link, then `.claude/rules/` and `.claude/` when nothing else is
+left; a linked `.claude/rules/` is refused like a linked `.claude/`.
 
 `stele.lock` and `stele.json` stay: they are committed and the user's. The
 signing key is per machine, not per repository, and stays too.
@@ -1250,6 +1299,7 @@ an expected shape, and anything else gets one of two outcomes:
 | `.stele/`, `.stele/state/` | real directories | refused: "delete it, stele recreates it" |
 | `stele.lock` | plain file, ≤ 16 MiB | refused, `ErrInvalid`: restore it, or delete it and compile |
 | `.stele/index.json` | plain file, ≤ 64 MiB | `ErrNoIndex`: rebuilt, and the write moves it aside |
+| `.claude/rules/stele-rules.md` (committed, #68) | plain file, ≤ 16 MiB, under real directories | stale: rewritten (the write moves a non-file aside); a linked directory on the way: not written, `stele check` fails |
 | `state/<id>.json`, `state/current` | plain file, small | a fresh state / no session; the write moves it aside |
 | `*.lock` | plain file holding a token | a non-file is moved aside at once; a plain file once stale (§3) |
 
@@ -1360,6 +1410,8 @@ internal/install/assets/
   violation-message.tmpl → the reason after a write that breaks a rule (#29)
   stele-header.md.tmpl   → the header comment in a new stele.md (#12)
   ask-message.tmpl       → the prompt before a write to stele's own files (#52)
+internal/adapter/claudecode/assets/
+  rules-file.tmpl        → .claude/rules/stele-rules.md, the rules Claude Code loads at launch (#68)
 ```
 
 `.stele/.gitignore` is one line, `*`, written by `index.EnsureDir`, which both
@@ -1414,9 +1466,9 @@ or errors and call `t.Helper()`; they do not fail tests themselves. Comparisons 
 ## 11. Command surface
 
 ```
-stele init         set stele up here: Claude Code hooks, stele.md, .stele/
+stele init         set stele up here: Claude Code hooks, stele.md, .stele/, then compile
 stele uninstall    remove exactly what init wrote
-stele compile      every source, then compile.Plan + compile.Apply; prints the reconcile report
+stele compile      every source, then compile.Plan + compile.Apply (lock, index, .claude/rules/stele-rules.md); prints the reconcile report
 stele check        validate the rules, run checkers on changed files; writes nothing (for CI)
                      [--base <ref> | --all] [--format text|json] [path...]
 stele status       describe the install [--format text|json]
