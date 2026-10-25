@@ -84,6 +84,11 @@ type State struct {
 	// resume and compaction, and when a subagent starts, and keeps it for the
 	// session, so the turn reset does not clear it.
 	Primed map[string]map[string]string `json:"primed,omitempty"`
+	// LaunchRoot marks this root as the one the session was launched or
+	// resumed in. Claude Code reloads the rules file from there at a
+	// compaction, a clear or a subagent's start, while the hook's cwd
+	// follows the agent's cd; so those prime only a launch root (#68).
+	LaunchRoot bool `json:"launch_root,omitempty"`
 	// VersionWarned is the version mismatch the user was last warned of,
 	// so the warning comes once a session.
 	VersionWarned string `json:"version_warned,omitempty"`

@@ -47,15 +47,23 @@ const maxPrimed = 32
 //
 // It primes only a session that Claude Code runs in the root itself: whether
 // a session in a subdirectory loads the root's file is not measured, and
-// priming a rule the agent did not load is the one unsafe mistake. Every
-// error leaves the deny to show the rules, as before; none is reported.
+// priming a rule the agent did not load is the one unsafe mistake. And
+// Claude Code reloads the file from the directory it was launched in, while
+// the hook's cwd follows the agent's cd: so a startup or resume marks this
+// root as the session's launch root, and a compaction, a clear or a
+// subagent's start primes only a root so marked. A subagent is primed only
+// when its type is measured to load the file. Every error leaves the deny to
+// show the rules, as before; none is reported.
 func prime(ev claudecode.Event, root string) {
-	agent := ""
-	if ev.Name == "SubagentStart" {
-		if ev.AgentID == "" {
-			return // would overwrite the main agent's record
+	agent, launch := "", false
+	switch {
+	case ev.Name == "SubagentStart":
+		if ev.AgentID == "" || !loadsRules[ev.AgentType] {
+			return // no agent id would overwrite the main agent's record
 		}
 		agent = ev.AgentID
+	case ev.Source == "startup" || ev.Source == "resume":
+		launch = true
 	}
 	if cwd, err := filepath.Abs(ev.Cwd); err != nil || filepath.Clean(cwd) != root {
 		return
@@ -70,11 +78,28 @@ func prime(ev claudecode.Event, root string) {
 		loaded = claudecode.ReadRules(data)
 	}
 	_, _ = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
+		if launch {
+			st.LaunchRoot = true
+		}
+		if !st.LaunchRoot {
+			// Launched elsewhere: Claude Code reloaded that directory's
+			// rules, not this root's file.
+			if agent == "" {
+				st.Primed = withPrimed(st.Primed, "", nil)
+			}
+			return nil
+		}
 		st.Primed = withPrimed(st.Primed, agent, loaded)
 		return nil
 	})
 	_, _, _ = freshIndex(root, key)
 }
+
+// loadsRules lists the subagent types measured to load .claude/rules when
+// they start (Claude Code 2.1.310, 2026-10-25): general-purpose loads it;
+// the built-in Explore and Plan do not. Any other type, a custom agent's
+// included, is not primed until measured.
+var loadsRules = map[string]bool{"general-purpose": true}
 
 // withPrimed returns a copy of m in which agent's record is loaded, replacing
 // what the agent loaded before: Claude Code read the file again. Past
