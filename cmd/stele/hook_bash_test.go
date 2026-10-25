@@ -234,6 +234,8 @@ func TestHookBashAsksForOwnFiles(t *testing.T) {
 		"mv stele.lock old.lock":                                "stele.lock",
 		"truncate -s 0 stele.lock":                              "stele.lock",
 		"cd sub && touch x > stele.md":                          "sub/stele.md",
+		"echo x > .claude/rules/stele-rules.md":                 ".claude/rules/stele-rules.md",
+		"rm .claude/rules/stele-rules.md":                       ".claude/rules/stele-rules.md",
 	} {
 		o, out := hook(t, bash(command, root, "p1", ""))
 		if !asks(t, o, rel) {

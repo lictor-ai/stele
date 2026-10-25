@@ -15,10 +15,12 @@ import (
 // one a write would create to start a subproject, which would have no rules.
 // Claude Code's project settings count too: they load stele's hooks, and
 // Claude Code reloads them mid-session, so an edit can switch stele off at
-// once (#56).
+// once (#56). So does the rules file the agent loads at launch (#68): an edit
+// there changes the rules it reads.
 var ownNames = []string{
 	"stele.md", enforce.FileName, "stele.lock", ".stele", "**/.stele/",
 	"**/.claude/settings.json", "**/.claude/settings.local.json",
+	"**/" + claudecode.RulesFile,
 }
 
 // settingsNames are the files in .claude that Claude Code loads settings from.
@@ -28,8 +30,8 @@ var settingsNames = []string{"settings.json", "settings.local.json"}
 // stele's own files. Names count at any depth, a subproject's too, and so do
 // symlinks and junctions on the way, followed everywhere. A hard link or an
 // 8.3 short name, which only a same-file test can tell, is caught for the
-// root's stele.md, stele.json, stele.lock, .stele/ and .claude settings files
-// only. A change there
+// root's stele.md, stele.json, stele.lock, .stele/, .claude settings files
+// and rules file only. A change there
 // can weaken stele or turn it off, so the user is asked every time (#52).
 func guarded(root, rel, file string) bool {
 	if ownName(rel) {
@@ -69,7 +71,8 @@ func guarded(root, rel, file string) bool {
 		return false
 	}
 	for _, name := range []string{"stele.md", enforce.FileName, "stele.lock",
-		claudecode.SettingsFile, filepath.Join(".claude", "settings.local.json")} {
+		claudecode.SettingsFile, filepath.Join(".claude", "settings.local.json"),
+		filepath.FromSlash(claudecode.RulesFile)} {
 		if own, err := os.Stat(filepath.Join(root, name)); err == nil && os.SameFile(info, own) {
 			return true
 		}
