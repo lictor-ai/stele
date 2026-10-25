@@ -102,7 +102,7 @@ func bashRoot(ev claudecode.Event, root string, rels []string, budget int) claud
 		hit := false
 		for _, e := range idx.Rules {
 			if scope.Applies(e.Scope, rel) {
-				f.Rules = append(f.Rules, backstop.Rule{ID: e.ID, Text: e.Body})
+				f.Rules = append(f.Rules, backstopRule(e))
 				hit = hit || scoped(e.Scope)
 			}
 		}

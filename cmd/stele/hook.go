@@ -149,7 +149,7 @@ func beforeWrite(ev claudecode.Event) claudecode.Answer {
 	var rules []backstop.Rule
 	for _, e := range idx.Rules {
 		if scope.Applies(e.Scope, rel) {
-			rules = append(rules, backstop.Rule{ID: e.ID, Text: e.Body})
+			rules = append(rules, backstopRule(e))
 		}
 	}
 	if len(rules) == 0 {

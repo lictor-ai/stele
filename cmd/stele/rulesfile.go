@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/lictor-ai/stele/internal/adapter/claudecode"
+	"github.com/lictor-ai/stele/internal/backstop"
 	"github.com/lictor-ai/stele/internal/compile"
 	"github.com/lictor-ai/stele/internal/index"
 )
@@ -33,6 +34,13 @@ func generated() []compile.Generated {
 // ccRule is an index entry as the rules file shows it.
 func ccRule(e index.Entry) claudecode.Rule {
 	return claudecode.Rule{ID: e.ID, Scope: e.Scope, Body: e.Body}
+}
+
+// backstopRule is an index entry as the backstop decides on it, with the
+// hash its block has in the rules file, so a rule the agent loaded from
+// there counts as seen (#68).
+func backstopRule(e index.Entry) backstop.Rule {
+	return backstop.Rule{ID: e.ID, Text: e.Body, Hash: claudecode.RuleHash(ccRule(e))}
 }
 
 // notStele is the message for a generated file's path holding a file stele

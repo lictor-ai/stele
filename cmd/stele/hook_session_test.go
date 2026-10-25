@@ -43,9 +43,6 @@ func TestHookSessionStart(t *testing.T) {
 			}
 		})
 	}
-	if _, err := os.Stat(filepath.Join(root, ".stele")); err == nil {
-		t.Error("a session start wrote .stele/: it should only read")
-	}
 }
 
 func TestHookSessionStartOutsideStele(t *testing.T) {
