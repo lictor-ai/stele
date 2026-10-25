@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"time"
@@ -45,15 +46,23 @@ type Result struct {
 type Generated struct {
 	Path   string // relative to the root, slash-separated
 	Render func(index.Index) []byte
+	// Owned reports whether a file found at Path is one compile wrote. One
+	// that is not is never overwritten. nil: any file is.
+	Owned func(disk []byte) bool
+	// Same reports whether the file on disk is up to date with want. nil:
+	// the same text, line ends and a byte order mark aside.
+	Same func(disk, want []byte) bool
 }
 
 // File is a generated file as planned.
 type File struct {
 	Path string
 	Data []byte
-	// Changed says the file on disk differs, line ends and a byte order mark
-	// aside, or is missing or not a regular file.
+	// Changed says the file on disk is out of date, or missing.
 	Changed bool
+	// Foreign says something compile did not write is at Path: a file
+	// Owned rejects, or anything it cannot read as one. It is left alone.
+	Foreign bool
 }
 
 // GeneratedError is a generated file that could not be written. Apply
@@ -101,7 +110,7 @@ func Compile(ctx context.Context, root string, srcs []source.Source, gens []Gene
 	if err != nil {
 		return Result{}, err
 	}
-	unlock, err := lockCompile(root)
+	unlock, err := lockCompile(root, lockWait)
 	if err != nil {
 		return Result{}, err
 	}
@@ -130,15 +139,15 @@ func Apply(root string, r Result, key sign.Key) error {
 			return err
 		}
 	}
-	return writeGenerated(root, r.Files)
+	return writeGenerated(root, r.Files, safefile.Replace)
 }
 
-// writeGenerated writes the files that changed. Every directory on the way
-// must be a plain one: a clone can commit a link there, and stele would then
-// write outside the repository.
-func writeGenerated(root string, files []File) error {
+// writeGenerated writes the files that changed, through replace. Every
+// directory on the way must be a plain one: a clone can commit a link there,
+// and stele would then write outside the repository.
+func writeGenerated(root string, files []File, replace func(string, []byte) error) error {
 	for _, f := range files {
-		if !f.Changed {
+		if !f.Changed || f.Foreign {
 			continue
 		}
 		parts := strings.Split(f.Path, "/")
@@ -149,7 +158,7 @@ func writeGenerated(root string, files []File) error {
 				return &GeneratedError{f.Path, err}
 			}
 		}
-		if err := safefile.Replace(filepath.Join(root, filepath.FromSlash(f.Path)), f.Data); err != nil {
+		if err := replace(filepath.Join(root, filepath.FromSlash(f.Path)), f.Data); err != nil {
 			return &GeneratedError{f.Path, err}
 		}
 	}
@@ -162,8 +171,21 @@ func generate(root string, idx index.Index, gens []Generated) []File {
 	files := make([]File, len(gens))
 	for i, g := range gens {
 		data := g.Render(idx)
+		f := File{Path: g.Path, Data: data}
 		disk, err := safefile.ReadRegular(filepath.Join(root, filepath.FromSlash(g.Path)), maxGenerated)
-		files[i] = File{Path: g.Path, Data: data, Changed: err != nil || !sameText(disk, data)}
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			f.Changed = true
+		case err != nil, g.Owned != nil && !g.Owned(disk):
+			// A link, a directory, a file too large to read, or one without
+			// its header: not compile's to replace.
+			f.Foreign = true
+		case g.Same != nil:
+			f.Changed = !g.Same(disk, data)
+		default:
+			f.Changed = !sameText(disk, data)
+		}
+		files[i] = f
 	}
 	return files
 }
@@ -200,14 +222,22 @@ func staleGenerated(root string, idx index.Index, gens []Generated) bool {
 // the index no longer holds them.
 //
 // A generated file can be stale while the index is fresh, after a branch
-// switch or a deletion: then only the file is rewritten.
+// switch or a deletion: then only the file is rewritten, and only when that
+// is cheap. The hook runs on every write, so it never waits for the compile
+// lock or for a reader to close the file there, and a refresh that cannot
+// be made at once is skipped, not an error: the index serves the rules, and
+// stele check reports the file.
 func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gens []Generated, newID func() string, key sign.Key) (index.Index, bool, error) {
 	cur, ok, stale, err := staleness(ctx, root, builtins, key)
 	if err != nil || (ok && len(stale) == 0 && !staleGenerated(root, cur, gens)) {
 		return cur, false, err
 	}
+	if ok && len(stale) == 0 {
+		refresh(ctx, root, builtins, gens, key)
+		return cur, false, nil
+	}
 
-	unlock, err := lockCompile(root)
+	unlock, err := lockCompile(root, lockWait)
 	if err != nil {
 		return index.Index{}, false, err
 	}
@@ -218,7 +248,7 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gen
 		return cur, false, err
 	}
 	if ok && len(stale) == 0 {
-		return cur, false, writeGenerated(root, generate(root, cur, gens))
+		return cur, false, writeGenerated(root, generate(root, cur, gens), safefile.Replace)
 	}
 
 	// Rules keep the order Plan gives them: builtins first, then the rest in
@@ -278,12 +308,28 @@ func staleness(ctx context.Context, root string, builtins []source.Source, key s
 	return cur, true, stale, nil
 }
 
-// lockCompile takes the compile lock under .stele/.
-func lockCompile(root string) (func(), error) {
+// refresh rewrites stale generated files while the index is fresh, if it can
+// at once: the compile lock taken without waiting, the file replaced without
+// waiting for a reader. Anything else is a skip.
+func refresh(ctx context.Context, root string, builtins []source.Source, gens []Generated, key sign.Key) {
+	unlock, err := lockCompile(root, 0)
+	if err != nil {
+		return
+	}
+	defer unlock()
+	cur, ok, stale, err := staleness(ctx, root, builtins, key)
+	if err != nil || !ok || len(stale) > 0 {
+		return // another process is rebuilding; it writes the files too
+	}
+	_ = writeGenerated(root, generate(root, cur, gens), safefile.ReplaceNow)
+}
+
+// lockCompile takes the compile lock under .stele/, waiting at most wait.
+func lockCompile(root string, wait time.Duration) (func(), error) {
 	if err := index.EnsureDir(root); err != nil {
 		return nil, err
 	}
-	return safefile.Lock(filepath.Join(root, index.Dir, lockName), lockWait, lockStale)
+	return safefile.Lock(filepath.Join(root, index.Dir, lockName), wait, lockStale)
 }
 
 // readAll reads every source, in order.
