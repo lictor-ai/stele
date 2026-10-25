@@ -511,6 +511,9 @@ should explore further and call then. See §4.2 of the design doc.
 > counter. `block_on_error` covers stele itself failing with no good index to fall
 > back on; a broken `stele.md` keeps the last good rules.
 
+> **Amended by ADR-0008 (D67).** `backstop` is gone: `stele init --remind` and
+> `--check` (D63) switch the hooks. The only policy key left is `block_on_error`.
+
 `stele.json`, at the repository root, optional. Absent means defaults.
 
 ```json
@@ -750,7 +753,7 @@ New decisions, continuing the design doc's D-series.
 | D13 | **Team milestone, not v1 (D58).** Three calls: `request`, `corpus`, `fetch`. Rule text reaches the parent from `fetch`, as tool output. | M4 |
 | D14 | **Team milestone, not v1 (D58).** A `call_id` issued at `request` ties the exchange together. | M1 |
 | D15 | **Team milestone, not v1 (D58).** The hook disarms on a successful `fetch`. | M3 |
-| D16 | **Amended by D58.** Two flags: `backstop` (default on), `block_on_error` (default off). | M2 |
+| D16 | **Amended by D58 and D67.** `backstop` removed by D67. Two flags: `backstop` (default on), `block_on_error` (default off). | M2 |
 | D17 | v1: the user supplies the structure. stele infers nothing. Extracting rules from guideline prose comes after v1, as a paid source plugin (ADR-0002). | `O-ENTRY` |
 | D18 | `stele.md`, rules separated by `---`, is the default source. `stele.json` can list more sources. *Amended by ADR-0002; was "one file".* | `O-RULE-LOC` |
 | D19 | The delimiter defines the unit. No splitting. | `O-GRAIN` |
@@ -803,10 +806,11 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D60 | `init` also registers `stele hook` on `SessionStart` and `SubagentStart`. In a stele project it answers with context telling the agent to create and change files with Write and Edit only, never through Bash, which skips both hooks; the deny and violation messages say it too. Bash writes are still not seen. | tests of v1.0.0-dev.0 (#50) |
 | D61 | `init` also registers `stele hook` on `PreToolUse` for Bash. The hook lexes the command, never runs it, and finds the files it writes by redirection, `tee`, `sed -i` and `perl -i`. A write into a file a scoped rule covers is denied once per file, per agent, per turn, with the rules not yet shown and a pointer to Write and Edit; run again, it goes through unchecked. A write, removal or copy onto one of stele's own files asks. Nothing runs after a Bash command, and a failure of stele only warns. | tests of v1.0.0-dev.0 (#57) |
 | D62 | `stele compile`, the hook's recompile and `init` also write `.claude/rules/stele-rules.md`: every rule of the root's `stele.md` with its scope, no `paths:` frontmatter, committed with `stele.lock`. Claude Code loads it at launch like `CLAUDE.md`, with no hook text cap, and in every subagent. `stele check` fails when it is out of date; an agent's write to it asks; `uninstall` removes it. A session records which rules it loaded, so the deny shows only rules it has not (ADR-0005). | agent eval of 2026-10-24 (#67, #68) |
-| D63 | `stele init --remind=on\|off --check=on\|off` switches the two write hooks: `--remind` the deny that shows the rules before a write, `--check` the check after it (ADR-0006 named them `--pre-write` and `--post-write`); both are on by default. A switch that is off is a flag on the `stele hook` command in `.claude/settings.json`; `init` without a flag keeps what is installed. `--remind=off` skips the rule deny; `--check=off` skips the check, not the recompile. The guard for stele's own files, the session hooks with priming, the invalid-rules notice and a fresh rules file stay. The version warning tells a binary older than the stamp to upgrade, not to run `init`, whose older `stamp()` would add a second set of hooks. `backstop` still decides whether a part that runs may block (ADR-0006). | #71 |
+| D63 | `stele init --remind=on\|off --check=on\|off` switches the two write hooks: `--remind` the deny that shows the rules before a write, `--check` the check after it (ADR-0006 named them `--pre-write` and `--post-write`); both are on by default. A switch that is off is a flag on the `stele hook` command in `.claude/settings.json`; `init` without a flag keeps what is installed. `--remind=off` skips the rule deny; `--check=off` skips the check, not the recompile. The guard for stele's own files, the session hooks with priming, the invalid-rules notice and a fresh rules file stay. The version warning tells a binary older than the stamp to upgrade, not to run `init`, whose older `stamp()` would add a second set of hooks. `backstop` is removed (D67). | #71 |
 | D64 | `stele publish` sends the committed `stele.md` to the `repo` and `path` under `publish` in `stele.json`, as a merge request from branch `stele/publish/<path>`. It reads `stele.md` from git to copy it, the one exception to D40 (ADR-0007). | — |
 | D65 | `stele publish` reuses an existing login and never asks for a token. Tokens go only to `github.com` and `gitlab.com`; every other case gets a prefilled page (ADR-0007). | — |
 | D66 | D53 gains a second exit: `stele publish`, run by the developer, sends `stele.md`, its `path`, the project's commit hash and id, and the author's identity. Network calls are allowed in `internal/publish` only (ADR-0007). | — |
+| D67 | **Amends D16 and D63.** `backstop` is removed from `stele.json`: `--remind` decides whether the hook may deny a write to show rules, `--check` whether a blocking violation after a write is sent back as a block. `block_on_error` stays and applies to whatever part runs. stele does not edit a `stele.json` that still sets `backstop`; `init` notes that it is no longer read (ADR-0008). | #71 |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 

@@ -28,7 +28,9 @@ Guideline enforcement for coding agents. Go, single binary.
    to a git repository as a merge request; network code only in
    `internal/publish`, tokens only to github.com and gitlab.com. It amends D53
    and D40. The spec carries it as D64–D66.
-8. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+8. `docs/adr/0008-no-backstop-key.md` — `backstop` is removed from `stele.json`;
+   `--remind` and `--check` replace it. The spec carries it as D67.
+9. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.

@@ -140,14 +140,22 @@ released binaries. So the version warning must not send an older binary to
 upgrade stele, not to run `stele init`. Only a binary older than the stamp
 gets that wording; a newer one keeps today's.
 
-### With `backstop`
+### No more `backstop`
 
-`backstop` stays as it is: the switches decide which parts run, `backstop`
-whether a part that runs may block. So the deny runs only when `--remind` is on
-and `backstop` is true, and a violation after a write blocks only when
-`--check` is on and `backstop` is true. The README says that
-`--remind=off` is the way to stop the deny, and that `backstop: false` also
-turns the post-write block into context.
+`backstop` goes (ADR-0008): the switches replace it.
+
+- `enforce.Policy` loses `Backstop`; `enforce.Load` reads only
+  `block_on_error`. Every `Backstop` test goes, in `cmd/stele`
+  (`hook.go`, `hook_bash.go`, `failure`) and in `internal/backstop` (`Decide`,
+  `DecideBash`), and `docs/architecture.md` loses its step 1: the deny
+  runs when `--remind` is on, and a blocking violation after a write blocks
+  when `--check` is on.
+- `block_on_error` applies whenever the part that failed runs.
+- `stele init` reads `stele.json`; if it sets `backstop`, `init` notes
+  "stele.json: backstop is no longer read; use stele init --remind=off". It
+  never edits the file (D38).
+- README: remove the `backstop` row, say what `--remind` and `--check` do, and
+  drop "Only applies when `backstop` is `true`" from `block_on_error`.
 
 ## Rules this must keep
 
@@ -158,9 +166,10 @@ turns the post-write block into context.
 
 ## Spec and ADR
 
-ADR-0006, "Switching the write hooks on and off", and D63 in the v1 spec.
+ADR-0006, "Switching the write hooks on and off", and D63 in the v1 spec;
+ADR-0008, "No `backstop` key", and D67.
 Update `docs/architecture.md` (the hook command, `claudecode.Switches`) and
-the README (`stele init`, the `backstop` row) with the code.
+the README (`stele init`, `stele.json`) with the code.
 
 ## Tests
 
@@ -184,7 +193,9 @@ Unit (`internal/adapter/claudecode`):
   are refreshed;
 - the version warning tells a binary older than the stamp to upgrade, not to
   run `init`;
-- both on: today's tests pass unchanged.
+- both on: today's tests pass, less the `backstop: false` cases, which go;
+- `enforce.Load` ignores `backstop`; `init` notes a `stele.json` that sets it
+  and leaves the file byte for byte.
 
 Functional (`test/functional`): `install_test.go` for the settings written by
 each flag; `hook_pre_test.go` and `hook_post_test.go` for one write with each
