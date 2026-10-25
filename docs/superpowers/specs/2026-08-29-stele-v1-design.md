@@ -770,7 +770,7 @@ New decisions, continuing the design doc's D-series.
 | D32 | `init` stamps a version; the hook warns on mismatch. | M6 |
 | D37 | **Amended by D58.** Hook and MCP mode are separate processes sharing state on disk, keyed per session. | M8 |
 | D39 | **Team milestone, not v1 (D58).** Failures are recorded in session state so the hook can see them, and a counter applies the failure policy after 3 blocks with no `fetch`. | G1, G2 |
-| D40 | Only source plugins open rule files, and only to read-and-transform or to answer has-it-changed. Everything else reads `index.json`. *Amended by ADR-0002; was "only one package opens `stele.md`".* | G3 |
+| D40 | Only source plugins open rule files, and only to read-and-transform or to answer has-it-changed. Everything else reads `index.json`. *Amended by ADR-0002; was "only one package opens `stele.md`".* *Amended by D64: `stele publish` reads `stele.md` from git to copy it, without parsing it.* | G3 |
 
 From ADR-0002, `docs/adr/0002-engine-and-extension-points.md`:
 
@@ -804,9 +804,9 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D61 | `init` also registers `stele hook` on `PreToolUse` for Bash. The hook lexes the command, never runs it, and finds the files it writes by redirection, `tee`, `sed -i` and `perl -i`. A write into a file a scoped rule covers is denied once per file, per agent, per turn, with the rules not yet shown and a pointer to Write and Edit; run again, it goes through unchecked. A write, removal or copy onto one of stele's own files asks. Nothing runs after a Bash command, and a failure of stele only warns. | tests of v1.0.0-dev.0 (#57) |
 | D62 | `stele compile`, the hook's recompile and `init` also write `.claude/rules/stele-rules.md`: every rule of the root's `stele.md` with its scope, no `paths:` frontmatter, committed with `stele.lock`. Claude Code loads it at launch like `CLAUDE.md`, with no hook text cap, and in every subagent. `stele check` fails when it is out of date; an agent's write to it asks; `uninstall` removes it. A session records which rules it loaded, so the deny shows only rules it has not (ADR-0005). | agent eval of 2026-10-24 (#67, #68) |
 | D63 | `stele init --pre-write=on\|off --post-write=on\|off` switches the two write hooks; both are on by default. A switch that is off is a flag on the `stele hook` command in `.claude/settings.json`; `init` without a flag keeps what is installed. Pre-write off skips the rule deny; post-write off skips the check, not the recompile. The guard for stele's own files, the session hooks with priming, the invalid-rules notice and a fresh rules file stay. The version warning tells a binary older than the stamp to upgrade, not to run `init`, whose older `stamp()` would add a second set of hooks. `backstop` still decides whether a part that runs may block (ADR-0006). | #71 |
-| D64 | `stele publish` sends the committed `stele.md` to the `repo` and `path` under `publish` in `stele.json`, as a merge request from branch `stele/publish/<path>` (ADR-0007). | — |
+| D64 | `stele publish` sends the committed `stele.md` to the `repo` and `path` under `publish` in `stele.json`, as a merge request from branch `stele/publish/<path>` It reads `stele.md` from git to copy it, the one exception to D40 (ADR-0007). | — |
 | D65 | `stele publish` reuses an existing login and never asks for a token. Tokens go only to `github.com` and `gitlab.com`; every other case gets a prefilled page (ADR-0007). | — |
-| D66 | D53 gains a second exit: `stele publish`, run by the developer, sends `stele.md`, its `path`, the project's commit hash and the author's identity. Network calls are allowed in `internal/publish` only (ADR-0007). | — |
+| D66 | D53 gains a second exit: `stele publish`, run by the developer, sends `stele.md`, its `path`, the project's commit hash and id, and the author's identity. Network calls are allowed in `internal/publish` only (ADR-0007). | — |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 

@@ -24,7 +24,8 @@ request, a call to the host's API.
 
 ## Decision Outcome
 
-Chosen option: stele calls the API itself, because it needs nothing installed
+Chosen option: "`stele publish` pushes a branch and calls the GitHub or GitLab
+API itself", because it needs nothing installed
 and works on both hosts, and reusing an existing login means stele never asks
 for a token. `gh` covers only GitHub and `glab` only GitLab, and either would
 be one more install. git-spice does the same from a Go binary.
@@ -34,7 +35,8 @@ amends:
 
 * **D53.** `stele publish` is a second way out. It runs only when the developer
   runs it, sends only to the `repo` in `stele.json`, and sends only
-  `stele.md`, its `path`, the project's commit hash and the author's identity.
+  `stele.md`, its `path`, the project's commit hash and id, and the author's
+  identity.
 * **ADR-0004, "no network on any path".** Network calls are allowed in
   `internal/publish` only. The hook, compile and check stay offline.
 * **D40.** `stele publish` reads `stele.md` from git to copy it. It never

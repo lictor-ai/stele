@@ -25,7 +25,7 @@ Guideline enforcement for coding agents. Go, single binary.
    command. The spec carries it as D63.
 7. `docs/adr/0007-publishing-the-rules.md` — `stele publish` sends `stele.md`
    to a git repository as a merge request; network code only in
-   `internal/publish`, tokens only to github.com and gitlab.com. It amends D53.
+   `internal/publish`, tokens only to github.com and gitlab.com. It amends D53 and D40.
    The spec carries it as D64–D66.
 8. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
@@ -40,6 +40,7 @@ enterprise idea. Do not implement it or use it as a v1 format.
 
 - stele never writes to `stele.md` or `stele.json` (D38).
 - Only source plugins open rule files (D40). Everything else reads `index.json`.
+  The one exception: `stele publish` reads `stele.md` from git to copy it (D64).
 - External plugins never run on the hot path: not in `stele hook`, not in
   `stele mcp` (D45).
 - Only plugins listed in `stele.json` and found on `PATH` run, never one inside

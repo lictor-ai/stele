@@ -44,9 +44,10 @@ are checked before anything runs, and a bad value is an error that names it:
 - **`repo`** is `https://host/...`, `ssh://host/...`, or `user@host:path`. It
   never starts with `-`. Local paths, `file://`, `ext::` and every other
   transport are refused.
-- **`path`** is relative, uses `/`, and has no empty, `.` or `..` part. No part
-  is `.git` in any case, ends with `.` or a space, or contains `\`, `:` or a
-  control character. It ends in `.md`.
+- **`path`** is relative, uses `/`, and ends in `.md`. Each part is made of
+  letters, digits, `.`, `_` and `-` only, does not start with `.` or `-`, and
+  does not end with `.` or `.lock`. So there is no `..`, no `.git`, no `\` or
+  `:`, and every `path` makes a valid branch name.
 
 Without a `publish` key, `stele publish` fails with a message that shows the
 key to add.
@@ -60,7 +61,9 @@ key to add.
    uncommitted edit cannot change what is sent. A project without git, an
    untracked `stele.md` and an edited one each get their own error. This is the
    one place outside a source plugin that reads a rule file (an exception to
-   D40): it copies the file and never parses it.
+   D40, ADR-0007): it copies the file and never parses it.
+   It also reads the project id from `stele.lock` (D51); without one, it says
+   to run `stele compile` first.
 2. **Updates its clone** of `repo`: a bare repository under stele's cache
    directory (`os.UserCacheDir()/stele/publish/<SHA-256 of the URL>`), never
    inside the project. A file lock keeps two publishes out of it at once.
@@ -68,23 +71,27 @@ key to add.
    written to disk as a file and none of its hooks runs.
 3. **Finds the base**, the repository's default branch (its `HEAD`). An empty
    repository has none: stele stops and says to push a first commit.
-4. **Stops when nothing changed**: when the blob at `path` on the default
-   branch, or on the publish branch if it exists, is already the one from step
-   1. Nothing is pushed.
-5. **Commits** on top of the default branch, with git's plumbing
-   (`hash-object`, `update-index` on a temporary index, `write-tree`,
-   `commit-tree`), using the developer's git identity. The message is
-   `stele: publish <path>`, with `Project-Commit: <hash of the project's HEAD>`
-   in the body.
+4. **Stops when nothing changed.** If the blob at `path` on the default
+   branch is already the one from step 1, it says so and stops. If the publish
+   branch already has it, it skips steps 5 and 6 and goes to step 7, so a
+   merge request that failed to open, or was closed, is opened again.
+5. **Commits** on top of the default branch, with git's plumbing and a
+   temporary index: `read-tree <base>`, `hash-object -w`, `update-index
+   --cacheinfo` for `path`, `write-tree`, `commit-tree`. Every other file of
+   the base stays as it is. The author and committer are the developer's
+   identity as the project sees it (`git var GIT_AUTHOR_IDENT` run in the
+   project), passed as `GIT_AUTHOR_*` and `GIT_COMMITTER_*`, because the bare
+   clone reads only the global config. The message is `stele: publish <path>`,
+   with two trailers: `Stele-Project: <project id>` and
+   `Project-Commit: <hash of the project's HEAD>`.
 6. **Pushes** to the publish branch `stele/publish/<path>`, for example
-   `stele/publish/project-a/stele.md`. The branch follows from `path`, which is
-   unique in the repository, so two projects never share one, and every clone
-   or worktree of a project uses the same one. stele checks the name with
-   `git check-ref-format`. The push replaces an earlier publish
-   (`--force-with-lease`, against the tip it just fetched). It refuses if that
-   tip is a commit stele did not make (one whose message is not
-   `stele: publish <path>`), so a person's commits on the branch are never
-   overwritten.
+   `stele/publish/project-a/stele.md`. Every clone or worktree of a project
+   uses the same one. stele checks the name with `git check-ref-format`. The
+   push replaces an earlier publish (`--force-with-lease`, against the tip it
+   just fetched). It refuses if that tip is not a stele commit for this
+   project (message `stele: publish <path>` and the same `Stele-Project`), so a
+   person's commits are never overwritten, and two projects that chose the
+   same `path` get an error instead of replacing each other.
 7. **Opens a merge request** from that branch into the default branch, or finds
    the one already open for it, and prints its link.
 
@@ -114,20 +121,20 @@ other host, including a self-hosted GitHub or GitLab, gets no token and no API
 call: it gets the prefilled page.
 
 **stele never asks for a token.** It reuses a login the developer already has,
-in this order, and stops at the first it finds:
+trying these in order. When the host rejects one, it tries the next:
 
 1. The host's CLI login, if that CLI is installed and logged in to that host:
    `gh auth token --hostname github.com`, or `glab`'s token for `gitlab.com`.
    Check which `glab` command prints it before building.
 2. git's stored credential for that host, from `git credential fill`, run with
    prompts disabled as above. Git Credential Manager, the default on Windows,
-   stores an OAuth token there. If the host rejects it (for example a stored
-   password), stele falls back to the prefilled page.
+   stores an OAuth token there. A stored password is rejected by the host, and
+   stele moves on.
 3. `GITHUB_TOKEN` for `github.com` only, `GITLAB_TOKEN` for `gitlab.com` only.
 
 The token is held in memory for the call and never written or printed.
 
-**The prefilled page.** With no token, a rejected one, an API error, or
+**The prefilled page.** With no token, every one rejected, an API error, or
 another host, the branch is already pushed. stele prints a page to open the
 merge request there:
 
@@ -157,10 +164,11 @@ Each one names what failed and what to do. None changes the project.
 | :-- | :-- |
 | No `publish` key, or a bad `repo` or `path` | Exit 1. Shows what to write. |
 | No git, `stele.md` untracked, or edited since `HEAD` | Exit 1, each with its own message. |
+| No project id in `stele.lock` | Exit 1. Run `stele compile`. |
 | `git` not on `PATH`, or found inside the project | Exit 1. |
 | Empty repository | Exit 1. Push a first commit. |
 | Clone, fetch or push fails | Exit 1. Shows git's message, which says whether access was denied. |
-| The publish branch has commits stele did not make | Exit 1. Names the branch. |
+| The publish branch has commits stele did not make for this project | Exit 1. Names the branch. |
 | No token, rejected token, API error | Exit 0. The branch is pushed; stele prints the prefilled page. |
 
 ## What leaves the machine
@@ -171,7 +179,7 @@ only by the developer, only to the `repo` in `stele.json`. It sends:
 
 - the committed `stele.md`;
 - `path`, in the branch name and the commit message;
-- the hash of the project's `HEAD` commit;
+- the hash of the project's `HEAD` commit and the project id;
 - the developer's git name and email, as the commit's author;
 - to `github.com` or `gitlab.com` only, the token, to open the merge request.
 
@@ -188,7 +196,8 @@ compiled index, which is signed for one machine (#27) and can be rebuilt from
 - `stele hook` never reaches either.
 
 The change that builds it updates `stele.md` with it: the network rule allows
-`net/http` in `internal/publish` only, and the `os/exec` rule names it. It also
+`net/http` in `internal/publish` only, the `os/exec` rule names it, and the D40
+rule names its one read of `stele.md`. It also
 adds `stele publish` to the README, with its limits: GitHub and GitLab only for
 the merge request, no self-hosted instances, no empty repository.
 
@@ -199,10 +208,13 @@ the merge request, no self-hosted instances, no empty repository.
   prefilled links and their encoding; the token order, with `gh`, `glab`, git
   and the environment faked; a tool on `PATH` inside the project is refused.
 - Integration, with no network: a bare repository on disk as the remote,
-  reached through a test-only hook that is not a `repo` value. Publish, then
+  reached through a package variable that only tests set. It is not a flag,
+  an environment variable or a `repo` value, and it is the only thing that
+  adds `-c protocol.file.allow=always`. Publish, then
   again unchanged (stops), then after an edit (the branch is replaced).
   Untracked, edited and CRLF `stele.md`; an empty remote; a publish branch with
-  someone else's commit.
+  someone else's commit, or another project's; a merge request closed and
+  published again unchanged (reopened); every other file of the base kept.
 - The GitHub and GitLab API calls against a local HTTP test server.
 - One manual run against a real GitHub repository and a real GitLab one before
   release.
@@ -211,6 +223,6 @@ the merge request, no self-hosted instances, no empty repository.
 
 | # | Decision |
 | :-- | :-- |
-| D64 | `stele publish` sends the committed `stele.md` to the `repo` and `path` under `publish` in `stele.json`, as a merge request from branch `stele/publish/<path>`. It writes nothing to disk from the published repository and never overwrites commits it did not make. |
+| D64 | `stele publish` sends the committed `stele.md` to the `repo` and `path` under `publish` in `stele.json`, as a merge request from branch `stele/publish/<path>`. It writes nothing to disk from the published repository and never overwrites commits it did not make for this project. It reads `stele.md` from git to copy it, never parsing it: the one exception to D40. |
 | D65 | It reuses an existing login (`gh`/`glab`, git's stored credential, the environment) and never asks for a token. Tokens go only to `github.com` and `gitlab.com`; every other case gets a prefilled page that stele builds itself. |
-| D66 | D53 gains a second exit: `stele publish`, run by the developer, sends `stele.md`, its `path`, the project's commit hash and the author's identity, and nothing else. Network calls are allowed in `internal/publish` only (ADR-0007). |
+| D66 | D53 gains a second exit: `stele publish`, run by the developer, sends `stele.md`, its `path`, the project's commit hash and id, and the author's identity, and nothing else. Network calls are allowed in `internal/publish` only (ADR-0007). |
