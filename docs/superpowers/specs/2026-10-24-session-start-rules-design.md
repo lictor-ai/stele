@@ -47,6 +47,8 @@ Claude Code has moved on.
 | the file changes between two turns of one process | Not seen. |
 | the session is resumed (`--resume`, a new process) | Loaded again, the new version is followed. |
 | a subagent | Loads the file in its own context and follows it, though its prompt said nothing about the rule. |
+| subagent `general-purpose` (2026-10-25, 2.1.310) | Loads the file: its transcript has the instructions attachment, and it quoted the rule. |
+| subagent `Explore` or `Plan` (2026-10-25, 2.1.310) | Does not load the file: no instructions attachment, and it answered that it had no such rule. So only measured types are primed. |
 | `/compact` | Loaded again from disk: after compaction the new version is followed. |
 | a `SessionStart` hook rewrites the file | Too late: the session had already read the old version. |
 

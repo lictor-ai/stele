@@ -1213,8 +1213,23 @@ for rules that changed in those milliseconds.
 
 It primes only when Claude Code runs in the root itself (`cwd` is the root):
 whether a session in a subdirectory loads the root's file is not measured, and
-priming a rule the agent did not load is the one unsafe mistake. A
-`SubagentStart` with no `agent_id` primes nothing. A session keeps at most 32
+priming a rule the agent did not load is the one unsafe mistake.
+
+Claude Code reloads the file from the directory it was launched in, while the
+hook's `cwd` follows the agent's `cd`. So a `SessionStart` with `source`
+`startup` or `resume` marks this root's state as the session's launch root
+(`State.LaunchRoot`), and a `compact` or `clear`, or a `SubagentStart`, primes
+only a root so marked; in any other root a `compact` or `clear` clears the main
+agent's record. A session is resumed from the directory it was started in
+(Claude Code lists sessions per project directory), so a launch root never
+moves within one session.
+
+A `SubagentStart` primes only a subagent whose `agent_type` is measured to
+load `.claude/rules` (`loadsRules`): `general-purpose` does; the built-in
+`Explore` and `Plan` do not (their transcripts had no instructions
+attachment, and they could not quote the rule; Claude Code 2.1.310,
+2026-10-25). Any other type, a custom agent's included, primes nothing until
+measured. A `SubagentStart` with no `agent_id` primes nothing. A session keeps at most 32
 agents' records; past that, other subagents' are dropped, which costs denies,
 never a missed rule. Every error (no key, an unreadable file, state not saved)
 primes nothing and is not reported: the deny still shows every rule.
