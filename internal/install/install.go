@@ -133,13 +133,17 @@ func Init(root, version string) (changes, notes []string, err error) {
 	return changes, notes, nil
 }
 
-// Uninstall removes what Init wrote: stele's hooks, and .stele/ with
-// everything stele keeps there. It leaves stele.md, stele.lock, stele.json
-// and every other file, and a settings file it cannot read entirely alone.
+// Uninstall removes what Init and stele compile wrote: stele's hooks, the
+// rules file Claude Code loads (#68), and .stele/ with everything stele keeps
+// there. It leaves stele.md, stele.lock, stele.json and every other file, and
+// a settings file it cannot read entirely alone.
 func Uninstall(root string) (changes, notes []string, err error) {
 	settings := filepath.Join(root, claudecode.SettingsFile)
-	if err := plainDir(filepath.Dir(settings)); err != nil {
-		return nil, nil, fmt.Errorf("%w: stele will not write through it; remove its stele hooks by hand, nothing was removed", err)
+	rulesFile := filepath.Join(root, filepath.FromSlash(claudecode.RulesFile))
+	for _, dir := range []string{filepath.Dir(settings), filepath.Dir(rulesFile)} {
+		if err := plainDir(dir); err != nil {
+			return nil, nil, fmt.Errorf("%w: stele will not write through it; remove its stele hooks and %s by hand, nothing was removed", err, claudecode.RulesFile)
+		}
 	}
 	data, mode, err := readSettings(settings)
 	if errors.Is(err, safefile.ErrNotRegular) {
@@ -169,26 +173,40 @@ func Uninstall(root string) (changes, notes []string, err error) {
 		changes = append(changes, "removed stele hooks from "+claudecode.SettingsFile)
 	}
 
+	// The rules file is stele's, a link a clone committed there too: only
+	// the file or the link goes, never what a link points to.
+	if info, err := os.Lstat(rulesFile); err == nil {
+		if info.IsDir() {
+			notes = append(notes, claudecode.RulesFile+" is a directory stele did not make: left it")
+		} else if err := os.Remove(rulesFile); err != nil {
+			return changes, notes, err
+		} else {
+			changes = append(changes, "removed "+claudecode.RulesFile)
+		}
+	}
+	os.Remove(filepath.Dir(rulesFile)) // only when nothing else is in it
+	os.Remove(filepath.Dir(settings))
+
 	dir := filepath.Join(root, index.Dir)
 	info, err := os.Lstat(dir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return changes, nil, nil
+		return changes, notes, nil
 	case err != nil:
-		return changes, nil, err
+		return changes, notes, err
 	case info.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0:
 		// A link, or a junction, that a clone committed: only the link goes.
 		err = os.Remove(dir)
 	case !info.IsDir():
-		return changes, []string{index.Dir + " is not a directory stele made: left it"}, nil
+		return changes, append(notes, index.Dir+" is not a directory stele made: left it"), nil
 	default:
 		// RemoveAll removes links inside, never what they point to.
 		err = os.RemoveAll(dir)
 	}
 	if err != nil {
-		return changes, nil, err
+		return changes, notes, err
 	}
-	return append(changes, "removed "+index.Dir+"/"), nil, nil
+	return append(changes, "removed "+index.Dir+"/"), notes, nil
 }
 
 // plainDir checks that path is missing or a real directory: never a link or
