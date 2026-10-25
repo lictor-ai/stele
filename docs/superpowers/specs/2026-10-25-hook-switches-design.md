@@ -145,7 +145,9 @@ gets that wording; a newer one keeps today's.
 `backstop` goes (ADR-0007): the switches replace it.
 
 - `enforce.Policy` loses `Backstop`; `enforce.Load` reads only
-  `block_on_error`. Every `policy.Backstop` test in `cmd/stele` goes: the deny
+  `block_on_error`. Every `Backstop` test goes, in `cmd/stele`
+  (`hook.go`, `hook_bash.go`, `failure`) and in `internal/backstop` (`Decide`,
+  `DecideBash`), and `docs/architecture.md` loses its step 1: the deny
   runs when `--remind` is on, and a blocking violation after a write blocks
   when `--check` is on.
 - `block_on_error` applies whenever the part that failed runs.
