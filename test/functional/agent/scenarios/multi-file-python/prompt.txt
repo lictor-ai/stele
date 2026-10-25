@@ -1,0 +1,1 @@
+Create a small CLI in the tool/ package with 4 modules: config.py (finds a config file named .toolrc in the user home directory and parses key=value lines), scan.py (lists files recursively under a directory with their sizes), report.py (prints a summary to the terminal: file count, total size, 5 largest files), and main.py wiring them with argparse (python -m tool.main <dir>).

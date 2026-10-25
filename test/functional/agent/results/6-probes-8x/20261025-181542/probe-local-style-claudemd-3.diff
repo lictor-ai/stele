@@ -1,0 +1,121 @@
+diff --git a/internal/cmds/registry.go b/internal/cmds/registry.go
+index b04ca94..99b1a5d 100644
+--- a/internal/cmds/registry.go
++++ b/internal/cmds/registry.go
+@@ -18,4 +18,5 @@ var All = []Command{
+ 	{"cache", "show cache statistics", Cache},
+ 	{"tenants", "list tenants", Tenants},
+ 	{"flags", "list feature flags", Flags},
++	{"version", "show the build version", Version},
+ }
+diff --git a/internal/cmds/version.go b/internal/cmds/version.go
+new file mode 100644
+index 0000000..5f4409c
+--- /dev/null
++++ b/internal/cmds/version.go
+@@ -0,0 +1,31 @@
++package cmds
++
++import (
++	"fmt"
++	"os"
++	"runtime"
++)
++
++// appName is the name the version report shows.
++const appName = "app"
++
++// version is the build version. The build sets it with
++// -ldflags "-X example.com/app/internal/cmds.version=1.2.3".
++var version = "dev"
++
++// Version prints the app name, the build version and the Go version it was built with.
++func Version(args []string) error {
++	fmt.Fprint(os.Stdout, versionReport(version))
++	if len(args) > 0 {
++		fmt.Fprintf(os.Stdout, "(ignoring %d arguments)\n", len(args))
++	}
++	return nil
++}
++
++// versionReport formats the version lines for the given build version.
++func versionReport(v string) string {
++	return fmt.Sprintf("%-10s %s\n%-10s %s\n%-10s %s\n",
++		"name:", appName,
++		"version:", v,
++		"go:", runtime.Version())
++}
+diff --git a/internal/cmds/version_test.go b/internal/cmds/version_test.go
+new file mode 100644
+index 0000000..a342856
+--- /dev/null
++++ b/internal/cmds/version_test.go
+@@ -0,0 +1,68 @@
++package cmds
++
++import (
++	"runtime"
++	"testing"
++)
++
++func TestVersionReport(t *testing.T) {
++	tests := []struct {
++		name    string
++		version string
++		want    string
++	}{
++		{"default build", "dev", "name:      app\nversion:   dev\ngo:        " + runtime.Version() + "\n"},
++		{"tagged build", "1.2.3", "name:      app\nversion:   1.2.3\ngo:        " + runtime.Version() + "\n"},
++		{"empty version", "", "name:      app\nversion:   \ngo:        " + runtime.Version() + "\n"},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			got := versionReport(tt.version)
++			if got != tt.want {
++				t.Errorf("versionReport(%q) = %q, want %q", tt.version, got, tt.want)
++			}
++		})
++	}
++}
++
++func TestVersionRegistered(t *testing.T) {
++	tests := []struct {
++		name     string
++		wantName string
++	}{
++		{"version is listed", "version"},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			found := false
++			for _, c := range All {
++				if c.Name == tt.wantName {
++					found = true
++					if c.Run == nil {
++						t.Errorf("command %q has nil Run", tt.wantName)
++					}
++				}
++			}
++			if !found {
++				t.Errorf("All has no command %q", tt.wantName)
++			}
++		})
++	}
++}
++
++func TestVersionArgs(t *testing.T) {
++	tests := []struct {
++		name string
++		args []string
++	}{
++		{"no args", nil},
++		{"extra args are ignored", []string{"--short", "x"}},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if err := Version(tt.args); err != nil {
++				t.Errorf("Version(%q) = %v, want nil", tt.args, err)
++			}
++		})
++	}
++}

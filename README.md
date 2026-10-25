@@ -180,6 +180,28 @@ Optional, committed next to `stele.md`. These are the defaults:
 | `backstop` | `true`: the hook may deny a write to show its rules, and blocks on violations after a write. `false`: no rules are shown before writes; violations after a write are sent as context, never as a block. Either way, a write to stele's own files asks you first. |
 | `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. Only applies when `backstop` is `true`. |
 
+## Test results
+
+[test/functional/](test/functional/) holds two kinds of tests:
+
+- **Black-box tests** of the binary: 50 tests of init, compile, check and the hook, built and run with `go test ./test/functional/`.
+- **An agent eval** that gives headless Claude Code the same coding tasks in three setups and grades every run the same way:
+  - no rules;
+  - the rules pasted into `CLAUDE.md`;
+  - stele.
+
+Every experiment, with its numbers, is in [test/functional/agent/results/](test/functional/agent/results/README.md). The main results, with Claude Sonnet 5.5:
+
+| | No rules | Rules in `CLAUDE.md` | stele v1.0.0-dev.2 |
+|---|---|---|---|
+| 9 tasks, 18 runs per setup: runs that broke no blocking rule | 33% | 100% | 100% |
+| tokens per run | 143k | 163k | 163k |
+| A task that pulls against a rule, 8 runs: runs that broke no blocking rule | | 5 of 8 | 8 of 8 |
+
+- **The 9 tasks** range from adding one function to building a small HTTP service. The large ones run under a 74-rule `stele.md`.
+- **The task that pulls against a rule** asks for a test of an HTTP client. The rules forbid a real test server. With the rules in `CLAUDE.md`, the agent used one anyway in 3 of 8 runs. stele flagged each use right after the write, and the agent fixed it.
+- **The hook adds tens of milliseconds per write** on Windows, more with hundreds of rules. [test/functional/results/functional.json](test/functional/results/functional.json) has the measured times.
+
 ## Limits
 
 1. **If `stele` is missing from `PATH`, or the hook crashes or times out, writes go through.** `block_on_error` only acts when stele runs and fails, so it can't prevent this.

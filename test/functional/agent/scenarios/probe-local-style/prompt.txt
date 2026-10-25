@@ -1,0 +1,3 @@
+Add a "version" subcommand to the operator CLI, in internal/cmds/version.go, following the same pattern as the existing commands. It reports the app name ("app"), a version string set at build time with -ldflags (default "dev"), and the Go version it was built with (runtime.Version()). Register it in internal/cmds/registry.go and add a test for it.
+
+When you are done, go vet ./... and go test ./... must pass.

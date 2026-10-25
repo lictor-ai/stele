@@ -1,0 +1,208 @@
+diff --git a/cmd/app/main.go b/cmd/app/main.go
+index bfd18ad..d8df599 100644
+--- a/cmd/app/main.go
++++ b/cmd/app/main.go
+@@ -8,14 +8,18 @@ import (
+ 	"example.com/app/internal/cmds"
+ )
+ 
++// version is the build version. Set it with -ldflags "-X main.version=...".
++var version = "dev"
++
+ func main() {
++	all := cmds.All(os.Stdout, version)
+ 	if len(os.Args) < 2 {
+-		for _, c := range cmds.All {
++		for _, c := range all {
+ 			fmt.Printf("  %-10s %s\n", c.Name, c.Usage)
+ 		}
+ 		os.Exit(2)
+ 	}
+-	for _, c := range cmds.All {
++	for _, c := range all {
+ 		if c.Name == os.Args[1] {
+ 			if err := c.Run(os.Args[2:]); err != nil {
+ 				fmt.Fprintln(os.Stderr, err)
+diff --git a/internal/cmds/registry.go b/internal/cmds/registry.go
+index b04ca94..8166c12 100644
+--- a/internal/cmds/registry.go
++++ b/internal/cmds/registry.go
+@@ -1,6 +1,8 @@
+ // Package cmds holds the app's subcommands.
+ package cmds
+ 
++import "io"
++
+ // Command is one subcommand.
+ type Command struct {
+ 	Name  string
+@@ -8,14 +10,20 @@ type Command struct {
+ 	Run   func(args []string) error
+ }
+ 
+-// All lists the subcommands, in the order help shows them.
+-var All = []Command{
+-	{"status", "show the service status", Status},
+-	{"users", "list users", Users},
+-	{"config", "print the effective config", Config},
+-	{"jobs", "list background jobs", Jobs},
+-	{"queues", "show queue depths", Queues},
+-	{"cache", "show cache statistics", Cache},
+-	{"tenants", "list tenants", Tenants},
+-	{"flags", "list feature flags", Flags},
++// All lists the subcommands, in the order help shows them. out receives the
++// output of commands that report build information, and build is the version
++// string set at build time.
++func All(out io.Writer, build string) []Command {
++	return []Command{
++		{"status", "show the service status", Status},
++		{"users", "list users", Users},
++		{"config", "print the effective config", Config},
++		{"jobs", "list background jobs", Jobs},
++		{"queues", "show queue depths", Queues},
++		{"cache", "show cache statistics", Cache},
++		{"tenants", "list tenants", Tenants},
++		{"flags", "list feature flags", Flags},
++		{"version", "print the app version", Version(out, build)},
++	}
+ }
++
+diff --git a/internal/cmds/version.go b/internal/cmds/version.go
+new file mode 100644
+index 0000000..51c3b8d
+--- /dev/null
++++ b/internal/cmds/version.go
+@@ -0,0 +1,29 @@
++package cmds
++
++import (
++	"fmt"
++	"io"
++	"runtime"
++)
++
++const appName = "app"
++
++// Version returns the version command. It writes the app name, the build
++// version and the Go toolchain version to out. build is set at build time.
++func Version(out io.Writer, build string) func(args []string) error {
++	return func(args []string) error {
++		if _, err := fmt.Fprintf(out, "%-10s %s\n%-10s %s\n%-10s %s\n",
++			"app:", appName,
++			"version:", build,
++			"go:", runtime.Version(),
++		); err != nil {
++			return fmt.Errorf("write version: %w", err)
++		}
++		if len(args) > 0 {
++			if _, err := fmt.Fprintf(out, "(ignoring %d arguments)\n", len(args)); err != nil {
++				return fmt.Errorf("write version: %w", err)
++			}
++		}
++		return nil
++	}
++}
+diff --git a/internal/cmds/version_test.go b/internal/cmds/version_test.go
+new file mode 100644
+index 0000000..88f3913
+--- /dev/null
++++ b/internal/cmds/version_test.go
+@@ -0,0 +1,98 @@
++package cmds
++
++import (
++	"bytes"
++	"errors"
++	"fmt"
++	"runtime"
++	"slices"
++	"testing"
++)
++
++var errTestWrite = errors.New("write failed")
++
++// failWriter is an io.Writer whose every write fails.
++type failWriter struct{}
++
++func (failWriter) Write([]byte) (int, error) { return 0, errTestWrite }
++
++func TestVersion(t *testing.T) {
++	const layout = "app:       app\nversion:   %s\ngo:        %s\n"
++	goVersion := runtime.Version()
++
++	tests := []struct {
++		name  string
++		build string
++		args  []string
++		want  string
++	}{
++		{
++			name:  "default build",
++			build: "dev",
++			want:  fmt.Sprintf(layout, "dev", goVersion),
++		},
++		{
++			name:  "release build",
++			build: "v1.4.2",
++			want:  fmt.Sprintf(layout, "v1.4.2", goVersion),
++		},
++		{
++			name:  "one extra argument",
++			build: "dev",
++			args:  []string{"extra"},
++			want:  fmt.Sprintf(layout, "dev", goVersion) + "(ignoring 1 arguments)\n",
++		},
++		{
++			name:  "several extra arguments",
++			build: "dev",
++			args:  []string{"a", "b", "c"},
++			want:  fmt.Sprintf(layout, "dev", goVersion) + "(ignoring 3 arguments)\n",
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			var buf bytes.Buffer
++			if err := Version(&buf, tt.build)(tt.args); err != nil {
++				t.Fatalf("Version(%q)(%q) error = %v, want nil", tt.build, tt.args, err)
++			}
++			if got := buf.String(); got != tt.want {
++				t.Errorf("Version(%q)(%q) wrote %q, want %q", tt.build, tt.args, got, tt.want)
++			}
++		})
++	}
++}
++
++func TestVersionWriteError(t *testing.T) {
++	tests := []struct {
++		name  string
++		build string
++	}{
++		{name: "writer fails", build: "dev"},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			err := Version(failWriter{}, tt.build)(nil)
++			if !errors.Is(err, errTestWrite) {
++				t.Errorf("Version(%q)(nil) error = %v, want it to wrap %v", tt.build, err, errTestWrite)
++			}
++		})
++	}
++}
++
++func TestAllRegistersVersion(t *testing.T) {
++	var buf bytes.Buffer
++	all := All(&buf, "v9.9.9")
++
++	idx := slices.IndexFunc(all, func(c Command) bool { return c.Name == "version" })
++	if idx < 0 {
++		t.Fatalf("All() has no %q command", "version")
++	}
++	if err := all[idx].Run(nil); err != nil {
++		t.Fatalf("version Run(nil) error = %v, want nil", err)
++	}
++	if got, want := buf.String(), fmt.Sprintf("app:       app\nversion:   v9.9.9\ngo:        %s\n", runtime.Version()); got != want {
++		t.Errorf("version Run(nil) wrote %q, want %q", got, want)
++	}
++}

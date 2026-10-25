@@ -1,0 +1,281 @@
+diff --git a/cmd/app/main.go b/cmd/app/main.go
+index bfd18ad..c650f26 100644
+--- a/cmd/app/main.go
++++ b/cmd/app/main.go
+@@ -2,28 +2,37 @@
+ package main
+ 
+ import (
++	"errors"
+ 	"fmt"
++	"io"
+ 	"os"
+ 
+ 	"example.com/app/internal/cmds"
+ )
+ 
++// version is the build version. Set it with -ldflags "-X main.version=1.2.3".
++var version = "dev"
++
+ func main() {
+-	if len(os.Args) < 2 {
+-		for _, c := range cmds.All {
+-			fmt.Printf("  %-10s %s\n", c.Name, c.Usage)
++	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
++		fmt.Fprintln(os.Stderr, err)
++		os.Exit(1)
++	}
++}
++
++// run dispatches args[0] to its subcommand, which gets the rest of args.
++func run(args []string, stdout, stderr io.Writer) error {
++	commands := cmds.All(version, stdout)
++	if len(args) == 0 {
++		for _, c := range commands {
++			fmt.Fprintf(stderr, "  %-10s %s\n", c.Name, c.Usage)
+ 		}
+-		os.Exit(2)
++		return errors.New("no command given")
+ 	}
+-	for _, c := range cmds.All {
+-		if c.Name == os.Args[1] {
+-			if err := c.Run(os.Args[2:]); err != nil {
+-				fmt.Fprintln(os.Stderr, err)
+-				os.Exit(1)
+-			}
+-			return
++	for _, c := range commands {
++		if c.Name == args[0] {
++			return c.Run(args[1:])
+ 		}
+ 	}
+-	fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
+-	os.Exit(2)
++	return fmt.Errorf("unknown command %q", args[0])
+ }
+diff --git a/cmd/app/main_test.go b/cmd/app/main_test.go
+new file mode 100644
+index 0000000..c470619
+--- /dev/null
++++ b/cmd/app/main_test.go
+@@ -0,0 +1,50 @@
++package main
++
++import (
++	"strings"
++	"testing"
++)
++
++func TestRun(t *testing.T) {
++	tests := []struct {
++		name       string
++		args       []string
++		wantErr    bool
++		wantStdout string
++	}{
++		{
++			name:       "version prints the app name",
++			args:       []string{"version"},
++			wantErr:    false,
++			wantStdout: "app:       app\n",
++		},
++		{
++			name:       "version with extra args still runs",
++			args:       []string{"version", "extra"},
++			wantErr:    false,
++			wantStdout: "(ignoring 1 arguments)\n",
++		},
++		{
++			name:    "no command is an error",
++			args:    nil,
++			wantErr: true,
++		},
++		{
++			name:    "unknown command is an error",
++			args:    []string{"nope"},
++			wantErr: true,
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			var stdout, stderr strings.Builder
++			err := run(tt.args, &stdout, &stderr)
++			if (err != nil) != tt.wantErr {
++				t.Errorf("run(%q) error = %v, want error %v", tt.args, err, tt.wantErr)
++			}
++			if tt.wantStdout != "" && !strings.Contains(stdout.String(), tt.wantStdout) {
++				t.Errorf("run(%q) stdout = %q, want it to contain %q", tt.args, stdout.String(), tt.wantStdout)
++			}
++		})
++	}
++}
+diff --git a/internal/cmds/registry.go b/internal/cmds/registry.go
+index b04ca94..771bd38 100644
+--- a/internal/cmds/registry.go
++++ b/internal/cmds/registry.go
+@@ -1,6 +1,8 @@
+ // Package cmds holds the app's subcommands.
+ package cmds
+ 
++import "io"
++
+ // Command is one subcommand.
+ type Command struct {
+ 	Name  string
+@@ -8,14 +10,18 @@ type Command struct {
+ 	Run   func(args []string) error
+ }
+ 
+-// All lists the subcommands, in the order help shows them.
+-var All = []Command{
+-	{"status", "show the service status", Status},
+-	{"users", "list users", Users},
+-	{"config", "print the effective config", Config},
+-	{"jobs", "list background jobs", Jobs},
+-	{"queues", "show queue depths", Queues},
+-	{"cache", "show cache statistics", Cache},
+-	{"tenants", "list tenants", Tenants},
+-	{"flags", "list feature flags", Flags},
++// All lists the subcommands, in the order help shows them. version is the build
++// version the version command reports, and stdout is where it writes.
++func All(version string, stdout io.Writer) []Command {
++	return []Command{
++		{"status", "show the service status", Status},
++		{"users", "list users", Users},
++		{"config", "print the effective config", Config},
++		{"jobs", "list background jobs", Jobs},
++		{"queues", "show queue depths", Queues},
++		{"cache", "show cache statistics", Cache},
++		{"tenants", "list tenants", Tenants},
++		{"flags", "list feature flags", Flags},
++		NewVersion(version, stdout),
++	}
+ }
+diff --git a/internal/cmds/version.go b/internal/cmds/version.go
+new file mode 100644
+index 0000000..1a0ec20
+--- /dev/null
++++ b/internal/cmds/version.go
+@@ -0,0 +1,34 @@
++package cmds
++
++import (
++	"fmt"
++	"io"
++	"runtime"
++	"strings"
++)
++
++// AppName is the name the version command reports.
++const AppName = "app"
++
++// NewVersion returns the version subcommand. It writes the app name, the build
++// version and the Go version the binary was built with to stdout. version comes
++// from the caller, which sets it at build time.
++func NewVersion(version string, stdout io.Writer) Command {
++	return Command{
++		Name:  "version",
++		Usage: "print the app version",
++		Run: func(args []string) error {
++			var b strings.Builder
++			fmt.Fprintf(&b, "%-10s %s\n", "app:", AppName)
++			fmt.Fprintf(&b, "%-10s %s\n", "version:", version)
++			fmt.Fprintf(&b, "%-10s %s\n", "go:", runtime.Version())
++			if len(args) > 0 {
++				fmt.Fprintf(&b, "(ignoring %d arguments)\n", len(args))
++			}
++			if _, err := io.WriteString(stdout, b.String()); err != nil {
++				return fmt.Errorf("write version report: %w", err)
++			}
++			return nil
++		},
++	}
++}
+diff --git a/internal/cmds/version_test.go b/internal/cmds/version_test.go
+new file mode 100644
+index 0000000..0054d28
+--- /dev/null
++++ b/internal/cmds/version_test.go
+@@ -0,0 +1,82 @@
++package cmds
++
++import (
++	"errors"
++	"runtime"
++	"strings"
++	"testing"
++)
++
++var errDiskFull = errors.New("disk full")
++
++// failWriter fails every write, so the error path can be tested.
++type failWriter struct{}
++
++func (failWriter) Write([]byte) (int, error) { return 0, errDiskFull }
++
++func TestVersion(t *testing.T) {
++	goLine := "go:        " + runtime.Version() + "\n"
++	tests := []struct {
++		name    string
++		version string
++		args    []string
++		want    string
++	}{
++		{
++			name:    "no args",
++			version: "dev",
++			args:    nil,
++			want:    "app:       app\nversion:   dev\n" + goLine,
++		},
++		{
++			name:    "release version",
++			version: "1.4.0",
++			args:    []string{},
++			want:    "app:       app\nversion:   1.4.0\n" + goLine,
++		},
++		{
++			name:    "extra args are ignored and counted",
++			version: "dev",
++			args:    []string{"x", "y"},
++			want:    "app:       app\nversion:   dev\n" + goLine + "(ignoring 2 arguments)\n",
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			var b strings.Builder
++			c := NewVersion(tt.version, &b)
++			if err := c.Run(tt.args); err != nil {
++				t.Fatalf("version Run(%q) error = %v, want nil", tt.args, err)
++			}
++			if got := b.String(); got != tt.want {
++				t.Errorf("version Run(%q) wrote %q, want %q", tt.args, got, tt.want)
++			}
++		})
++	}
++}
++
++func TestVersionWriteError(t *testing.T) {
++	c := NewVersion("dev", failWriter{})
++	err := c.Run(nil)
++	if !errors.Is(err, errDiskFull) {
++		t.Errorf("version Run() error = %v, want it to wrap %v", err, errDiskFull)
++	}
++}
++
++func TestAllRegistersVersion(t *testing.T) {
++	var b strings.Builder
++	for _, c := range All("2.0.0", &b) {
++		if c.Name != "version" {
++			continue
++		}
++		if err := c.Run(nil); err != nil {
++			t.Fatalf("registered version Run(nil) error = %v, want nil", err)
++		}
++		want := "version:   2.0.0\n"
++		if !strings.Contains(b.String(), want) {
++			t.Errorf("registered version wrote %q, want it to contain %q", b.String(), want)
++		}
++		return
++	}
++	t.Errorf("All() has no command named %q", "version")
++}

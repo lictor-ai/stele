@@ -1,0 +1,4 @@
+# Each run's raw stream and session transcript are large (about 80 MB for
+# the runs so far). The summaries (<time>.jsonl, <time>.md) and each run's
+# diff are kept.
+results/**/2026*/*.jsonl

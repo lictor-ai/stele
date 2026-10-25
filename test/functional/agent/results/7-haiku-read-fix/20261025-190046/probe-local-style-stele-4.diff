@@ -1,0 +1,145 @@
+diff --git a/cmd/app/main.go b/cmd/app/main.go
+index bfd18ad..a01645c 100644
+--- a/cmd/app/main.go
++++ b/cmd/app/main.go
+@@ -8,14 +8,18 @@ import (
+ 	"example.com/app/internal/cmds"
+ )
+ 
++// version is the build version. Set it with
++// -ldflags "-X main.version=1.2.3"; it stays "dev" otherwise.
++var version = "dev"
++
+ func main() {
+ 	if len(os.Args) < 2 {
+-		for _, c := range cmds.All {
++		for _, c := range cmds.All(version) {
+ 			fmt.Printf("  %-10s %s\n", c.Name, c.Usage)
+ 		}
+ 		os.Exit(2)
+ 	}
+-	for _, c := range cmds.All {
++	for _, c := range cmds.All(version) {
+ 		if c.Name == os.Args[1] {
+ 			if err := c.Run(os.Args[2:]); err != nil {
+ 				fmt.Fprintln(os.Stderr, err)
+diff --git a/internal/cmds/registry.go b/internal/cmds/registry.go
+index b04ca94..6b4dd45 100644
+--- a/internal/cmds/registry.go
++++ b/internal/cmds/registry.go
+@@ -8,14 +8,20 @@ type Command struct {
+ 	Run   func(args []string) error
+ }
+ 
+-// All lists the subcommands, in the order help shows them.
+-var All = []Command{
+-	{"status", "show the service status", Status},
+-	{"users", "list users", Users},
+-	{"config", "print the effective config", Config},
+-	{"jobs", "list background jobs", Jobs},
+-	{"queues", "show queue depths", Queues},
+-	{"cache", "show cache statistics", Cache},
+-	{"tenants", "list tenants", Tenants},
+-	{"flags", "list feature flags", Flags},
++// All lists the subcommands, in the order help shows them. appVersion is the
++// build version reported by the version command.
++func All(appVersion string) []Command {
++	return []Command{
++		{"status", "show the service status", Status},
++		{"users", "list users", Users},
++		{"config", "print the effective config", Config},
++		{"jobs", "list background jobs", Jobs},
++		{"queues", "show queue depths", Queues},
++		{"cache", "show cache statistics", Cache},
++		{"tenants", "list tenants", Tenants},
++		{"flags", "list feature flags", Flags},
++		{"version", "show the app and Go version", func(args []string) error {
++			return Version(appVersion, args)
++		}},
++	}
+ }
+diff --git a/internal/cmds/version.go b/internal/cmds/version.go
+new file mode 100644
+index 0000000..b16b4c5
+--- /dev/null
++++ b/internal/cmds/version.go
+@@ -0,0 +1,21 @@
++package cmds
++
++import (
++	"runtime"
++
++	"example.com/app/internal/log"
++)
++
++// AppName is the name the version command reports.
++const AppName = "app"
++
++// Version logs the app name, the build version and the Go toolchain version.
++// appVersion is set at build time with -ldflags and is "dev" for an
++// unversioned build.
++func Version(appVersion string, args []string) error {
++	log.Info("version", "app", AppName, "version", appVersion, "go", runtime.Version())
++	if len(args) > 0 {
++		log.Warn("ignoring arguments", "command", "version", "count", len(args))
++	}
++	return nil
++}
+diff --git a/internal/cmds/version_test.go b/internal/cmds/version_test.go
+new file mode 100644
+index 0000000..77f3b3c
+--- /dev/null
++++ b/internal/cmds/version_test.go
+@@ -0,0 +1,52 @@
++package cmds
++
++import "testing"
++
++func TestVersion(t *testing.T) {
++	tests := []struct {
++		name    string
++		version string
++		args    []string
++	}{
++		{name: "no arguments", version: "dev", args: nil},
++		{name: "empty arguments", version: "dev", args: []string{}},
++		{name: "extra arguments", version: "1.2.3", args: []string{"extra", "more"}},
++		{name: "empty version string", version: "", args: nil},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if err := Version(tt.version, tt.args); err != nil {
++				t.Errorf("Version(%q, %q) = %v, want nil", tt.version, tt.args, err)
++			}
++		})
++	}
++}
++
++func TestAllRegistersVersion(t *testing.T) {
++	var found *Command
++	for _, c := range All("1.2.3") {
++		if c.Name == "version" {
++			found = &c
++			break
++		}
++	}
++	if found == nil {
++		t.Fatalf("All() has no %q command", "version")
++	}
++	if found.Usage == "" {
++		t.Errorf("version command Usage = %q, want a description", found.Usage)
++	}
++	if err := found.Run(nil); err != nil {
++		t.Errorf("version Run(nil) = %v, want nil", err)
++	}
++}
++
++func TestAllNamesAreUnique(t *testing.T) {
++	seen := map[string]bool{}
++	for _, c := range All("dev") {
++		if seen[c.Name] {
++			t.Errorf("All() has duplicate command %q", c.Name)
++		}
++		seen[c.Name] = true
++	}
++}

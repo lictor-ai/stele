@@ -1,0 +1,35 @@
+diff --git a/README.md b/README.md
+index 7643307..08fa842 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,8 @@
+ # platform
+ 
+ Services live in services/.
++
++## Health checks
++
++`GET /health` on the api service pings the database. It answers `200` with
++the body `ok` when the ping succeeds, and `503` otherwise.
+diff --git a/services/api/main.go b/services/api/main.go
+index 306b2dd..dbeeea1 100644
+--- a/services/api/main.go
++++ b/services/api/main.go
+@@ -8,7 +8,16 @@ import (
+ 
+ var conn = &db.DB{}
+ 
++func health(w http.ResponseWriter, r *http.Request) {
++	if err := conn.Ping(r.Context()); err != nil {
++		http.Error(w, "unavailable", http.StatusServiceUnavailable)
++		return
++	}
++	w.WriteHeader(http.StatusOK)
++	w.Write([]byte("ok"))
++}
++
+ func main() {
+-	_ = conn
++	http.HandleFunc("GET /health", health)
+ 	http.ListenAndServe(":8080", nil)
+ }
