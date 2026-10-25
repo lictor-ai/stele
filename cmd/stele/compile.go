@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -32,7 +33,7 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "stele compile: %v\n", err)
 		return exitCantRun
 	}
-	r, err := compile.Compile(context.Background(), root, sources(), uuid.NewString, key)
+	r, err := compile.Compile(context.Background(), root, sources(), generated(), uuid.NewString, key)
 	if err != nil {
 		fmt.Fprintf(stderr, "stele compile: %v\n", err)
 		return exitCantRun
@@ -111,15 +112,25 @@ func printCompile(w io.Writer, r compile.Result) {
 		}
 	}
 
-	switch {
-	case r.LockChanged && r.IndexChanged:
-		fmt.Fprintf(w, "wrote %s and %s\n", lock.FileName, indexName)
-	case r.LockChanged:
-		fmt.Fprintf(w, "wrote %s\n", lock.FileName)
-	case r.IndexChanged:
-		fmt.Fprintf(w, "wrote %s\n", indexName)
-	default:
+	var wrote []string
+	if r.LockChanged {
+		wrote = append(wrote, lock.FileName)
+	}
+	if r.IndexChanged {
+		wrote = append(wrote, indexName)
+	}
+	for _, f := range r.Files {
+		if f.Changed {
+			wrote = append(wrote, f.Path)
+		}
+	}
+	switch n := len(wrote); n {
+	case 0:
 		fmt.Fprintln(w, "up to date, nothing written")
+	case 1:
+		fmt.Fprintf(w, "wrote %s\n", wrote[0])
+	default:
+		fmt.Fprintf(w, "wrote %s and %s\n", strings.Join(wrote[:n-1], ", "), wrote[n-1])
 	}
 }
 

@@ -2,16 +2,19 @@
 //
 // Compiling reads every source, reconciles the rules against stele.lock, and
 // builds the index. Plan does all of that and writes nothing, which is what
-// stele check needs. Apply writes the lock and the index. EnsureFresh is the
-// quick check a coding session makes: built-in sources only (D45), and only
-// those whose fingerprint changed.
+// stele check needs. Apply writes the lock, the index, and the files
+// generated from the index for an agent to load. EnsureFresh is the quick
+// check a coding session makes: built-in sources only (D45), and only those
+// whose fingerprint changed.
 package compile
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/lictor-ai/stele/internal/index"
@@ -32,7 +35,40 @@ type Result struct {
 	// IndexChanged says the planned index differs from the one on disk, or
 	// there is no usable index.
 	IndexChanged bool
+	// Files are the generated files, in the order they were asked for.
+	Files []File
 }
+
+// Generated is a file compile writes from the index for an agent to load,
+// such as Claude Code's rules file (#68). compile knows its path and its
+// bytes, never its format.
+type Generated struct {
+	Path   string // relative to the root, slash-separated
+	Render func(index.Index) []byte
+}
+
+// File is a generated file as planned.
+type File struct {
+	Path string
+	Data []byte
+	// Changed says the file on disk differs, line ends and a byte order mark
+	// aside, or is missing or not a regular file.
+	Changed bool
+}
+
+// GeneratedError is a generated file that could not be written. Apply
+// returns it after the lock and the index are saved, so the rules still
+// apply: only the file an agent loads is out of date.
+type GeneratedError struct {
+	Path string
+	Err  error
+}
+
+func (e *GeneratedError) Error() string { return fmt.Sprintf("writing %s: %v", e.Path, e.Err) }
+func (e *GeneratedError) Unwrap() error { return e.Err }
+
+// maxGenerated caps a read of a generated file to compare it.
+const maxGenerated = 16 << 20
 
 const (
 	// lockName serialises compiles: stele compile, and EnsureFresh in each
@@ -49,18 +85,18 @@ const (
 // Plan reads every source and writes nothing. It holds no key, so it trusts
 // no index on disk and IndexChanged is always true: stele check, its caller,
 // never serves the index and never writes, so it needs neither.
-func Plan(ctx context.Context, root string, srcs []source.Source, newID func() string) (Result, error) {
+func Plan(ctx context.Context, root string, srcs []source.Source, gens []Generated, newID func() string) (Result, error) {
 	rules, fps, err := readAll(ctx, root, srcs)
 	if err != nil {
 		return Result{}, err
 	}
-	return plan(root, rules, fps, newID, false, nil)
+	return plan(root, rules, fps, gens, newID, false, nil)
 }
 
 // Compile is stele compile: it reads every source, then plans and applies
 // under the compile lock, so a concurrent EnsureFresh never interleaves its
 // writes with these.
-func Compile(ctx context.Context, root string, srcs []source.Source, newID func() string, key sign.Key) (Result, error) {
+func Compile(ctx context.Context, root string, srcs []source.Source, gens []Generated, newID func() string, key sign.Key) (Result, error) {
 	rules, fps, err := readAll(ctx, root, srcs)
 	if err != nil {
 		return Result{}, err
@@ -70,18 +106,19 @@ func Compile(ctx context.Context, root string, srcs []source.Source, newID func(
 		return Result{}, err
 	}
 	defer unlock()
-	r, err := plan(root, rules, fps, newID, false, key)
+	r, err := plan(root, rules, fps, gens, newID, false, key)
 	if err != nil {
 		return Result{}, err
 	}
 	return r, Apply(root, r, key)
 }
 
-// Apply writes what changed: the lock, then the index. The index holds ids
-// from the lock, so writing the lock first means a crash between the two
-// leaves an index that the next compile rebuilds, never a lost id. A caller
-// that plans and applies should hold the compile lock across both, as
-// Compile and EnsureFresh do.
+// Apply writes what changed: the lock, then the index, then the generated
+// files. The index holds ids from the lock, so writing the lock first means a
+// crash between the two leaves an index that the next compile rebuilds, never
+// a lost id; the generated files come from the index. A caller that plans and
+// applies should hold the compile lock across both, as Compile and
+// EnsureFresh do.
 func Apply(root string, r Result, key sign.Key) error {
 	if r.LockChanged {
 		if err := lock.Save(root, r.Lock); err != nil {
@@ -89,9 +126,67 @@ func Apply(root string, r Result, key sign.Key) error {
 		}
 	}
 	if r.IndexChanged {
-		return index.Save(root, r.Index, key)
+		if err := index.Save(root, r.Index, key); err != nil {
+			return err
+		}
+	}
+	return writeGenerated(root, r.Files)
+}
+
+// writeGenerated writes the files that changed. Every directory on the way
+// must be a plain one: a clone can commit a link there, and stele would then
+// write outside the repository.
+func writeGenerated(root string, files []File) error {
+	for _, f := range files {
+		if !f.Changed {
+			continue
+		}
+		parts := strings.Split(f.Path, "/")
+		dir := root
+		for _, p := range parts[:len(parts)-1] {
+			dir = filepath.Join(dir, p)
+			if err := safefile.Dir(dir); err != nil {
+				return &GeneratedError{f.Path, err}
+			}
+		}
+		if err := safefile.Replace(filepath.Join(root, filepath.FromSlash(f.Path)), f.Data); err != nil {
+			return &GeneratedError{f.Path, err}
+		}
 	}
 	return nil
+}
+
+// generate renders each generated file from idx and compares it with the
+// one on disk.
+func generate(root string, idx index.Index, gens []Generated) []File {
+	files := make([]File, len(gens))
+	for i, g := range gens {
+		data := g.Render(idx)
+		disk, err := safefile.ReadRegular(filepath.Join(root, filepath.FromSlash(g.Path)), maxGenerated)
+		files[i] = File{Path: g.Path, Data: data, Changed: err != nil || !sameText(disk, data)}
+	}
+	return files
+}
+
+// sameText reports whether a and b are the same text, as a checkout may
+// change line ends and add a byte order mark.
+func sameText(a, b []byte) bool {
+	norm := func(s []byte) []byte {
+		s = bytes.TrimPrefix(s, []byte("\xef\xbb\xbf"))
+		return bytes.ReplaceAll(s, []byte("\r\n"), []byte("\n"))
+	}
+	return bytes.Equal(norm(a), norm(b))
+}
+
+// staleGenerated reports whether a generated file differs from what idx
+// gives.
+func staleGenerated(root string, idx index.Index, gens []Generated) bool {
+	for _, f := range generate(root, idx, gens) {
+		if f.Changed {
+			return true
+		}
+	}
+	return false
 }
 
 // EnsureFresh re-reads only builtins, and only those whose fingerprint
@@ -103,9 +198,12 @@ func Apply(root string, r Result, key sign.Key) error {
 // It never reads an external source, so it never drops one's lock entries
 // either: their rules keep their ids for the next stele compile, even when
 // the index no longer holds them.
-func EnsureFresh(ctx context.Context, root string, builtins []source.Source, newID func() string, key sign.Key) (index.Index, bool, error) {
+//
+// A generated file can be stale while the index is fresh, after a branch
+// switch or a deletion: then only the file is rewritten.
+func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gens []Generated, newID func() string, key sign.Key) (index.Index, bool, error) {
 	cur, ok, stale, err := staleness(ctx, root, builtins, key)
-	if err != nil || (ok && len(stale) == 0) {
+	if err != nil || (ok && len(stale) == 0 && !staleGenerated(root, cur, gens)) {
 		return cur, false, err
 	}
 
@@ -116,8 +214,11 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, new
 	defer unlock()
 	// Another process may have rebuilt while this one waited for the lock.
 	cur, ok, stale, err = staleness(ctx, root, builtins, key)
-	if err != nil || (ok && len(stale) == 0) {
+	if err != nil {
 		return cur, false, err
+	}
+	if ok && len(stale) == 0 {
+		return cur, false, writeGenerated(root, generate(root, cur, gens))
 	}
 
 	// Rules keep the order Plan gives them: builtins first, then the rest in
@@ -147,7 +248,7 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, new
 		}
 	}
 
-	r, err := plan(root, rules, fps, newID, true, key)
+	r, err := plan(root, rules, fps, gens, newID, true, key)
 	if err != nil {
 		return index.Index{}, false, err
 	}
@@ -217,7 +318,7 @@ func read(ctx context.Context, root string, s source.Source) ([]source.Rule, str
 // plan reconciles rules against stele.lock and builds the index. keepUnread
 // keeps the lock entries of sources that were not read, so a rebuild from the
 // builtins alone does not cost external rules their ids.
-func plan(root string, rules []source.Rule, fps map[string]string, newID func() string, keepUnread bool, key sign.Key) (Result, error) {
+func plan(root string, rules []source.Rule, fps map[string]string, gens []Generated, newID func() string, keepUnread bool, key sign.Key) (Result, error) {
 	prev, err := lock.Load(root)
 	if err != nil {
 		return Result{}, err
@@ -269,6 +370,7 @@ func plan(root string, rules []source.Rule, fps map[string]string, newID func() 
 		Report:       rep,
 		LockChanged:  !lock.Equal(prev, next),
 		IndexChanged: err != nil || !index.Equal(cur, idx),
+		Files:        generate(root, idx, gens),
 	}, nil
 }
 
