@@ -58,7 +58,7 @@ func DecideBash(in BashInput, st session.State, p enforce.Policy) (BashDecision,
 		}
 		d.Files = append(d.Files, f.File)
 		for _, r := range f.Rules {
-			if _, seen := shown[r.ID]; !seen && !listed[r.ID] {
+			if _, seen := shown[r.ID]; !seen && !listed[r.ID] && !loaded(st, in.AgentID, r) {
 				listed[r.ID] = true
 				d.Rules = append(d.Rules, r)
 				fresh = append(fresh, r.ID)

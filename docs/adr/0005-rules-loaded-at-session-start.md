@@ -48,8 +48,7 @@ recompile and `init` (D62). The hook records, at `SessionStart` and
 others. A session never sees a change to the file until its next resume or
 compaction, and a `SessionStart` hook runs too late to refresh it, so stele
 records what the file held when the session read it, never what it writes
-next. The file is built first; recording what each session loaded comes in a
-second change (#68).
+next. Both are built (#68): the file first, then the recording.
 
 ### Positive Consequences
 

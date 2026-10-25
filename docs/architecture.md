@@ -405,6 +405,7 @@ type State struct {
     PromptID  string                          // the turn Shown belongs to
     Shown     map[string]map[string]time.Time // agent id ("" = main) → rule id → when shown
     Denied    map[string]map[string]time.Time // agent id → root-relative file → when its write was last denied
+    Primed    map[string]map[string]string    // agent id → rule id → hash of its block in the rules file the agent loaded
     UpdatedAt time.Time
 }
 
@@ -533,7 +534,10 @@ UUID alone is unreadable later and a deleted rule resolves to nothing (spec §7)
 Pure, as in §2.
 
 ```go
-type Rule struct{ ID, Text string }
+type Rule struct {
+    ID, Text string
+    Hash     string // the rule's block hash in the rules file (claudecode.RuleHash); "" never counts as loaded
+}
 
 type Input struct {
     PromptID string    // the turn
@@ -558,6 +562,15 @@ the root from the written file's path (§6), the index kept fresh with
 `compile.EnsureFresh` and the built-in sources, and the rules whose `scope`
 matches the file's root-relative path (`internal/scope`). Unlike the spec's hook,
 v1's reads rule content (ADR-0004).
+
+A rule the agent loaded from `.claude/rules/stele-rules.md` counts as seen for
+the whole session, in `Decide` and `DecideBash` alike, when
+`State.Primed[agent][id]` equals the rule's `Hash` (ADR-0005, D62): its text and
+scope have not changed since the agent read them. That test comes before the
+turn's `Shown`, the retry and the window, and the turn reset keeps `Primed`. A
+subagent uses only its own record. A Bash write of a file with scoped rules is
+still denied once when every rule is loaded, listing none: the write would go
+unchecked.
 
 The order is the whole behaviour:
 
@@ -1181,9 +1194,45 @@ files with Write and Edit only, never through Bash, which skips both write
 hooks (#50). Claude Code adds it before the first prompt, and SessionStart
 fires again after `/clear` and compaction. The text is the asset
 `session-context.tmpl`; the deny and violation messages carry the same
-sentence. It reads nothing but the root: no key, no index, no session state.
-Outside a stele project it says nothing. A monorepo whose only `stele.md` is in
-a subdirectory gets no context when Claude Code starts at the top.
+sentence. Outside a stele project it says nothing. A monorepo whose only
+`stele.md` is in a subdirectory gets no context when Claude Code starts at the
+top.
+
+The same hook records which rules the agent loaded (#68). Claude Code reads
+`.claude/rules/stele-rules.md` at launch, resume and compaction, and when a
+subagent starts, before this hook runs, and a running session never sees a
+later change to it. So the hook reads the file as it is now, which is what the
+agent read, and records its blocks' hashes in `State.Primed`, under `""` for
+`SessionStart` (every `source`) or the payload's `agent_id` for
+`SubagentStart`, replacing that agent's earlier record. Only then does it
+refresh the index, which rewrites a stale file for the next session: recording
+after the rewrite would count rules the agent never read. A file without
+stele's header primes nothing. The race is accepted: if stele rewrites the file
+between Claude Code's read and the hook's, the hook records the newer text,
+for rules that changed in those milliseconds.
+
+It primes only when Claude Code runs in the root itself (`cwd` is the root):
+whether a session in a subdirectory loads the root's file is not measured, and
+priming a rule the agent did not load is the one unsafe mistake.
+
+Claude Code reloads the file from the directory it was launched in, while the
+hook's `cwd` follows the agent's `cd`. So a `SessionStart` with `source`
+`startup` or `resume` marks this root's state as the session's launch root
+(`State.LaunchRoot`), and a `compact` or `clear`, or a `SubagentStart`, primes
+only a root so marked; in any other root a `compact` or `clear` clears the main
+agent's record. A session is resumed from the directory it was started in
+(Claude Code lists sessions per project directory), so a launch root never
+moves within one session.
+
+A `SubagentStart` primes only a subagent whose `agent_type` is measured to
+load `.claude/rules` (`loadsRules`): `general-purpose` does; the built-in
+`Explore` and `Plan` do not (their transcripts had no instructions
+attachment, and they could not quote the rule; Claude Code 2.1.310,
+2026-10-25). Any other type, a custom agent's included, primes nothing until
+measured. A `SubagentStart` with no `agent_id` primes nothing. A session keeps at most 32
+agents' records; past that, other subagents' are dropped, which costs denies,
+never a missed rule. Every error (no key, an unreadable file, state not saved)
+primes nothing and is not reported: the deny still shows every rule.
 
 `init` is up to date only when each of these events has exactly one stele
 handler, with this version, in a group with the registered matcher; so a
