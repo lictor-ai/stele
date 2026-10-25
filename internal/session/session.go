@@ -78,6 +78,12 @@ type State struct {
 	// was stopped from writing and when (#57): agent id to root-relative file
 	// to time. The same command run again is let through.
 	BashDenied map[string]map[string]time.Time `json:"bash_denied,omitempty"`
+	// Primed records, per agent ("" for the main agent), the rules in
+	// .claude/rules/stele-rules.md as that agent loaded it: rule id to a hash
+	// of the block's text (#68). Claude Code loads the file at session start,
+	// resume and compaction, and when a subagent starts, and keeps it for the
+	// session, so the turn reset does not clear it.
+	Primed map[string]map[string]string `json:"primed,omitempty"`
 	// VersionWarned is the version mismatch the user was last warned of,
 	// so the warning comes once a session.
 	VersionWarned string `json:"version_warned,omitempty"`
