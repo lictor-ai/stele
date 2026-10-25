@@ -125,7 +125,7 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "SessionStart", "session_id": "s1", "transcript_path": "/t.jsonl",
 				"cwd": cwd, "source": "startup", "model": "claude-sonnet-5-5",
 			},
-			want: Event{Name: "SessionStart", SessionID: "s1", Cwd: cwd},
+			want: Event{Name: "SessionStart", SessionID: "s1", Source: "startup", Cwd: cwd},
 		},
 	}
 	for _, tt := range tests {

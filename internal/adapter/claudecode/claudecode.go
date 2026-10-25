@@ -46,6 +46,8 @@ type Event struct {
 	SessionID string
 	PromptID  string // the user turn; empty before the first prompt
 	AgentID   string // empty for the main agent
+	AgentType string // a SubagentStart's agent_type: "general-purpose", "Explore", …
+	Source    string // a SessionStart's source: "startup", "resume", "clear", "compact"
 	Cwd       string // the directory Claude Code runs in
 	ToolName  string
 	// File is the absolute path of the file the tool writes, or "" when the
@@ -126,6 +128,8 @@ func Parse(stdin []byte) (Event, error) {
 		SessionID     string `json:"session_id"`
 		PromptID      string `json:"prompt_id"`
 		AgentID       string `json:"agent_id"`
+		AgentType     string `json:"agent_type"`
+		Source        string `json:"source"`
 		Cwd           string `json:"cwd"`
 		ToolName      string `json:"tool_name"`
 		ToolInput     struct {
@@ -157,6 +161,8 @@ func Parse(stdin []byte) (Event, error) {
 		SessionID: p.SessionID,
 		PromptID:  p.PromptID,
 		AgentID:   p.AgentID,
+		AgentType: p.AgentType,
+		Source:    p.Source,
 		Cwd:       p.Cwd,
 		ToolName:  p.ToolName,
 	}
