@@ -1,0 +1,193 @@
+{
+  "_meta": {
+    "at": "2026-10-25T20:27:03+01:00",
+    "cpus": 8,
+    "goarch": "amd64",
+    "goos": "windows",
+    "token_estimate": "bytes/4 (cl100k-like average for English and code)"
+  },
+  "check_all_2000_files_ms": 4374,
+  "column_after_unicode": [
+    "1:18"
+  ],
+  "fast_retry_1500ms_denies": 1,
+  "hook_latency": {
+    "3_rules": {
+      "cold_first_write_ms": 109,
+      "post_clean": {
+        "N": 40,
+        "P50": 19.885,
+        "P95": 51.128,
+        "P99": 65.964,
+        "Max": 65.964,
+        "Mean": 24.308924999999995
+      },
+      "post_violating": {
+        "N": 40,
+        "P50": 20.142,
+        "P95": 31.905,
+        "P99": 32.482,
+        "Max": 32.482,
+        "Mean": 21.479699999999994
+      },
+      "pre_allow": {
+        "N": 40,
+        "P50": 64.974,
+        "P95": 89.533,
+        "P99": 275.581,
+        "Max": 275.581,
+        "Mean": 71.259175
+      },
+      "pre_deny": {
+        "N": 40,
+        "P50": 66.33,
+        "P95": 99.387,
+        "P99": 130.214,
+        "Max": 130.214,
+        "Mean": 69.36439999999997
+      }
+    },
+    "500_rules": {
+      "cold_first_write_ms": 167,
+      "post_clean": {
+        "N": 40,
+        "P50": 36.079,
+        "P95": 50.272,
+        "P99": 64.264,
+        "Max": 64.264,
+        "Mean": 37.16962499999999
+      },
+      "post_violating": {
+        "N": 40,
+        "P50": 37.585,
+        "P95": 71.799,
+        "P99": 79.932,
+        "Max": 79.932,
+        "Mean": 41.0936
+      },
+      "pre_allow": {
+        "N": 40,
+        "P50": 80.151,
+        "P95": 136.299,
+        "P99": 165.841,
+        "Max": 165.841,
+        "Mean": 85.16182500000002
+      },
+      "pre_deny": {
+        "N": 40,
+        "P50": 82.524,
+        "P95": 110.26,
+        "P99": 114.729,
+        "Max": 114.729,
+        "Mean": 83.68954999999997
+      }
+    },
+    "50_rules": {
+      "cold_first_write_ms": 108,
+      "post_clean": {
+        "N": 40,
+        "P50": 22.801,
+        "P95": 46.858,
+        "P99": 197.089,
+        "Max": 197.089,
+        "Mean": 28.772324999999995
+      },
+      "post_violating": {
+        "N": 40,
+        "P50": 22.208,
+        "P95": 38.738,
+        "P99": 38.957,
+        "Max": 38.957,
+        "Mean": 24.726549999999996
+      },
+      "pre_allow": {
+        "N": 40,
+        "P50": 67.125,
+        "P95": 108.191,
+        "P99": 115.879,
+        "Max": 115.879,
+        "Mean": 70.4179
+      },
+      "pre_deny": {
+        "N": 40,
+        "P50": 68.166,
+        "P95": 99.955,
+        "P99": 111.741,
+        "Max": 111.741,
+        "Mean": 70.74202499999998
+      }
+    },
+    "process_start_only": {
+      "N": 40,
+      "P50": 15.933,
+      "P95": 21.798,
+      "P99": 22.729,
+      "Max": 22.729,
+      "Mean": 16.212075000000002
+    }
+  },
+  "hook_recompile_500_rules": {
+    "N": 10,
+    "P50": 212.273,
+    "P95": 295.498,
+    "P99": 295.498,
+    "Max": 295.498,
+    "Mean": 220.4813
+  },
+  "injected_text": {
+    "many_unscoped_20_rules": {
+      "deny_bytes": 3305,
+      "deny_est_tokens": 827,
+      "rules_file_bytes": 3024,
+      "rules_file_est_tokens": 756
+    },
+    "one_violation_block": {
+      "bytes": 349,
+      "est_tokens": 88
+    },
+    "readme_example_3_rules": {
+      "deny_bytes": 426,
+      "deny_est_tokens": 107,
+      "rules_file_bytes": 343,
+      "rules_file_est_tokens": 86
+    },
+    "this_repo_stele_md": {
+      "deny_bytes": 1871,
+      "deny_est_tokens": 468,
+      "rules_file_bytes": 4298,
+      "rules_file_est_tokens": 1075
+    }
+  },
+  "post_500_violations": {
+    "bytes": 2432,
+    "est_tokens": 608,
+    "shown": 20
+  },
+  "post_block_message_bytes": 695,
+  "post_large_files": {
+    "10240_bytes": {
+      "N": 5,
+      "P50": 19.616,
+      "P95": 78.576,
+      "P99": 78.576,
+      "Max": 78.576,
+      "Mean": 30.971999999999998
+    },
+    "1048576_bytes": {
+      "N": 5,
+      "P50": 24.806,
+      "P95": 45.985,
+      "P99": 45.985,
+      "Max": 45.985,
+      "Mean": 27.3772
+    },
+    "16777216_bytes": {
+      "N": 5,
+      "P50": 63.549,
+      "P95": 86.187,
+      "P99": 86.187,
+      "Max": 86.187,
+      "Mean": 67.5602
+    }
+  }
+}

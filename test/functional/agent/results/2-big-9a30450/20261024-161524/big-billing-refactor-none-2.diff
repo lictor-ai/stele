@@ -1,0 +1,306 @@
+diff --git a/internal/billing/billing.go b/internal/billing/billing.go
+index 2367cf6..4d714fe 100644
+--- a/internal/billing/billing.go
++++ b/internal/billing/billing.go
+@@ -20,6 +20,14 @@ type Invoice struct {
+ 	Lines      []Line    `json:"lines"`
+ 	TotalCents int64     `json:"total_cents"`
+ 	IssuedAt   time.Time `json:"issued_at"`
++
++	// TotalCents is the pre-discount, pre-tax total of the lines.
++	DiscountCents   int64  `json:"discount_cents"`
++	DiscountCode    string `json:"discount_code,omitempty"`
++	Region          string `json:"region,omitempty"`
++	TaxRateBps      int64  `json:"tax_rate_bps,omitempty"`
++	TaxCents        int64  `json:"tax_cents"`
++	GrandTotalCents int64  `json:"grand_total_cents"`
+ }
+ 
+ // Compute builds an invoice for a customer.
+@@ -32,7 +40,7 @@ func Compute(id, customer string, lines []Line) Invoice {
+ 		total += int64(l.Quantity) * l.UnitCents
+ 	}
+ 	fmt.Printf("computed invoice %s for %s: %d\n", id, customer, total)
+-	return Invoice{ID: id, Customer: customer, Lines: lines, TotalCents: total, IssuedAt: time.Now()}
++	return Invoice{ID: id, Customer: customer, Lines: lines, TotalCents: total, GrandTotalCents: total, IssuedAt: time.Now()}
+ }
+ 
+ // Describe returns a one-line summary of an invoice.
+diff --git a/internal/billing/discount.go b/internal/billing/discount.go
+new file mode 100644
+index 0000000..6fef5f7
+--- /dev/null
++++ b/internal/billing/discount.go
+@@ -0,0 +1,114 @@
++package billing
++
++import (
++	"errors"
++	"fmt"
++	"sync"
++	"time"
++)
++
++// Errors returned when applying discounts and tax.
++var (
++	ErrCodeExpired     = errors.New("billing: discount code expired")
++	ErrCodeAlreadyUsed = errors.New("billing: discount code already used by customer")
++	ErrCodeApplied     = errors.New("billing: invoice already has a discount code")
++	ErrInvalidCode     = errors.New("billing: invalid discount code")
++	ErrUnknownRegion   = errors.New("billing: no tax rate for region")
++)
++
++// DiscountKind says how a DiscountCode reduces an invoice.
++type DiscountKind int
++
++const (
++	// Percent takes Value basis points off (1000 = 10%).
++	Percent DiscountKind = iota
++	// Fixed takes Value cents off.
++	Fixed
++)
++
++// DiscountCode is a percentage or fixed amount off, with an optional expiry.
++type DiscountCode struct {
++	Code      string
++	Kind      DiscountKind
++	Value     int64     // basis points for Percent, cents for Fixed
++	ExpiresAt time.Time // zero means never expires
++}
++
++// Amount returns the discount in cents for the given total, capped at total.
++// Percentages are rounded half up.
++func (c DiscountCode) Amount(total int64) int64 {
++	var d int64
++	switch c.Kind {
++	case Percent:
++		d = (total*c.Value + 5000) / 10000
++	case Fixed:
++		d = c.Value
++	}
++	if d > total {
++		d = total
++	}
++	if d < 0 {
++		d = 0
++	}
++	return d
++}
++
++// Redeemer tracks which customers have used which codes. It is safe for
++// concurrent use.
++type Redeemer struct {
++	mu   sync.Mutex
++	used map[[2]string]bool
++}
++
++// NewRedeemer returns an empty Redeemer.
++func NewRedeemer() *Redeemer {
++	return &Redeemer{used: map[[2]string]bool{}}
++}
++
++// Apply applies code to inv as of now. It fails, leaving inv and the usage
++// record untouched, if the code is invalid or expired, the customer has used
++// it before, or the invoice already has a code.
++func (r *Redeemer) Apply(inv *Invoice, code DiscountCode, now time.Time) error {
++	if code.Code == "" || code.Value < 0 || (code.Kind != Percent && code.Kind != Fixed) {
++		return ErrInvalidCode
++	}
++	if inv.DiscountCode != "" {
++		return ErrCodeApplied
++	}
++	if !code.ExpiresAt.IsZero() && !now.Before(code.ExpiresAt) {
++		return ErrCodeExpired
++	}
++	key := [2]string{inv.Customer, code.Code}
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	if r.used[key] {
++		return ErrCodeAlreadyUsed
++	}
++	r.used[key] = true
++	inv.DiscountCode = code.Code
++	inv.DiscountCents = code.Amount(inv.TotalCents)
++	inv.recalc()
++	return nil
++}
++
++// TaxTable maps a region (e.g. "FR", "US-CA") to a tax rate in basis points.
++type TaxTable map[string]int64
++
++// ApplyTax sets the invoice region and computes tax on the post-discount
++// total, rounding half up.
++func ApplyTax(inv *Invoice, region string, table TaxTable) error {
++	rate, ok := table[region]
++	if !ok {
++		return fmt.Errorf("%w: %q", ErrUnknownRegion, region)
++	}
++	inv.Region = region
++	inv.TaxRateBps = rate
++	inv.recalc()
++	return nil
++}
++
++func (inv *Invoice) recalc() {
++	net := inv.TotalCents - inv.DiscountCents
++	inv.TaxCents = (net*inv.TaxRateBps + 5000) / 10000
++	inv.GrandTotalCents = net + inv.TaxCents
++}
+diff --git a/internal/billing/discount_test.go b/internal/billing/discount_test.go
+new file mode 100644
+index 0000000..9eeb283
+--- /dev/null
++++ b/internal/billing/discount_test.go
+@@ -0,0 +1,115 @@
++package billing
++
++import (
++	"bytes"
++	"errors"
++	"testing"
++	"time"
++)
++
++var now = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
++
++func inv(customer string, cents int64) Invoice {
++	return Invoice{ID: "i", Customer: customer, TotalCents: cents, GrandTotalCents: cents}
++}
++
++func TestPercentRounding(t *testing.T) {
++	i := inv("a", 105)
++	// 10% of 105 = 10.5 -> 11
++	if err := NewRedeemer().Apply(&i, DiscountCode{Code: "P", Kind: Percent, Value: 1000}, now); err != nil {
++		t.Fatal(err)
++	}
++	if i.DiscountCents != 11 || i.GrandTotalCents != 94 {
++		t.Errorf("got %d/%d", i.DiscountCents, i.GrandTotalCents)
++	}
++}
++
++func TestFixedFloorsAtZero(t *testing.T) {
++	i := inv("a", 500)
++	if err := NewRedeemer().Apply(&i, DiscountCode{Code: "F", Kind: Fixed, Value: 900}, now); err != nil {
++		t.Fatal(err)
++	}
++	if i.DiscountCents != 500 || i.GrandTotalCents != 0 {
++		t.Errorf("got %d/%d", i.DiscountCents, i.GrandTotalCents)
++	}
++}
++
++func TestExpiry(t *testing.T) {
++	r := NewRedeemer()
++	c := DiscountCode{Code: "E", Kind: Fixed, Value: 1, ExpiresAt: now}
++	i := inv("a", 100)
++	if err := r.Apply(&i, c, now); !errors.Is(err, ErrCodeExpired) {
++		t.Errorf("at expiry: %v", err)
++	}
++	if err := r.Apply(&i, c, now.Add(-time.Second)); err != nil {
++		t.Errorf("before expiry: %v", err)
++	}
++}
++
++func TestReuseAndOnePerInvoice(t *testing.T) {
++	r := NewRedeemer()
++	c := DiscountCode{Code: "R", Kind: Fixed, Value: 10}
++	i1 := inv("a", 100)
++	if err := r.Apply(&i1, c, now); err != nil {
++		t.Fatal(err)
++	}
++	i2 := inv("a", 100)
++	if err := r.Apply(&i2, c, now); !errors.Is(err, ErrCodeAlreadyUsed) {
++		t.Errorf("reuse: %v", err)
++	}
++	i3 := inv("b", 100)
++	if err := r.Apply(&i3, c, now); err != nil {
++		t.Errorf("other customer: %v", err)
++	}
++	if err := r.Apply(&i1, DiscountCode{Code: "X", Kind: Fixed, Value: 1}, now); !errors.Is(err, ErrCodeApplied) {
++		t.Errorf("second code: %v", err)
++	}
++	// A rejected application must not consume the code.
++	i4 := inv("c", 100)
++	i4.DiscountCode = "Y"
++	_ = r.Apply(&i4, DiscountCode{Code: "Z", Kind: Fixed, Value: 1}, now)
++	i5 := inv("c", 100)
++	if err := r.Apply(&i5, DiscountCode{Code: "Z", Kind: Fixed, Value: 1}, now); err != nil {
++		t.Errorf("rejected apply consumed code: %v", err)
++	}
++}
++
++func TestTax(t *testing.T) {
++	table := TaxTable{"FR": 2000, "US-CA": 725}
++	i := inv("a", 1000)
++	if err := NewRedeemer().Apply(&i, DiscountCode{Code: "D", Kind: Fixed, Value: 200}, now); err != nil {
++		t.Fatal(err)
++	}
++	if err := ApplyTax(&i, "FR", table); err != nil {
++		t.Fatal(err)
++	}
++	if i.TaxCents != 160 || i.GrandTotalCents != 960 {
++		t.Errorf("got tax %d grand %d", i.TaxCents, i.GrandTotalCents)
++	}
++	if err := ApplyTax(&i, "XX", table); !errors.Is(err, ErrUnknownRegion) {
++		t.Errorf("unknown: %v", err)
++	}
++	// Discount after tax still taxes the discounted total.
++	j := inv("a", 1000)
++	_ = ApplyTax(&j, "FR", table)
++	_ = NewRedeemer().Apply(&j, DiscountCode{Code: "D", Kind: Fixed, Value: 200}, now)
++	if j.TaxCents != 160 || j.GrandTotalCents != 960 {
++		t.Errorf("order: tax %d grand %d", j.TaxCents, j.GrandTotalCents)
++	}
++}
++
++func TestWriteCSV(t *testing.T) {
++	i := inv("ac,me", 1000)
++	i.ID = "inv1"
++	i.IssuedAt = now
++	_ = ApplyTax(&i, "DE", TaxTable{"DE": 1900})
++	var b bytes.Buffer
++	if err := WriteCSV(&b, []Invoice{i}); err != nil {
++		t.Fatal(err)
++	}
++	want := "id,customer,region,issued_at,total,discount,tax,grand_total\n" +
++		"inv1,\"ac,me\",DE,2026-01-01T00:00:00Z,1000,0,190,1190\n"
++	if b.String() != want {
++		t.Errorf("got\n%s\nwant\n%s", b.String(), want)
++	}
++}
+diff --git a/internal/billing/export.go b/internal/billing/export.go
+new file mode 100644
+index 0000000..8910c44
+--- /dev/null
++++ b/internal/billing/export.go
+@@ -0,0 +1,31 @@
++package billing
++
++import (
++	"encoding/csv"
++	"io"
++	"strconv"
++	"time"
++)
++
++// WriteCSV writes invoices as CSV with a header row. Amounts are in cents.
++func WriteCSV(w io.Writer, invoices []Invoice) error {
++	cw := csv.NewWriter(w)
++	if err := cw.Write([]string{"id", "customer", "region", "issued_at", "total", "discount", "tax", "grand_total"}); err != nil {
++		return err
++	}
++	for _, inv := range invoices {
++		err := cw.Write([]string{
++			inv.ID, inv.Customer, inv.Region,
++			inv.IssuedAt.Format(time.RFC3339),
++			strconv.FormatInt(inv.TotalCents, 10),
++			strconv.FormatInt(inv.DiscountCents, 10),
++			strconv.FormatInt(inv.TaxCents, 10),
++			strconv.FormatInt(inv.GrandTotalCents, 10),
++		})
++		if err != nil {
++			return err
++		}
++	}
++	cw.Flush()
++	return cw.Error()
++}

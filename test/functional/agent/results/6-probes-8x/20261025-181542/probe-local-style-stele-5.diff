@@ -1,0 +1,108 @@
+diff --git a/internal/cmds/registry.go b/internal/cmds/registry.go
+index b04ca94..dc6fd55 100644
+--- a/internal/cmds/registry.go
++++ b/internal/cmds/registry.go
+@@ -18,4 +18,5 @@ var All = []Command{
+ 	{"cache", "show cache statistics", Cache},
+ 	{"tenants", "list tenants", Tenants},
+ 	{"flags", "list feature flags", Flags},
++	{"version", "print the app version", Version},
+ }
+diff --git a/internal/cmds/version.go b/internal/cmds/version.go
+new file mode 100644
+index 0000000..a4fbfc0
+--- /dev/null
++++ b/internal/cmds/version.go
+@@ -0,0 +1,29 @@
++package cmds
++
++import (
++	"runtime"
++
++	"example.com/app/internal/log"
++)
++
++// appName is the name the version report uses.
++const appName = "app"
++
++// version is the build version. Release builds set it with
++// -ldflags "-X example.com/app/internal/cmds.version=1.2.3".
++var version = "dev"
++
++// buildInfo returns the app name, build version and Go toolchain version.
++func buildInfo() (app, ver, goVersion string) {
++	return appName, version, runtime.Version()
++}
++
++// Version logs the app name, build version and Go version.
++func Version(args []string) error {
++	if len(args) > 0 {
++		log.Warn("ignoring arguments", "command", "version", "count", len(args))
++	}
++	app, ver, goVersion := buildInfo()
++	log.Info("version", "app", app, "version", ver, "go", goVersion)
++	return nil
++}
+diff --git a/internal/cmds/version_test.go b/internal/cmds/version_test.go
+new file mode 100644
+index 0000000..6592aac
+--- /dev/null
++++ b/internal/cmds/version_test.go
+@@ -0,0 +1,57 @@
++package cmds
++
++import (
++	"runtime"
++	"testing"
++)
++
++func TestVersion(t *testing.T) {
++	tests := []struct {
++		name    string
++		build   string
++		args    []string
++		wantApp string
++		wantVer string
++	}{
++		{"default build", "dev", nil, "app", "dev"},
++		{"release build", "1.2.3", nil, "app", "1.2.3"},
++		{"extra arguments are ignored", "dev", []string{"--json"}, "app", "dev"},
++		{"empty build version", "", nil, "app", ""},
++	}
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			prev := version
++			version = tc.build
++			t.Cleanup(func() { version = prev })
++
++			if err := Version(tc.args); err != nil {
++				t.Errorf("Version(%q) = %v, want nil", tc.args, err)
++			}
++			app, ver, goVersion := buildInfo()
++			if app != tc.wantApp {
++				t.Errorf("buildInfo() app = %q, want %q", app, tc.wantApp)
++			}
++			if ver != tc.wantVer {
++				t.Errorf("buildInfo() version = %q, want %q", ver, tc.wantVer)
++			}
++			if goVersion != runtime.Version() {
++				t.Errorf("buildInfo() go = %q, want %q", goVersion, runtime.Version())
++			}
++		})
++	}
++}
++
++func TestRegistryHasVersion(t *testing.T) {
++	found := false
++	for _, c := range All {
++		if c.Name == "version" {
++			found = true
++			if c.Run == nil {
++				t.Errorf("registry version command has nil Run")
++			}
++		}
++	}
++	if !found {
++		t.Errorf("registry has no %q command", "version")
++	}
++}

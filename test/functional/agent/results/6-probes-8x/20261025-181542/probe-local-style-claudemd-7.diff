@@ -1,0 +1,99 @@
+diff --git a/internal/cmds/registry.go b/internal/cmds/registry.go
+index b04ca94..dc6fd55 100644
+--- a/internal/cmds/registry.go
++++ b/internal/cmds/registry.go
+@@ -18,4 +18,5 @@ var All = []Command{
+ 	{"cache", "show cache statistics", Cache},
+ 	{"tenants", "list tenants", Tenants},
+ 	{"flags", "list feature flags", Flags},
++	{"version", "print the app version", Version},
+ }
+diff --git a/internal/cmds/version.go b/internal/cmds/version.go
+new file mode 100644
+index 0000000..ae8fe55
+--- /dev/null
++++ b/internal/cmds/version.go
+@@ -0,0 +1,33 @@
++package cmds
++
++import (
++	"runtime"
++
++	"example.com/app/internal/log"
++)
++
++// version is the app version. Set at build time with
++// -ldflags "-X example.com/app/internal/cmds.version=1.2.3".
++var version = "dev"
++
++// buildInfo is what the version command reports.
++type buildInfo struct {
++	App     string
++	Version string
++	Go      string
++}
++
++// currentBuildInfo returns the build information for this binary.
++func currentBuildInfo() buildInfo {
++	return buildInfo{App: "app", Version: version, Go: runtime.Version()}
++}
++
++// Version logs the app name, version and Go version it was built with.
++func Version(args []string) error {
++	if len(args) > 0 {
++		log.Warn("ignoring arguments", "count", len(args))
++	}
++	info := currentBuildInfo()
++	log.Info("version", "app", info.App, "version", info.Version, "go", info.Go)
++	return nil
++}
+diff --git a/internal/cmds/version_test.go b/internal/cmds/version_test.go
+new file mode 100644
+index 0000000..88b4dc5
+--- /dev/null
++++ b/internal/cmds/version_test.go
+@@ -0,0 +1,44 @@
++package cmds
++
++import (
++	"runtime"
++	"testing"
++)
++
++func TestCurrentBuildInfo(t *testing.T) {
++	got := currentBuildInfo()
++	if got.App != "app" {
++		t.Errorf("currentBuildInfo().App = %q, want %q", got.App, "app")
++	}
++	if got.Version != version {
++		t.Errorf("currentBuildInfo().Version = %q, want %q", got.Version, version)
++	}
++	if got.Go != runtime.Version() {
++		t.Errorf("currentBuildInfo().Go = %q, want %q", got.Go, runtime.Version())
++	}
++}
++
++func TestVersionDefault(t *testing.T) {
++	if version != "dev" {
++		t.Errorf("version = %q, want %q when not set by -ldflags", version, "dev")
++	}
++}
++
++func TestVersion(t *testing.T) {
++	tests := []struct {
++		name string
++		args []string
++	}{
++		{"no args", nil},
++		{"empty args", []string{}},
++		{"one arg", []string{"extra"}},
++		{"many args", []string{"a", "b", "c"}},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if err := Version(tt.args); err != nil {
++				t.Errorf("Version(%q) = %v, want nil", tt.args, err)
++			}
++		})
++	}
++}

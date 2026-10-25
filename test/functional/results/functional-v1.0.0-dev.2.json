@@ -1,0 +1,193 @@
+{
+  "_meta": {
+    "at": "2026-10-25T17:10:52+01:00",
+    "cpus": 8,
+    "goarch": "amd64",
+    "goos": "windows",
+    "token_estimate": "bytes/4 (cl100k-like average for English and code)"
+  },
+  "check_all_2000_files_ms": 5467,
+  "column_after_unicode": [
+    "1:18"
+  ],
+  "fast_retry_1500ms_denies": 1,
+  "hook_latency": {
+    "3_rules": {
+      "cold_first_write_ms": 129,
+      "post_clean": {
+        "N": 40,
+        "P50": 31.165,
+        "P95": 54.252,
+        "P99": 72.475,
+        "Max": 72.475,
+        "Mean": 32.28552499999999
+      },
+      "post_violating": {
+        "N": 40,
+        "P50": 30.587,
+        "P95": 39.149,
+        "P99": 76.166,
+        "Max": 76.166,
+        "Mean": 31.539574999999996
+      },
+      "pre_allow": {
+        "N": 40,
+        "P50": 91.822,
+        "P95": 145.83,
+        "P99": 327.596,
+        "Max": 327.596,
+        "Mean": 96.264375
+      },
+      "pre_deny": {
+        "N": 40,
+        "P50": 91.805,
+        "P95": 173.753,
+        "P99": 212.392,
+        "Max": 212.392,
+        "Mean": 96.29875000000001
+      }
+    },
+    "500_rules": {
+      "cold_first_write_ms": 229,
+      "post_clean": {
+        "N": 40,
+        "P50": 59.131,
+        "P95": 66.389,
+        "P99": 88.128,
+        "Max": 88.128,
+        "Mean": 58.71179999999998
+      },
+      "post_violating": {
+        "N": 40,
+        "P50": 60.552,
+        "P95": 67.691,
+        "P99": 70.739,
+        "Max": 70.739,
+        "Mean": 56.9867
+      },
+      "pre_allow": {
+        "N": 40,
+        "P50": 114.451,
+        "P95": 129.262,
+        "P99": 176.549,
+        "Max": 176.549,
+        "Mean": 113.31205
+      },
+      "pre_deny": {
+        "N": 40,
+        "P50": 114.134,
+        "P95": 123.185,
+        "P99": 123.21,
+        "Max": 123.21,
+        "Mean": 111.794325
+      }
+    },
+    "50_rules": {
+      "cold_first_write_ms": 173,
+      "post_clean": {
+        "N": 40,
+        "P50": 31.977,
+        "P95": 38.587,
+        "P99": 44.09,
+        "Max": 44.09,
+        "Mean": 30.865
+      },
+      "post_violating": {
+        "N": 40,
+        "P50": 30.971,
+        "P95": 41.526,
+        "P99": 78.955,
+        "Max": 78.955,
+        "Mean": 29.759925
+      },
+      "pre_allow": {
+        "N": 40,
+        "P50": 87.938,
+        "P95": 128.756,
+        "P99": 198.185,
+        "Max": 198.185,
+        "Mean": 86.788675
+      },
+      "pre_deny": {
+        "N": 40,
+        "P50": 89.273,
+        "P95": 105.151,
+        "P99": 179.738,
+        "Max": 179.738,
+        "Mean": 87.5869
+      }
+    },
+    "process_start_only": {
+      "N": 40,
+      "P50": 24.185,
+      "P95": 34.015,
+      "P99": 61.05,
+      "Max": 61.05,
+      "Mean": 23.89885
+    }
+  },
+  "hook_recompile_500_rules": {
+    "N": 10,
+    "P50": 289.12,
+    "P95": 370.258,
+    "P99": 370.258,
+    "Max": 370.258,
+    "Mean": 281.9093
+  },
+  "injected_text": {
+    "many_unscoped_20_rules": {
+      "deny_bytes": 3305,
+      "deny_est_tokens": 827,
+      "rules_file_bytes": 3024,
+      "rules_file_est_tokens": 756
+    },
+    "one_violation_block": {
+      "bytes": 349,
+      "est_tokens": 88
+    },
+    "readme_example_3_rules": {
+      "deny_bytes": 426,
+      "deny_est_tokens": 107,
+      "rules_file_bytes": 343,
+      "rules_file_est_tokens": 86
+    },
+    "this_repo_stele_md": {
+      "deny_bytes": 1871,
+      "deny_est_tokens": 468,
+      "rules_file_bytes": 4298,
+      "rules_file_est_tokens": 1075
+    }
+  },
+  "post_500_violations": {
+    "bytes": 2432,
+    "est_tokens": 608,
+    "shown": 20
+  },
+  "post_block_message_bytes": 695,
+  "post_large_files": {
+    "10240_bytes": {
+      "N": 5,
+      "P50": 30.226,
+      "P95": 98.987,
+      "P99": 98.987,
+      "Max": 98.987,
+      "Mean": 43.432
+    },
+    "1048576_bytes": {
+      "N": 5,
+      "P50": 35.025,
+      "P95": 60.167,
+      "P99": 60.167,
+      "Max": 60.167,
+      "Mean": 41.12060000000001
+    },
+    "16777216_bytes": {
+      "N": 5,
+      "P50": 110.945,
+      "P95": 136.277,
+      "P99": 136.277,
+      "Max": 136.277,
+      "Mean": 106.06800000000001
+    }
+  }
+}

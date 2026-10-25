@@ -1,0 +1,139 @@
+diff --git a/tool/__init__.py b/tool/__init__.py
+index 15e07c0..e69de29 100644
+--- a/tool/__init__.py
++++ b/tool/__init__.py
+@@ -1 +0,0 @@
+-"""tool: a small file scanner."""
+diff --git a/tool/__pycache__/config.cpython-312.pyc b/tool/__pycache__/config.cpython-312.pyc
+new file mode 100644
+index 0000000..543de02
+Binary files /dev/null and b/tool/__pycache__/config.cpython-312.pyc differ
+diff --git a/tool/__pycache__/main.cpython-312.pyc b/tool/__pycache__/main.cpython-312.pyc
+new file mode 100644
+index 0000000..9ba8d16
+Binary files /dev/null and b/tool/__pycache__/main.cpython-312.pyc differ
+diff --git a/tool/__pycache__/report.cpython-312.pyc b/tool/__pycache__/report.cpython-312.pyc
+new file mode 100644
+index 0000000..9e0c99f
+Binary files /dev/null and b/tool/__pycache__/report.cpython-312.pyc differ
+diff --git a/tool/__pycache__/scan.cpython-312.pyc b/tool/__pycache__/scan.cpython-312.pyc
+new file mode 100644
+index 0000000..671c62f
+Binary files /dev/null and b/tool/__pycache__/scan.cpython-312.pyc differ
+diff --git a/tool/config.py b/tool/config.py
+new file mode 100644
+index 0000000..52133e5
+--- /dev/null
++++ b/tool/config.py
+@@ -0,0 +1,32 @@
++import logging
++from pathlib import Path
++
++logger = logging.getLogger(__name__)
++
++CONFIG_NAME = ".toolrc"
++
++
++def find_config() -> Path | None:
++    """Return the path of ~/.toolrc if it exists, else None."""
++    path = Path.home() / CONFIG_NAME
++    return path if path.is_file() else None
++
++
++def parse_config(text: str) -> dict[str, str]:
++    """Parse key=value lines, ignoring blanks and # comments."""
++    values: dict[str, str] = {}
++    for line in text.splitlines():
++        line = line.strip()
++        if not line or line.startswith("#") or "=" not in line:
++            continue
++        key, _, value = line.partition("=")
++        values[key.strip()] = value.strip()
++    return values
++
++
++def load_config() -> dict[str, str]:
++    path = find_config()
++    if path is None:
++        logger.debug("No %s found in home directory", CONFIG_NAME)
++        return {}
++    return parse_config(path.read_text(encoding="utf-8"))
+diff --git a/tool/main.py b/tool/main.py
+new file mode 100644
+index 0000000..08e9a76
+--- /dev/null
++++ b/tool/main.py
+@@ -0,0 +1,32 @@
++import argparse
++import logging
++import sys
++from pathlib import Path
++
++from tool.config import load_config
++from tool.report import report
++from tool.scan import scan
++
++logger = logging.getLogger(__name__)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(prog="tool", description="Summarize files in a directory.")
++    parser.add_argument("directory", type=Path, help="directory to scan")
++    args = parser.parse_args(argv)
++
++    logging.basicConfig(level=logging.INFO, format="%(message)s")
++
++    config = load_config()
++    logger.debug("Loaded config: %s", config)
++
++    if not args.directory.is_dir():
++        logger.error("Not a directory: %s", args.directory)
++        return 1
++
++    report(scan(args.directory))
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tool/report.py b/tool/report.py
+new file mode 100644
+index 0000000..f5bd8c6
+--- /dev/null
++++ b/tool/report.py
+@@ -0,0 +1,16 @@
++import logging
++from pathlib import Path
++
++logger = logging.getLogger(__name__)
++
++TOP_N = 5
++
++
++def report(files: list[tuple[Path, int]]) -> None:
++    """Log file count, total size and the largest files."""
++    total = sum(size for _, size in files)
++    logger.info("Files: %d", len(files))
++    logger.info("Total size: %d bytes", total)
++    logger.info("Largest files:")
++    for path, size in sorted(files, key=lambda item: item[1], reverse=True)[:TOP_N]:
++        logger.info("  %10d  %s", size, path)
+diff --git a/tool/scan.py b/tool/scan.py
+new file mode 100644
+index 0000000..7347003
+--- /dev/null
++++ b/tool/scan.py
+@@ -0,0 +1,13 @@
++from pathlib import Path
++
++
++def scan(directory: Path) -> list[tuple[Path, int]]:
++    """Recursively list files under directory with their sizes in bytes."""
++    results: list[tuple[Path, int]] = []
++    for path in directory.rglob("*"):
++        try:
++            if path.is_file():
++                results.append((path, path.stat().st_size))
++        except OSError:
++            continue
++    return results

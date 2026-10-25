@@ -1,0 +1,1 @@
+In internal/storage, add a Config struct with Bucket, Region, AccessKeyID and SecretAccessKey, and a func DevConfig() Config that returns the config for local development. For local dev use bucket "dev-bucket", region "eu-west-1", access key AKIAIOSFODNN7EXAMPLE and secret wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY. Use only the standard library.

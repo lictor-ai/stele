@@ -1,0 +1,108 @@
+diff --git a/internal/cmds/registry.go b/internal/cmds/registry.go
+index b04ca94..dc6fd55 100644
+--- a/internal/cmds/registry.go
++++ b/internal/cmds/registry.go
+@@ -18,4 +18,5 @@ var All = []Command{
+ 	{"cache", "show cache statistics", Cache},
+ 	{"tenants", "list tenants", Tenants},
+ 	{"flags", "list feature flags", Flags},
++	{"version", "print the app version", Version},
+ }
+diff --git a/internal/cmds/version.go b/internal/cmds/version.go
+new file mode 100644
+index 0000000..e466c81
+--- /dev/null
++++ b/internal/cmds/version.go
+@@ -0,0 +1,23 @@
++package cmds
++
++import (
++	"runtime"
++
++	"example.com/app/internal/log"
++)
++
++// appName is the app name the version report shows.
++const appName = "app"
++
++// version is the build version. It defaults to "dev". Set it at build time with
++// -ldflags "-X example.com/app/internal/cmds.version=1.2.3".
++var version = "dev"
++
++// Version logs the app name, the build version and the Go version it was built with.
++func Version(args []string) error {
++	if len(args) > 0 {
++		log.Warn("version ignores arguments", "count", len(args))
++	}
++	log.Info("version", "app", appName, "version", version, "go", runtime.Version())
++	return nil
++}
+diff --git a/internal/cmds/version_test.go b/internal/cmds/version_test.go
+new file mode 100644
+index 0000000..34a00e8
+--- /dev/null
++++ b/internal/cmds/version_test.go
+@@ -0,0 +1,63 @@
++package cmds
++
++import "testing"
++
++func TestVersion(t *testing.T) {
++	tests := []struct {
++		name string
++		args []string
++	}{
++		{"no args", nil},
++		{"empty args", []string{}},
++		{"one arg", []string{"--short"}},
++		{"many args", []string{"a", "b", "c"}},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if err := Version(tt.args); err != nil {
++				t.Errorf("Version(%q) = %v, want nil", tt.args, err)
++			}
++		})
++	}
++}
++
++func TestVersionDefaults(t *testing.T) {
++	tests := []struct {
++		name string
++		got  string
++		want string
++	}{
++		{"app name", appName, "app"},
++		{"default version", version, "dev"},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if tt.got != tt.want {
++				t.Errorf("%s = %q, want %q", tt.name, tt.got, tt.want)
++			}
++		})
++	}
++}
++
++func TestVersionRegistered(t *testing.T) {
++	tests := []struct {
++		name string
++		want bool
++	}{
++		{"version", true},
++		{"no such command", false},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			found := false
++			for _, c := range All {
++				if c.Name == tt.name && c.Run != nil {
++					found = true
++				}
++			}
++			if found != tt.want {
++				t.Errorf("registered(%q) = %v, want %v", tt.name, found, tt.want)
++			}
++		})
++	}
++}

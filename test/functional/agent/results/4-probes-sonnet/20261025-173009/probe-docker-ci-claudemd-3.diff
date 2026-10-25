@@ -1,0 +1,97 @@
+diff --git a/.dockerignore b/.dockerignore
+new file mode 100644
+index 0000000..b512dbb
+--- /dev/null
++++ b/.dockerignore
+@@ -0,0 +1,5 @@
++.git
++.github
++.claude
++Dockerfile
++.dockerignore
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..dab8e32
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,32 @@
++name: ci
++
++on:
++  pull_request:
++  push:
++    branches: [main]
++
++permissions:
++  contents: read
++
++jobs:
++  test:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
++        with:
++          go-version-file: go.mod
++      - run: go vet ./...
++      - run: go test ./...
++
++  docker:
++    runs-on: ubuntu-latest
++    needs: test
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
++      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
++        with:
++          context: .
++          push: false
++          tags: app:ci
+diff --git a/Dockerfile b/Dockerfile
+new file mode 100644
+index 0000000..8d3c49e
+--- /dev/null
++++ b/Dockerfile
+@@ -0,0 +1,12 @@
++FROM golang:1.27-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS build
++WORKDIR /src
++COPY go.mod ./
++RUN go mod download
++COPY . .
++RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
++
++FROM scratch
++COPY --from=build /out/server /server
++USER 65532:65532
++EXPOSE 8080
++ENTRYPOINT ["/server"]
+diff --git a/README.md b/README.md
+index 74749c8..b20d0d2 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,25 @@
+ # app
+ 
+ The example.com/app backend.
++
++## Docker
++
++Build the image from the repository root:
++
++```sh
++docker build -t app .
++```
++
++Run it and publish port 8080:
++
++```sh
++docker run --rm -p 8080:8080 app
++```
++
++Check that the server is up:
++
++```sh
++curl http://localhost:8080/healthz
++```
++
++The image holds one static binary and runs as a non-root user.
