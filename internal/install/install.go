@@ -49,6 +49,82 @@ var (
 // changes, which is not the tagged code). Anything else stamps as devel.
 func Released(v string) bool { return semverRE.MatchString(v) && !pseudoRE.MatchString(v) }
 
+// Older reports whether release a comes before release b, by semver
+// precedence: major, minor and patch as numbers, then a pre-release before
+// the release it leads to. Both must be Released.
+func Older(a, b string) bool { return compareSemver(a, b) < 0 }
+
+func compareSemver(a, b string) int {
+	ma, mb := semverRE.FindStringSubmatch(a), semverRE.FindStringSubmatch(b)
+	if ma == nil || mb == nil {
+		return 0
+	}
+	for i := 1; i <= 3; i++ {
+		if c := compareNumbers(ma[i], mb[i]); c != 0 {
+			return c
+		}
+	}
+	pa, pb := strings.TrimPrefix(ma[4], "-"), strings.TrimPrefix(mb[4], "-")
+	switch {
+	case pa == pb:
+		return 0
+	case pa == "":
+		return 1 // a release comes after its pre-releases
+	case pb == "":
+		return -1
+	}
+	fa, fb := strings.Split(pa, "."), strings.Split(pb, ".")
+	for i := 0; i < len(fa) && i < len(fb); i++ {
+		if c := compareIdent(fa[i], fb[i]); c != 0 {
+			return c
+		}
+	}
+	return compareInts(len(fa), len(fb))
+}
+
+// compareIdent orders two pre-release identifiers: numbers as numbers,
+// before any word; words in ASCII order.
+func compareIdent(a, b string) int {
+	na, nb := numeric(a), numeric(b)
+	switch {
+	case na && nb:
+		return compareNumbers(a, b)
+	case na:
+		return -1
+	case nb:
+		return 1
+	}
+	return strings.Compare(a, b)
+}
+
+func numeric(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// compareNumbers orders decimal strings without leading zeros, of any
+// length.
+func compareNumbers(a, b string) int {
+	if c := compareInts(len(a), len(b)); c != 0 {
+		return c
+	}
+	return strings.Compare(a, b)
+}
+
+func compareInts(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
 // Init sets stele up under root (spec §6, ADR-0004): the Claude Code hooks
 // before and after a write, stamped with version when it is a release and
 // with devel otherwise, .stele/ and, only when
