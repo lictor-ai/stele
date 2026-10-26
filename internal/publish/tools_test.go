@@ -46,6 +46,25 @@ func TestResolveToolRefusesInsideProject(t *testing.T) {
 	}
 }
 
+// stele.json can sit in a subfolder of a repository; a tool anywhere in that
+// repository came with the clone too.
+func TestResolveToolRefusesInsideEnclosingRepository(t *testing.T) {
+	top := t.TempDir()
+	if err := os.Mkdir(filepath.Join(top, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(top, "svc", "api")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(top, "bin")
+	fakeTool(t, bin, "faketool")
+	t.Setenv("PATH", bin)
+	if _, err := resolveTool("faketool", root); !errors.Is(err, ErrToolRefused) {
+		t.Errorf("err = %v, want ErrToolRefused", err)
+	}
+}
+
 func TestResolveToolOutsideProject(t *testing.T) {
 	root := t.TempDir()
 	bin := t.TempDir()

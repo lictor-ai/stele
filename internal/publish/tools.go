@@ -3,6 +3,7 @@ package publish
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -21,7 +22,8 @@ var (
 var lookPath = exec.LookPath
 
 // resolveTool finds name on PATH and returns its absolute path. A program
-// inside the project root is refused, as D43 refuses plugins from inside the
+// inside the project root, or inside the git repository that holds it, is
+// refused, as D43 refuses plugins from inside the
 // repository: a PATH entry such as ./bin, or one a tool like direnv adds,
 // would otherwise run whatever a cloned repository put there.
 func resolveTool(name, root string) (string, error) {
@@ -36,10 +38,32 @@ func resolveTool(name, root string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", name, err)
 	}
-	if insideAny(abs, root) {
-		return "", fmt.Errorf("%s at %s: %w", name, abs, ErrToolRefused)
+	for _, r := range []string{root, repoTop(root)} {
+		if r != "" && insideAny(abs, r) {
+			return "", fmt.Errorf("%s at %s: %w", name, abs, ErrToolRefused)
+		}
 	}
 	return abs, nil
+}
+
+// repoTop is the nearest directory at or above root that holds .git, found
+// without running git, or "". stele.json can sit in a subfolder, and a tool
+// anywhere in the repository came with the clone.
+func repoTop(root string) string {
+	dir, err := filepath.Abs(root)
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 // insideAny reports whether p, or what it links to, is inside root or what
