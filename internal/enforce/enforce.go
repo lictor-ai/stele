@@ -18,11 +18,9 @@ import (
 // FileName is the policy file at the repository root.
 const FileName = "stele.json"
 
-// Policy is how hard the hook enforces.
+// Policy is how hard the hook enforces. Which parts of the hook run is not
+// policy: stele init writes it on the hook command (ADR-0006, ADR-0008).
 type Policy struct {
-	// Backstop is whether the hook may block a write to show the rules for
-	// it. Off, it never blocks. Default true.
-	Backstop bool
 	// BlockOnError is whether a failure of stele itself blocks the write,
 	// saying why, rather than letting it through with a warning. Default
 	// false (ADR-0004).
@@ -30,7 +28,7 @@ type Policy struct {
 }
 
 // Default is the policy when stele.json is absent or does not set a key.
-func Default() Policy { return Policy{Backstop: true} }
+func Default() Policy { return Policy{} }
 
 // Load reads the policy from stele.json under root. No stele.json is the
 // default policy, not an error; that is the normal case. A stele.json that
@@ -45,16 +43,12 @@ func Load(root string) (Policy, error) {
 		return Default(), err
 	}
 	var raw struct {
-		Backstop     *bool `json:"backstop"`
 		BlockOnError *bool `json:"block_on_error"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return Default(), fmt.Errorf("%s: %w", FileName, err)
 	}
 	p := Default()
-	if raw.Backstop != nil {
-		p.Backstop = *raw.Backstop
-	}
 	if raw.BlockOnError != nil {
 		p.BlockOnError = *raw.BlockOnError
 	}

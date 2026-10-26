@@ -6,8 +6,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-
-	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/session"
 )
 
@@ -15,7 +13,6 @@ var (
 	t0      = time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
 	sqlRule = Rule{ID: "sql", Text: "Never build SQL by string concatenation."}
 	logRule = Rule{ID: "log", Text: "Log through the shared logger."}
-	on      = enforce.Policy{Backstop: true}
 )
 
 func shown(agent string, at time.Time, ids ...string) map[string]map[string]time.Time {
@@ -36,7 +33,6 @@ func TestDecide(t *testing.T) {
 		name       string
 		in         Input
 		st         session.State
-		p          enforce.Policy
 		wantDeny   bool
 		wantRules  []Rule
 		wantShown  map[string]map[string]time.Time
@@ -45,7 +41,6 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "first write of a turn shows the rules",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Now: t0},
-			p:          on,
 			wantDeny:   true,
 			wantRules:  []Rule{sqlRule, logRule},
 			wantShown:  shown("", t0, "sql", "log"),
@@ -55,7 +50,6 @@ func TestDecide(t *testing.T) {
 			name:       "after the window, the retry goes through",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(10 * time.Second)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
-			p:          on,
 			wantShown:  shown("", t0, "sql"),
 			wantDenied: denied("", t0, "a.go"),
 		},
@@ -63,7 +57,6 @@ func TestDecide(t *testing.T) {
 			name:       "within the window, a retry of the denied file goes through",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(2 * time.Second)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
-			p:          on,
 			wantShown:  shown("", t0, "sql"),
 			wantDenied: denied("", t0, "a.go"),
 		},
@@ -71,7 +64,6 @@ func TestDecide(t *testing.T) {
 			name:       "a parallel write to the denied file, sooner than RetryAfter, is denied too",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(50 * time.Millisecond)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
-			p:          on,
 			wantDeny:   true,
 			wantRules:  []Rule{sqlRule},
 			wantShown:  shown("", t0, "sql"),
@@ -81,7 +73,6 @@ func TestDecide(t *testing.T) {
 			name:       "a write to the denied file at exactly RetryAfter is a retry",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(RetryAfter)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
-			p:          on,
 			wantShown:  shown("", t0, "sql"),
 			wantDenied: denied("", t0, "a.go"),
 		},
@@ -89,7 +80,6 @@ func TestDecide(t *testing.T) {
 			name:       "within the window, a parallel write to another file is denied too",
 			in:         Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule}, Now: t0.Add(time.Second)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
-			p:          on,
 			wantDeny:   true,
 			wantRules:  []Rule{sqlRule},
 			wantShown:  shown("", t0, "sql"), // not re-stamped: the window does not slide
@@ -99,7 +89,6 @@ func TestDecide(t *testing.T) {
 			name:       "a retry that needs a rule never shown is denied with only that rule",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Now: t0.Add(2 * time.Second)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
-			p:          on,
 			wantDeny:   true,
 			wantRules:  []Rule{logRule},
 			wantShown:  map[string]map[string]time.Time{"": {"sql": t0, "log": t0.Add(2 * time.Second)}},
@@ -113,7 +102,6 @@ func TestDecide(t *testing.T) {
 				Shown:    map[string]map[string]time.Time{"": {"sql": t0, "log": t0.Add(time.Second)}},
 				Denied:   map[string]map[string]time.Time{"": {"a.go": t0, "b.go": t0.Add(time.Second)}},
 			},
-			p:          on,
 			wantDeny:   true,
 			wantRules:  []Rule{logRule},
 			wantShown:  map[string]map[string]time.Time{"": {"sql": t0, "log": t0.Add(time.Second)}},
@@ -123,7 +111,6 @@ func TestDecide(t *testing.T) {
 			name:      "a subagent writing the main agent's denied file is not a retry",
 			in:        Input{PromptID: "p1", AgentID: "sub", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(time.Second)},
 			st:        session.State{PromptID: "p1", Shown: shown("sub", t0, "sql"), Denied: denied("", t0, "a.go")},
-			p:         on,
 			wantDeny:  true,
 			wantRules: []Rule{sqlRule},
 			wantShown: shown("sub", t0, "sql"),
@@ -136,7 +123,6 @@ func TestDecide(t *testing.T) {
 			name:       "only the rules not yet shown",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Now: t0.Add(10 * time.Second)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql")},
-			p:          on,
 			wantDeny:   true,
 			wantRules:  []Rule{logRule},
 			wantShown:  map[string]map[string]time.Time{"": {"sql": t0, "log": t0.Add(10 * time.Second)}},
@@ -146,7 +132,6 @@ func TestDecide(t *testing.T) {
 			name:       "a new turn starts with nothing shown and nothing denied",
 			in:         Input{PromptID: "p2", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(time.Minute)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
-			p:          on,
 			wantDeny:   true,
 			wantRules:  []Rule{sqlRule},
 			wantShown:  shown("", t0.Add(time.Minute), "sql"),
@@ -156,7 +141,6 @@ func TestDecide(t *testing.T) {
 			name:       "a subagent has its own record",
 			in:         Input{PromptID: "p1", AgentID: "sub", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(time.Minute)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql")},
-			p:          on,
 			wantDeny:   true,
 			wantRules:  []Rule{sqlRule},
 			wantShown:  map[string]map[string]time.Time{"": {"sql": t0}, "sub": {"sql": t0.Add(time.Minute)}},
@@ -166,7 +150,6 @@ func TestDecide(t *testing.T) {
 			name:       "the clock moved back: a rule shown in the future counts as read",
 			in:         Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule}, Now: t0.Add(-time.Hour)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
-			p:          on,
 			wantShown:  shown("", t0, "sql"),
 			wantDenied: denied("", t0, "a.go"),
 		},
@@ -174,7 +157,6 @@ func TestDecide(t *testing.T) {
 			name:       "the clock moved back on a retry",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(-time.Hour)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
-			p:          on,
 			wantShown:  shown("", t0, "sql"),
 			wantDenied: denied("", t0, "a.go"),
 		},
@@ -182,7 +164,6 @@ func TestDecide(t *testing.T) {
 			name:       "at the same instant, another file is in the window",
 			in:         Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule}, Now: t0},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
-			p:          on,
 			wantDeny:   true,
 			wantRules:  []Rule{sqlRule},
 			wantShown:  shown("", t0, "sql"),
@@ -192,7 +173,6 @@ func TestDecide(t *testing.T) {
 			name:       "at exactly the window, another file goes through",
 			in:         Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule}, Now: t0.Add(Window)},
 			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
-			p:          on,
 			wantShown:  shown("", t0, "sql"),
 			wantDenied: denied("", t0, "a.go"),
 		},
@@ -200,7 +180,6 @@ func TestDecide(t *testing.T) {
 			name:      "with no file, there is no retry and nothing is recorded",
 			in:        Input{PromptID: "p1", Rules: []Rule{sqlRule}, Now: t0.Add(time.Second)},
 			st:        session.State{PromptID: "p1", Shown: shown("", t0, "sql")},
-			p:         on,
 			wantDeny:  true,
 			wantRules: []Rule{sqlRule},
 			wantShown: shown("", t0, "sql"),
@@ -208,18 +187,12 @@ func TestDecide(t *testing.T) {
 		{
 			name: "no rules apply",
 			in:   Input{PromptID: "p1", File: "a.go", Now: t0},
-			p:    on,
-		},
-		{
-			name: "backstop off",
-			in:   Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0},
-			p:    enforce.Policy{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			before := cloneState(tt.st)
-			d, next := Decide(tt.in, tt.st, tt.p)
+			d, next := Decide(tt.in, tt.st)
 			if d.Deny != tt.wantDeny {
 				t.Errorf("Deny = %v, want %v", d.Deny, tt.wantDeny)
 			}
@@ -273,7 +246,7 @@ func TestDecideDenyInTheFuture(t *testing.T) {
 	decide := func(file string, at time.Time, rules ...Rule) Decision {
 		t.Helper()
 		var d Decision
-		d, st = Decide(Input{PromptID: "p1", File: file, Rules: rules, Now: at}, st, on)
+		d, st = Decide(Input{PromptID: "p1", File: file, Rules: rules, Now: at}, st)
 		return d
 	}
 	if d := decide("a.go", nine, r1); !d.Deny {
@@ -296,7 +269,7 @@ func TestDecideBatch(t *testing.T) {
 	write := func(file string, at time.Duration) bool {
 		t.Helper()
 		var d Decision
-		d, st = Decide(Input{PromptID: "p1", File: file, Rules: []Rule{sqlRule}, Now: t0.Add(at)}, st, on)
+		d, st = Decide(Input{PromptID: "p1", File: file, Rules: []Rule{sqlRule}, Now: t0.Add(at)}, st)
 		return d.Deny
 	}
 	steps := []struct {

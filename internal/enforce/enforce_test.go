@@ -13,12 +13,12 @@ func TestLoad(t *testing.T) {
 		want    Policy
 		wantErr bool
 	}{
-		{name: "no file", want: Policy{Backstop: true}},
-		{name: "empty object", content: `{}`, want: Policy{Backstop: true}},
-		{name: "backstop off", content: `{"backstop": false}`, want: Policy{}},
-		{name: "block on error", content: `{"block_on_error": true}`, want: Policy{Backstop: true, BlockOnError: true}},
-		{name: "other keys ignored", content: `{"sources": [{"name": "x"}], "backstop": true}`, want: Policy{Backstop: true}},
-		{name: "not JSON", content: `{`, want: Policy{Backstop: true}, wantErr: true},
+		{name: "no file", want: Policy{}},
+		{name: "empty object", content: `{}`, want: Policy{}},
+		{name: "backstop is no longer read", content: `{"backstop": false}`, want: Policy{}},
+		{name: "block on error", content: `{"block_on_error": true}`, want: Policy{BlockOnError: true}},
+		{name: "other keys ignored", content: `{"sources": [{"name": "x"}], "backstop": true}`, want: Policy{}},
+		{name: "not JSON", content: `{`, want: Policy{}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

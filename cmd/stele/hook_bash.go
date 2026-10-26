@@ -6,7 +6,6 @@ import (
 
 	"github.com/lictor-ai/stele/internal/adapter/claudecode"
 	"github.com/lictor-ai/stele/internal/backstop"
-	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/install"
 	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/session"
@@ -77,15 +76,11 @@ func beforeBash(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 // With --remind=off it never denies: the agent is told the files go
 // unchecked.
 func bashRoot(ev claudecode.Event, sw claudecode.Switches, root string, rels []string, budget int) claudecode.Answer {
-	policy, perr := enforce.Load(root)
 	// Whether a file has rules is known only from the index, so a failure
 	// here comes before stele can tell go test > out.txt from a source
 	// file: it warns, never blocks, even with block_on_error.
 	fail := func(err error) claudecode.Answer {
 		return claudecode.Answer{Warning: "stele: rules not enforced for this Bash command: " + err.Error()}
-	}
-	if perr != nil {
-		return fail(perr)
 	}
 	key, err := loadKey()
 	if err != nil {
@@ -115,8 +110,8 @@ func bashRoot(ev claudecode.Event, sw claudecode.Switches, root string, rels []s
 	if len(files) == 0 {
 		return claudecode.Answer{Context: note}
 	}
-	// With backstop off the hook never blocks (ADR-0004): the agent is told.
-	if sw.RemindOff || !policy.Backstop {
+	// With --remind=off the hook never stops a command: the agent is told.
+	if sw.RemindOff {
 		return claudecode.Answer{Context: joinNotes(note, throughBash(files))}
 	}
 
@@ -142,7 +137,7 @@ func bashRoot(ev claudecode.Event, sw claudecode.Switches, root string, rels []s
 	var d backstop.BashDecision
 	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
 		in := backstop.BashInput{PromptID: ev.PromptID, AgentID: ev.AgentID, Files: files, Now: now(), Fit: fit}
-		d, *st = backstop.DecideBash(in, *st, policy)
+		d, *st = backstop.DecideBash(in, *st)
 		return nil
 	})
 	if err != nil {

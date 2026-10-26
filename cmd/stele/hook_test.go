@@ -185,15 +185,6 @@ func TestHookAllows(t *testing.T) {
 			t.Error("the hook wrote stele.lock into a repository that does not use stele")
 		}
 	})
-	t.Run("backstop off", func(t *testing.T) {
-		root := project(t, hookRules)
-		if err := os.WriteFile(filepath.Join(root, "stele.json"), []byte(`{"backstop": false}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if _, out := hook(t, write(filepath.Join(root, "x.go"), "p1", "")); out != "" {
-			t.Errorf("stdout %q, want nothing", out)
-		}
-	})
 	t.Run("not a write", func(t *testing.T) {
 		project(t, hookRules)
 		payload := map[string]any{"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash", "tool_input": map[string]any{"command": "ls"}}

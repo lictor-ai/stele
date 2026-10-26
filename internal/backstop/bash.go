@@ -3,7 +3,6 @@ package backstop
 import (
 	"time"
 
-	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/session"
 )
 
@@ -40,8 +39,8 @@ type BashDecision struct {
 //
 // The deny also counts as a deny of the file's Write (Denied), so a Write
 // the agent makes instead is its retry, and is not denied again.
-func DecideBash(in BashInput, st session.State, p enforce.Policy) (BashDecision, session.State) {
-	if !p.Backstop || len(in.Files) == 0 {
+func DecideBash(in BashInput, st session.State) (BashDecision, session.State) {
+	if len(in.Files) == 0 {
 		return BashDecision{}, st
 	}
 	newTurn(&st, in.PromptID)

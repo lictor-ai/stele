@@ -135,9 +135,6 @@ func beforeWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer 
 	}
 
 	policy, perr := enforce.Load(root)
-	if !policy.Backstop {
-		return claudecode.Answer{}
-	}
 	fail := func(err error) claudecode.Answer { return failure(policy, ev.Name, err) }
 	if perr != nil {
 		return fail(perr)
@@ -174,7 +171,7 @@ func beforeWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer 
 					return install.BlockMessageMore(rel, blockRules(rs[:k]), len(rs)-k, note)
 				}))
 			}}
-		d, *st = backstop.Decide(in, *st, policy)
+		d, *st = backstop.Decide(in, *st)
 		return nil
 	})
 	if err != nil {
@@ -304,22 +301,15 @@ func afterWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 		more = 0
 		return install.ViolationMessageWithin(rel, vs[:min(len(vs), maxShown)], n, blocking, limit)
 	}
-	// The context holds the notes, the non-blocking violations and, with
-	// backstop off, the blocking ones too: they share one budget.
+	// The blocking violations are the block's reason; the context holds the
+	// notes and the non-blocking ones, which share its budget.
 	var a claudecode.Answer
-	budget := install.MaxMessage - len(joinNotes(notes...))
-	if len(hard) > 0 && policy.Backstop {
+	if len(hard) > 0 {
 		a.Deny, a.Reason = true, message(hard, true, install.MaxMessage)
-		hard = nil
 	}
-	// With backstop off the hook never blocks (ADR-0004): the agent is told.
-	hardBudget := budget
-	if len(soft) > 0 {
-		hardBudget = budget / 2
-	}
-	hardMsg := message(hard, true, hardBudget)
-	softMsg := message(soft, false, budget-len(hardMsg)-4)
-	a.Context = joinNotes(append([]string{hardMsg, softMsg}, notes...)...)
+	budget := install.MaxMessage - len(joinNotes(notes...))
+	softMsg := message(soft, false, budget-4)
+	a.Context = joinNotes(append([]string{softMsg}, notes...)...)
 	return a
 }
 
@@ -426,11 +416,11 @@ func joinNotes(notes ...string) string {
 // failure is the answer when stele itself cannot run. With block_on_error off,
 // the default, the write goes through and the user is warned; with it on, the
 // write is blocked and the agent told why (ADR-0004). After a write, nothing
-// can be stopped: the agent is told the write went unchecked. With backstop
-// off the hook never blocks, so only the warning is left.
+// can be stopped: the agent is told the write went unchecked. Only a part
+// the switches leave on gets here (ADR-0006).
 func failure(p enforce.Policy, event string, err error) claudecode.Answer {
 	post := event == "PostToolUse"
-	if p.BlockOnError && p.Backstop {
+	if p.BlockOnError {
 		if post {
 			return claudecode.Answer{Deny: true, Reason: fmt.Sprintf("stele could not check this write against the project's rules: %v. block_on_error is on in stele.json, so the write is reported as unchecked: it was saved, but fix stele before going on.", err)}
 		}
