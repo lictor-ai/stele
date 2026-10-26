@@ -85,6 +85,89 @@ func TestInitKeepsUserSettingsAndUninstallRemovesOnlyStele(t *testing.T) {
 	}
 }
 
+// init --remind and --check write the switches on every stele hook, keep
+// them when not given, and refuse a value other than on or off (ADR-0006).
+func TestInitSwitchesSettings(t *testing.T) {
+	p := newProject(t, goRules)
+	handlers := func() []string {
+		var s struct {
+			Hooks map[string][]struct {
+				Hooks []struct {
+					Command string `json:"command"`
+				} `json:"hooks"`
+			} `json:"hooks"`
+		}
+		if err := json.Unmarshal([]byte(p.read(".claude/settings.json")), &s); err != nil {
+			t.Fatal(err)
+		}
+		var cmds []string
+		for _, gs := range s.Hooks {
+			for _, g := range gs {
+				for _, h := range g.Hooks {
+					if strings.Contains(h.Command, "stele") {
+						cmds = append(cmds, h.Command)
+					}
+				}
+			}
+		}
+		return cmds
+	}
+	expect := func(step, want, line string, out string) {
+		t.Helper()
+		cmds := handlers()
+		if len(cmds) != 4 {
+			t.Errorf("%s: %d stele handlers, want 4: %q", step, len(cmds), cmds)
+		}
+		for _, c := range cmds {
+			if c != want {
+				t.Errorf("%s: handler %q, want %q", step, c, want)
+			}
+		}
+		if !strings.Contains(out, line+"\n") {
+			t.Errorf("%s: output lacks %q:\n%s", step, line, out)
+		}
+	}
+
+	out := p.mustStele(0, "init", "--remind=off")
+	expect("remind off", "stele hook --installed=devel --remind=off", "hooks: remind off, check on", out)
+	out = p.mustStele(0, "init")
+	if !strings.Contains(out, "up to date") {
+		t.Errorf("init with no flag rewrote the settings:\n%s", out)
+	}
+	expect("kept", "stele hook --installed=devel --remind=off", "hooks: remind off, check on", out)
+	out = p.mustStele(0, "init", "--check=off")
+	expect("both off", "stele hook --installed=devel --remind=off --check=off", "hooks: remind off, check off", out)
+	out = p.mustStele(0, "init", "--remind=on", "--check=on")
+	expect("both on", "stele hook --installed=devel", "hooks: remind on, check on", out)
+
+	before := p.hash(".claude/settings.json")
+	p.mustStele(2, "init", "--remind=x")
+	if after := p.hash(".claude/settings.json"); after[".claude/settings.json"] != before[".claude/settings.json"] {
+		t.Error("init --remind=x changed settings.json")
+	}
+
+	p.mustStele(0, "init", "--remind=off", "--check=off")
+	p.mustStele(0, "uninstall")
+	if p.exists(".claude/settings.json") && strings.Contains(p.read(".claude/settings.json"), "stele") {
+		t.Errorf("uninstall left a stele hook:\n%s", p.read(".claude/settings.json"))
+	}
+}
+
+// A stele.json that still sets backstop gets a note from init, and is left
+// byte for byte (D38, ADR-0008).
+func TestInitNotesBackstop(t *testing.T) {
+	p := newProject(t, goRules)
+	p.write("stele.json", `{"backstop": false}`+"\n")
+	before := p.hash("stele.json")
+	code, _, errOut := p.stele("init")
+	if code != 0 || !strings.Contains(errOut, "stele.json: backstop is no longer read; use stele init --remind=off") {
+		t.Errorf("init = %d, stderr %q; want the backstop note", code, errOut)
+	}
+	if after := p.hash("stele.json"); after["stele.json"] != before["stele.json"] {
+		t.Error("init changed stele.json")
+	}
+}
+
 // A settings.json that is not JSON must be refused, not overwritten.
 func TestInitRefusesBrokenSettings(t *testing.T) {
 	p := newProject(t, "")
@@ -102,7 +185,7 @@ func TestInitRefusesBrokenSettings(t *testing.T) {
 // D38: stele never writes stele.md or stele.json, whatever it runs.
 func TestNeverWritesRuleFiles(t *testing.T) {
 	p := newProject(t, goRules)
-	p.write("stele.json", `{"backstop": true, "block_on_error": false, "plugins": []}`+"\n")
+	p.write("stele.json", `{"backstop": true, "block_on_error": false, "plugins": []}`+"\n") // backstop: init notes it, never removes it
 	before := p.hash("stele.md", "stele.json")
 	p.mustStele(0, "init")
 	p.compile()

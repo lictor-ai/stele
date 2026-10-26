@@ -29,7 +29,7 @@ func rulesBranch(t *testing.T, steleJSON string) string {
 // CI as it should, but says so: reviewers must not miss it (#52).
 func TestCheckBaseReportsRuleFiles(t *testing.T) {
 	root := rulesBranch(t, "")
-	writeAt(t, root, "stele.json", `{"backstop": false}`)
+	writeAt(t, root, "stele.json", `{"block_on_error": true}`)
 	writeAt(t, root, "stele.md", checkRules+"\n---\n\nKeep functions short.\n")
 	if code, _, errOut := runCmd("compile"); code != exitOK {
 		t.Fatalf("compile = %d, stderr %q", code, errOut)

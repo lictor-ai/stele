@@ -1,6 +1,6 @@
 # Switching the write hooks on and off
 
-Status: proposed, not built. Date: 2026-10-25. Issue #71.
+Status: built (#71). Date: 2026-10-25.
 
 ## Why
 
@@ -94,7 +94,8 @@ stele init --check=off --remind=on
   and its switches both match. `Installed(settings)` returns the switches too,
   so `init` can keep them.
 - `OtherSteleHook` compares against `command(version, sw)`.
-- `Switches(args)`, next to `InstalledVersion(args)`, reads them in the hook.
+- `HookSwitches(args)`, next to `InstalledVersion(args)`, reads them in the hook
+  (a function named `Switches` would clash with the type).
   An unknown flag is ignored, so an older binary run by newer settings keeps
   both on; the version warning already tells the user to run `init` again.
 
@@ -179,7 +180,7 @@ Unit (`internal/adapter/claudecode`):
   or unknown word is not stamped;
 - `Install` with the same switches is unchanged, with other switches
   rewrites; `Installed` returns them;
-- `Switches(args)`: none, one, both, unknown flags ignored.
+- `HookSwitches(args)`: none, one, both, unknown flags ignored.
 
 `cmd/stele`:
 
@@ -189,8 +190,10 @@ Unit (`internal/adapter/claudecode`):
   `stele.md` or `.claude/settings.json` still asks; a Bash write to a scoped
   file is not denied; `SessionStart` answers the guidance and primes as today;
 - `--check=off`: a write with a blocking violation gets no block; after an
-  edit that breaks `stele.md`, the notice is sent and the index and rules file
-  are refreshed;
+  edit that adds an invalid but parseable rule to `stele.md`, the index and
+  rules file are refreshed and the notice is sent; after one that makes it not
+  parse, the "last valid rules still apply" note is sent and nothing is
+  refreshed;
 - the version warning tells a binary older than the stamp to upgrade, not to
   run `init`;
 - both on: today's tests pass, less the `backstop: false` cases, which go;

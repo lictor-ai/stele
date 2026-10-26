@@ -62,6 +62,8 @@ type project struct {
 	t   *testing.T
 	dir string
 	env []string
+	// hookArgs are stele hook's arguments; nil is --installed=devel.
+	hookArgs []string
 }
 
 // newProject makes a git repository holding stele.md (unless md is empty),
@@ -317,8 +319,12 @@ func (p *project) hook(e event) answer {
 
 func (p *project) hookRaw(payload []byte) answer {
 	p.t.Helper()
+	args := p.hookArgs
+	if args == nil {
+		args = []string{"--installed=devel"}
+	}
 	start := time.Now()
-	code, out, errOut := p.steleIn(".", payload, "hook", "--installed=devel")
+	code, out, errOut := p.steleIn(".", payload, append([]string{"hook"}, args...)...)
 	d := time.Since(start)
 	if code != 0 {
 		p.t.Fatalf("stele hook exited %d (would block the write whatever it says)\nstdout: %s\nstderr: %s", code, out, errOut)
@@ -358,6 +364,32 @@ func (p *project) hookRaw(payload []byte) answer {
 		a.Context = r.HSO.AdditionalContext
 	}
 	return a
+}
+
+// useInstalledHook makes p.hook run stele hook with the arguments stele
+// init wrote on the PreToolUse command in .claude/settings.json, as Claude
+// Code would.
+func (p *project) useInstalledHook() {
+	p.t.Helper()
+	var s struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal([]byte(p.read(".claude/settings.json")), &s); err != nil {
+		p.t.Fatal(err)
+	}
+	for _, g := range s.Hooks["PreToolUse"] {
+		for _, h := range g.Hooks {
+			if w := strings.Fields(h.Command); len(w) >= 2 && w[0] == "stele" && w[1] == "hook" {
+				p.hookArgs = w[2:]
+				return
+			}
+		}
+	}
+	p.t.Fatal("no stele hook in .claude/settings.json")
 }
 
 // pre and post are the common payloads.

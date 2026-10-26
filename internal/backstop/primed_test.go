@@ -80,7 +80,7 @@ func TestDecidePrimed(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d, st := Decide(tt.in, tt.st, on)
+			d, st := Decide(tt.in, tt.st)
 			if d.Deny != tt.wantDeny {
 				t.Fatalf("deny = %v, want %v", d.Deny, tt.wantDeny)
 			}
@@ -98,7 +98,7 @@ func TestDecidePrimed(t *testing.T) {
 // rule is primed: the write would go unchecked. No rule is listed.
 func TestDecideBashPrimed(t *testing.T) {
 	in := BashInput{PromptID: "p1", Files: []BashFile{{File: "a.go", Rules: []Rule{sqlHashed, logHashed}}}, Now: t0}
-	d, st := DecideBash(in, session.State{Primed: primed("", sqlHashed, logHashed)}, on)
+	d, st := DecideBash(in, session.State{Primed: primed("", sqlHashed, logHashed)})
 	if !d.Deny || len(d.Rules) != 0 || !cmp.Equal(d.Files, []string{"a.go"}) {
 		t.Errorf("decision = %+v, want a deny of a.go listing no rule", d)
 	}
@@ -109,7 +109,7 @@ func TestDecideBashPrimed(t *testing.T) {
 	// A rule changed since is listed.
 	changed := Rule{ID: "log", Text: "Log with slog.", Hash: "h-log-2"}
 	in.Files[0].Rules = []Rule{sqlHashed, changed}
-	d, _ = DecideBash(in, session.State{Primed: primed("", sqlHashed, logHashed)}, on)
+	d, _ = DecideBash(in, session.State{Primed: primed("", sqlHashed, logHashed)})
 	if !cmp.Equal(d.Rules, []Rule{changed}) {
 		t.Errorf("rules = %+v, want only the changed one", d.Rules)
 	}

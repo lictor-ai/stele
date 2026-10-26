@@ -320,22 +320,28 @@ func TestPreBrokenBeforeFirstParse(t *testing.T) {
 			t.Errorf("block_on_error on, but the write went through:\n%s", a.Raw)
 		}
 	})
-	t.Run("backstop off never blocks", func(t *testing.T) {
+	t.Run("remind off never blocks", func(t *testing.T) {
 		p := newProject(t, broken)
-		p.write("stele.json", `{"backstop": false, "block_on_error": true}`)
+		p.write("stele.json", `{"block_on_error": true}`)
+		p.hookArgs = []string{"--installed=devel", "--remind=off"}
 		if a := p.hook(pre("a.go", "package a")); a.Deny {
-			t.Errorf("backstop off must never block:\n%s", a.Raw)
+			t.Errorf("remind off must never block:\n%s", a.Raw)
 		}
 	})
 }
 
-// backstop off: no rules before writes at all.
-func TestPreBackstopOff(t *testing.T) {
+// init --remind=off: no rules before writes at all, but a write to stele's
+// own files still asks.
+func TestPreRemindOff(t *testing.T) {
 	p := newProject(t, goRules)
-	p.write("stele.json", `{"backstop": false}`)
+	p.mustStele(0, "init", "--remind=off")
+	p.useInstalledHook()
 	p.compile()
 	if a := p.hook(pre("a.go", "package a")); a.Deny {
-		t.Errorf("backstop off denied a write:\n%s", a.Raw)
+		t.Errorf("remind off denied a write:\n%s", a.Raw)
+	}
+	if a := p.hook(pre("stele.md", goRules+"\n---\n\nAnother rule.\n")); !strings.Contains(a.Raw, `"permissionDecision":"ask"`) {
+		t.Errorf("remind off: a write to stele.md did not ask:\n%s", a.Raw)
 	}
 }
 

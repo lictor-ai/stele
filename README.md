@@ -32,13 +32,33 @@ created stele.md
 added stele hooks (PreToolUse, PostToolUse, SessionStart, SubagentStart) to .claude/settings.json
 wrote stele.lock
 wrote .claude/rules/stele-rules.md
+hooks: remind on, check on
 ```
 
 - It works on the current directory only, and says so if a parent directory looks like the repository root (not when the current directory is a git worktree or submodule).
-- It adds `stele hook --installed=<version>` to `.claude/settings.json` on `PreToolUse` and `PostToolUse` (matcher `Write|Edit|MultiEdit`, timeout 10 s), and on `SessionStart` and `SubagentStart`. The rest of the file is kept. `<version>` is the release tag, or `devel` for a build from a commit (`go install ./cmd/stele` in a clone, or `@latest` before a tag); a build from a commit never replaces a release's stamp.
+- It adds `stele hook --installed=<version>` to `.claude/settings.json` on `PreToolUse` (matcher `Write|Edit|MultiEdit|Bash`), `PostToolUse` (matcher `Write|Edit|MultiEdit`), `SessionStart` and `SubagentStart`, each with a timeout of 10 s. The rest of the file is kept. `<version>` is the release tag, or `devel` for a build from a commit (`go install ./cmd/stele` in a clone, or `@latest` before a tag); a build from a commit never replaces a release's stamp.
 - It creates `stele.md` only if there is none. stele never writes `stele.md` or `stele.json` after that.
 - It compiles the rules: `stele.lock`, and `.claude/rules/stele-rules.md`, which Claude Code loads at the start of every session and subagent, like `CLAUDE.md`. So the agent has the rules before its first write.
-- Running it again prints `up to date, nothing written`.
+- Running it again prints `up to date, nothing written`. Every run ends with the state of the two write hooks.
+
+### Turning the write hooks on and off
+
+The two parts of the hook around a write can each be turned off:
+
+| Flag | On (the default) | Off |
+|---|---|---|
+| `--remind` | Before a write, a write that needs rules the agent hasn't seen is denied, with the rules. | No write is denied to show rules. The agent still loads `.claude/rules/stele-rules.md` at session start. |
+| `--check` | After a write, the lines written are checked, and a blocking violation is sent back as a block. | Nothing is checked after a write. An invalid rule in `stele.md` is still reported. |
+
+```
+$ stele init --remind=off
+stele init in /home/you/project
+updated stele hooks in .claude/settings.json
+stele init: kept the existing stele.md
+hooks: remind off, check on
+```
+
+A switch that is off is written on stele's hooks in `.claude/settings.json` (`stele hook --installed=<version> --remind=off`), so commit it and the team shares it. `stele init` without a flag keeps the switches as they are, so upgrading never turns a hook back on; `--remind=on` turns it on again. Either way, a write to stele's own files still asks you first, and `stele check` in CI is unchanged.
 
 Then write your rules in `stele.md` and run `stele compile`:
 
@@ -108,10 +128,10 @@ Scope globs:
 ## What the agent sees
 
 - **When a session or subagent starts.** Claude Code loads `.claude/rules/stele-rules.md`, every rule with its scope, as it loads `CLAUDE.md`. The agent is also told to create and change files with Write and Edit only, never through Bash: stele sees only those. It is told that reading, searching and running commands through Bash is fine.
-- **Before a write.** A rule the agent loaded from `.claude/rules/stele-rules.md` at the start of its session counts as seen until the session ends, as long as the rule hasn't changed since; this needs Claude Code started in the project's root. The first write in a turn to a file with other rules is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent; rules that do not fit in one message (about 9,000 bytes) are shown on the next write. A retry of the denied write goes through; parallel writes in the same message, to other files or to the same one, are denied too, once.
-- **After a write.** A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
+- **Before a write**, unless `--remind=off`. A rule the agent loaded from `.claude/rules/stele-rules.md` at the start of its session counts as seen until the session ends, as long as the rule hasn't changed since; this needs Claude Code started in the project's root. The first write in a turn to a file with other rules is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent; rules that do not fit in one message (about 9,000 bytes) are shown on the next write. A retry of the denied write goes through; parallel writes in the same message, to other files or to the same one, are denied too, once.
+- **After a write**, unless `--check=off`. A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
-- **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock`, `.claude/rules/stele-rules.md` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` says. So does a write to Claude Code's settings files, which run stele's hooks: `.claude/settings.json` and `.claude/settings.local.json` anywhere in the project or from the session's directory up to the git root, and your user `settings.json`. A change there can weaken stele or turn it off. Allow it only if you asked for it.
+- **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock`, `.claude/rules/stele-rules.md` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` and the switches say. So does a write to Claude Code's settings files, which run stele's hooks: `.claude/settings.json` and `.claude/settings.local.json` anywhere in the project or from the session's directory up to the git root, and your user `settings.json`. A change there can weaken stele or turn it off. Allow it only if you asked for it.
 
 ## CI: stele check
 
@@ -169,22 +189,32 @@ Pin a version instead of `@latest` once one is tagged.
 
 ## stele.json
 
-Optional, committed next to `stele.md`. These are the defaults:
+Optional, committed next to `stele.md`. This is the default:
 
 ```json
-{ "backstop": true, "block_on_error": false }
+{ "block_on_error": false }
 ```
 
 | Key | Effect |
 |---|---|
-| `backstop` | `true`: the hook may deny a write to show its rules, and blocks on violations after a write. `false`: no rules are shown before writes; violations after a write are sent as context, never as a block. Either way, a write to stele's own files asks you first. |
-| `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. Only applies when `backstop` is `true`. |
+| `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. It applies only to a part of the hook that is on: with `--remind=off` or `--check=off`, that part's failures only warn. |
+
+`backstop` is no longer read: use `stele init --remind=off`. `stele init` says so when `stele.json` still sets it, and leaves the file as it is:
+
+```
+$ stele init
+stele init in /home/you/project
+stele init: kept the existing stele.md
+stele init: stele.json: backstop is no longer read; use stele init --remind=off
+up to date, nothing written
+hooks: remind on, check on
+```
 
 ## Test results
 
 [test/functional/](test/functional/) holds two kinds of tests:
 
-- **Black-box tests** of the binary: 50 tests of init, compile, check and the hook, built and run with `go test ./test/functional/`.
+- **Black-box tests** of the binary: 52 tests of init, compile, check and the hook, built and run with `go test ./test/functional/`.
 - **An agent eval** that gives headless Claude Code the same coding tasks in three setups by default and grades every run the same way:
   - no rules;
   - the rules pasted into `CLAUDE.md`;
@@ -205,7 +235,7 @@ Every experiment, with its numbers, is in [test/functional/agent/results/](test/
 ## Limits
 
 1. **If `stele` is missing from `PATH`, or the hook crashes or times out, writes go through.** `block_on_error` only acts when stele runs and fails, so it can't prevent this.
-2. **Only Write, Edit and MultiEdit are checked.** The agent is told at the start of each session to write files with those only. A Bash command that writes, by redirection, `tee`, `sed -i` or `perl -i`, into a file a scoped rule covers is stopped once per file each turn: the agent gets the rules and is told to use Write or Edit; run again, the command goes through unchecked. stele reads the command, it does not run it, so scripts, generators, `xargs`, `find -exec`, `$VAR` targets, brace expansion and writes into files only unscoped rules cover are not seen. NotebookEdit and PowerShell are not hooked. `stele check` in CI is the only catch.
+2. **Only Write, Edit and MultiEdit are checked.** The agent is told at the start of each session to write files with those only. A Bash command that writes, by redirection, `tee`, `sed -i` or `perl -i`, into a file a scoped rule covers is stopped once per file each turn: the agent gets the rules and is told to use Write or Edit; run again, the command goes through unchecked. With `--remind=off` it is not stopped at all. stele reads the command, it does not run it, so scripts, generators, `xargs`, `find -exec`, `$VAR` targets, brace expansion and writes into files only unscoped rules cover are not seen. NotebookEdit and PowerShell are not hooked. `stele check` in CI is the only catch.
 3. **The agent can ignore the rules.** It is shown them and told about violations, but it can still choose not to follow them.
 4. **A regex check only catches what a pattern can express.** It matches text, not code, so it also fires in comments and strings. RE2 has no lookaround or backreferences. The pattern runs over the whole file: use `(?m)` for `^` and `$` to mean line start and end.
 5. **A rule with no `scope`, or only `!` exclusions, is shown for every other file.** Keep such rules few. Rules are chosen by path, not by task.
@@ -215,8 +245,9 @@ Every experiment, with its numbers, is in [test/functional/agent/results/](test/
 9. **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too. So is a git worktree or submodule (a directory with its own `.git`): it gets no rules from an outer `stele.md`, only from its own. `stele check` there says nothing to check until it has its own `stele.md`, `stele.json` or `stele.lock`.
 10. **Nothing leaves the machine.** stele makes no network calls. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 11. **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
-12. **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about.
+12. **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about. **A stele from before `--remind` and `--check` must not run `stele init` on hooks that carry a switch: upgrade it first.** It doesn't recognise the switches, so its `stele init` adds a second set of hooks, and it runs both hooks whatever the switches say. Every release so far, v1.0.0-dev.2 included, still tells you to run `stele init` when it meets hooks a newer release wrote. Only a stele with the switches tells you to upgrade instead.
 13. **Asking before a write to stele's own files covers Write, Edit and MultiEdit, and their names and links.** A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock`, `.stele/` and `.claude` settings files. A Bash command that visibly writes, removes, moves or copies onto one of them is asked about too. Not asked about: other Bash forms, a NotebookEdit, managed settings, settings passed with `--settings` or the environment, and a session started above the stele project with hooks registered there by hand. With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
+14. **With `--check=off`, only `stele check` finds violations.** With both `--remind=off` and `--check=off`, the agent still loads the rules at session start, but nothing enforces them until CI.
 
 ## License
 

@@ -343,15 +343,21 @@ func TestInvalidRuleIsNotSilent(t *testing.T) {
 	}
 }
 
-// A backstop-off project gets violations as context, never as a block.
-func TestPostBackstopOffNeverBlocks(t *testing.T) {
+// init --check=off: no check after a write, but an invalid rule the agent
+// writes into stele.md is still reported.
+func TestPostCheckOff(t *testing.T) {
 	p := newProject(t, checkRules)
-	p.write("stele.json", `{"backstop": false}`)
+	p.mustStele(0, "init", "--check=off")
+	p.useInstalledHook()
 	p.compile()
 	src := "package a\nfunc f() { fmt.Println(1) }\n"
 	p.write("a.go", src)
-	a := p.hook(post("a.go", src))
-	if a.Block || !strings.Contains(a.Context, "a.go:2") {
-		t.Errorf("backstop off: want context with the violation and no block:\n%s", a.Raw)
+	if a := p.hook(post("a.go", src)); a.Block || strings.Contains(a.Context, "a.go:2") {
+		t.Errorf("check off: want no block and no violation:\n%s", a.Raw)
+	}
+	bad := checkRules + "\n---\n\ncheck: regex\npattern: x*\n\nNo x.\n"
+	p.write("stele.md", bad)
+	if a := p.hook(post("stele.md", bad)); !strings.Contains(a.Warning, "cannot be checked") {
+		t.Errorf("check off: an invalid rule in stele.md was not reported:\n%s", a.Raw)
 	}
 }

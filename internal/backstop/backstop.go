@@ -3,7 +3,7 @@
 // Before a write, the agent must have seen every rule that applies to the
 // file. Decide denies a write that would bring rules the agent has not been
 // shown this turn, and the caller sends those rules as the deny reason
-// (ADR-0004). Given the rules, the session state, the policy and the time, it
+// (ADR-0004). Given the rules, the session state and the time, it
 // returns the decision and the state to save, so the most behaviour-dense part
 // of the hook is a table test.
 package backstop
@@ -12,7 +12,6 @@ import (
 	"maps"
 	"time"
 
-	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/session"
 )
 
@@ -69,8 +68,8 @@ type Decision struct {
 
 // Decide returns the decision for one write, and the state to save before the
 // decision is answered (ADR-0004: save before deny).
-func Decide(in Input, st session.State, p enforce.Policy) (Decision, session.State) {
-	if !p.Backstop || len(in.Rules) == 0 {
+func Decide(in Input, st session.State) (Decision, session.State) {
+	if len(in.Rules) == 0 {
 		return Decision{}, st
 	}
 	newTurn(&st, in.PromptID)

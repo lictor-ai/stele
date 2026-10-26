@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -108,47 +109,91 @@ func (h handler) runsStele() bool {
 	return name == "stele"
 }
 
-// stamp returns the version on a handler init wrote: exactly stele hook
-// --installed=<version>, nothing after. ok is false for any other handler,
-// including a stele hook written by hand or one the user added to.
-func (h handler) stamp() (version string, ok bool) {
-	w := h.words()
-	if !h.runsStele() || len(w) != 3 || !strings.HasPrefix(w[2], installedFlag) {
-		return "", false
-	}
-	return strings.TrimPrefix(w[2], installedFlag), true
+// Switches are the parts of the write hooks a project turned off with stele
+// init (ADR-0006, ADR-0008). The zero value is both on, the default.
+type Switches struct {
+	// RemindOff: before a write, never deny it to show the rules.
+	RemindOff bool
+	// CheckOff: after a write, never check it.
+	CheckOff bool
 }
 
-// command is the command init writes for version.
-func command(version string) string { return "stele hook " + installedFlag + version }
+// The switch flags. A switch that is on is never written.
+const (
+	remindOff = "--remind=off"
+	checkOff  = "--check=off"
+)
+
+// flags are the words init writes after the stamp, in this order.
+func (s Switches) flags() []string {
+	var f []string
+	if s.RemindOff {
+		f = append(f, remindOff)
+	}
+	if s.CheckOff {
+		f = append(f, checkOff)
+	}
+	return f
+}
+
+// String is how init shows the switches: "remind on, check off".
+func (s Switches) String() string {
+	state := func(off bool) string {
+		if off {
+			return "off"
+		}
+		return "on"
+	}
+	return "remind " + state(s.RemindOff) + ", check " + state(s.CheckOff)
+}
+
+// stamp returns the version and switches on a handler init wrote: exactly
+// stele hook --installed=<version>, then the flags of the switches that are
+// off, in init's order, nothing else. ok is false for any other handler,
+// including a stele hook written by hand or one the user added to.
+func (h handler) stamp() (version string, sw Switches, ok bool) {
+	w := h.words()
+	if !h.runsStele() || len(w) < 3 || !strings.HasPrefix(w[2], installedFlag) {
+		return "", Switches{}, false
+	}
+	sw = HookSwitches(w[3:])
+	if !slices.Equal(w[3:], sw.flags()) {
+		return "", Switches{}, false
+	}
+	return strings.TrimPrefix(w[2], installedFlag), sw, true
+}
+
+// command is the command init writes for version and switches.
+func command(version string, sw Switches) string {
+	return strings.Join(append([]string{"stele", "hook", installedFlag + version}, sw.flags()...), " ")
+}
 
 // Install returns settings with stele's hooks on every event of
-// registrations, stamped with version. Empty settings are {}. changed is
-// false, and out is settings unchanged, when each event already has exactly
-// one stele handler, carrying this version, in a group with the registered
-// matcher. Otherwise every stele handler is removed and one group per event
-// appended. notes name stele hooks written by hand, which are left alone.
-// Malformed settings are an error, never rewritten.
-func Install(settings []byte, version string) (out []byte, changed bool, notes []string, err error) {
+// registrations, stamped with version and carrying sw. Empty settings are
+// {}. changed is false, and out is settings unchanged, when each event
+// already has exactly one stele handler, carrying this version and these
+// switches, in a group with the registered matcher. Otherwise every stele
+// handler is removed and one group per event appended. notes name stele
+// hooks written by hand, which are left alone. Malformed settings are an
+// error, never rewritten.
+func Install(settings []byte, version string, sw Switches) (out []byte, changed bool, notes []string, err error) {
 	f, err := parseSettings(settings)
 	if err != nil {
 		return nil, false, nil, err
 	}
 	for _, r := range registrations {
-		var stamped []string
+		var current []bool
 		for _, g := range f.groups[r.Event] {
 			for _, h := range g.handlers {
-				if v, ok := h.stamp(); ok {
-					if g.matcher() != r.Matcher {
-						v = "" // in a group init did not write: out of date
-					}
-					stamped = append(stamped, v)
+				if v, s, ok := h.stamp(); ok {
+					// In a group init did not write: out of date.
+					current = append(current, g.matcher() == r.Matcher && v == version && s == sw)
 				} else if h.runsStele() {
 					notes = append(notes, fmt.Sprintf("%s already runs a stele hook stele init did not write; it is left alone, so stele will run twice", r.Event))
 				}
 			}
 		}
-		if len(stamped) != 1 || stamped[0] != version {
+		if len(current) != 1 || !current[0] {
 			changed = true
 		}
 	}
@@ -164,7 +209,7 @@ func Install(settings []byte, version string) (out []byte, changed bool, notes [
 			Type    string `json:"type"`
 			Command string `json:"command"`
 			Timeout int    `json:"timeout"`
-		}{"command", command(version), 10}}})
+		}{"command", command(version, sw), 10}}})
 		if err != nil {
 			return nil, false, nil, err
 		}
@@ -194,29 +239,29 @@ func Uninstall(settings []byte) (out []byte, removed int, empty bool, err error)
 	return out, removed, len(f.top) == 0, nil
 }
 
-// Installed returns the version stamped on stele's hooks.
-func Installed(settings []byte) (version string, ok bool) {
+// Installed returns the version and switches on stele's hooks.
+func Installed(settings []byte) (version string, sw Switches, ok bool) {
 	f, err := parseSettings(settings)
 	if err != nil {
-		return "", false
+		return "", Switches{}, false
 	}
 	for _, ev := range events {
 		for _, g := range f.groups[ev] {
 			for _, h := range g.handlers {
-				if v, ok := h.stamp(); ok {
-					return v, true
+				if v, s, ok := h.stamp(); ok {
+					return v, s, true
 				}
 			}
 		}
 	}
-	return "", false
+	return "", Switches{}, false
 }
 
 // OtherSteleHook reports whether settings run stele hook, on any event, other
-// than as init writes it for version. Claude Code runs identical handlers
-// once, so only another one makes stele run twice. Unreadable settings run
-// nothing stele can see.
-func OtherSteleHook(settings []byte, version string) bool {
+// than as init writes it for version and sw. Claude Code runs identical
+// handlers once, so only another one makes stele run twice. Unreadable
+// settings run nothing stele can see.
+func OtherSteleHook(settings []byte, version string, sw Switches) bool {
 	var s struct {
 		Hooks map[string][]struct {
 			Hooks []handler `json:"hooks"`
@@ -228,7 +273,7 @@ func OtherSteleHook(settings []byte, version string) bool {
 	for _, groups := range s.Hooks {
 		for _, g := range groups {
 			for _, h := range g.Hooks {
-				if h.runsStele() && (h.Command != command(version) || len(h.Args) > 0) {
+				if h.runsStele() && (h.Command != command(version, sw) || len(h.Args) > 0) {
 					return true
 				}
 			}
@@ -246,6 +291,26 @@ func InstalledVersion(args []string) string {
 		}
 	}
 	return ""
+}
+
+// HookSwitches reads the switches from stele hook's own arguments. The last
+// of --remind=on|off wins, likewise --check; anything else is ignored, so a
+// newer stele's flags leave an older one with both on.
+func HookSwitches(args []string) Switches {
+	var sw Switches
+	for _, a := range args {
+		switch a {
+		case remindOff:
+			sw.RemindOff = true
+		case "--remind=on":
+			sw.RemindOff = false
+		case checkOff:
+			sw.CheckOff = true
+		case "--check=on":
+			sw.CheckOff = false
+		}
+	}
+	return sw
 }
 
 // member is one key of a JSON object, its key and value kept exactly as
@@ -484,7 +549,7 @@ func (f *settingsFile) removeStele() int {
 			var hooks []json.RawMessage
 			var handlers []handler
 			for i, h := range g.handlers {
-				if _, ok := h.stamp(); ok {
+				if _, _, ok := h.stamp(); ok {
 					removed++
 					continue
 				}

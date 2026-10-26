@@ -21,18 +21,52 @@ import (
 // .stele/ and, when there is none, stele.md (spec §6, ADR-0004). It then
 // compiles, which writes stele.lock and the rules file Claude Code loads at
 // launch (#68). Run again, it writes nothing unless the hooks carry another
-// stele version or the rules changed.
+// stele version or the rules changed. --remind and --check switch the two
+// write hooks (ADR-0006); a switch not given keeps what is installed.
 func runInit(args []string, stdout, stderr io.Writer) int {
-	root, ok := installRoot("init", args, stdout, stderr)
+	var set install.Set
+	root, ok := installRoot("init", args, stdout, stderr, func(fs *flag.FlagSet) {
+		fs.Var(switchFlag{&set.Remind}, "remind", "before a write, deny it to show the rules: on or off")
+		fs.Var(switchFlag{&set.Check}, "check", "after a write, check it against the rules: on or off")
+	})
 	if !ok {
 		return exitCantRun
 	}
-	changes, notes, err := install.Init(root, binaryVersion())
+	changes, notes, err := install.Init(root, binaryVersion(), set)
 	if err == nil {
 		c, n := initCompile(root)
 		changes, notes = append(changes, c...), append(notes, n...)
 	}
-	return report("init", changes, notes, err, stdout, stderr)
+	code := report("init", changes, notes, err, stdout, stderr)
+	if code == exitOK {
+		if sw, ok := install.InstalledSwitches(root); ok {
+			fmt.Fprintln(stdout, "hooks: "+sw.String())
+		}
+	}
+	return code
+}
+
+// switchFlag is an init flag that takes on or off; unset, it stays nil.
+type switchFlag struct{ p **bool }
+
+func (f switchFlag) String() string {
+	if f.p == nil || *f.p == nil {
+		return ""
+	}
+	if **f.p {
+		return "on"
+	}
+	return "off"
+}
+
+func (f switchFlag) Set(s string) error {
+	switch s {
+	case "on", "off":
+		on := s == "on"
+		*f.p = &on
+		return nil
+	}
+	return errors.New("want on or off")
 }
 
 // initCompile compiles the rules init set up. A failure is a note, not an
@@ -65,7 +99,7 @@ func initCompile(root string) (changes, notes []string) {
 
 // runUninstall removes exactly what init wrote in the current directory.
 func runUninstall(args []string, stdout, stderr io.Writer) int {
-	root, ok := installRoot("uninstall", args, stdout, stderr)
+	root, ok := installRoot("uninstall", args, stdout, stderr, nil)
 	if !ok {
 		return exitCantRun
 	}
@@ -76,10 +110,14 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 // installRoot parses init's or uninstall's flags and returns the current
 // directory. Claude Code reads .claude/settings.json from the directory it
 // starts in, so both work where they run, never on an ancestor a root search
-// would find; when there is one, a note says so.
-func installRoot(name string, args []string, stdout, stderr io.Writer) (string, bool) {
+// would find; when there is one, a note says so. define, when not nil, adds
+// the command's own flags.
+func installRoot(name string, args []string, stdout, stderr io.Writer, define func(*flag.FlagSet)) (string, bool) {
 	fs := flag.NewFlagSet("stele "+name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	if define != nil {
+		define(fs)
+	}
 	if err := fs.Parse(args); err != nil {
 		return "", false
 	}

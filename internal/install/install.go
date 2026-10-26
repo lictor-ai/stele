@@ -12,6 +12,7 @@ import (
 	"text/template"
 
 	"github.com/lictor-ai/stele/internal/adapter/claudecode"
+	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/safefile"
 )
@@ -49,13 +50,108 @@ var (
 // changes, which is not the tagged code). Anything else stamps as devel.
 func Released(v string) bool { return semverRE.MatchString(v) && !pseudoRE.MatchString(v) }
 
+// Older reports whether release a comes before release b, by semver
+// precedence: major, minor and patch as numbers, then a pre-release before
+// the release it leads to. Both must be Released.
+func Older(a, b string) bool { return compareSemver(a, b) < 0 }
+
+func compareSemver(a, b string) int {
+	ma, mb := semverRE.FindStringSubmatch(a), semverRE.FindStringSubmatch(b)
+	if ma == nil || mb == nil {
+		return 0
+	}
+	for i := 1; i <= 3; i++ {
+		if c := compareNumbers(ma[i], mb[i]); c != 0 {
+			return c
+		}
+	}
+	pa, pb := strings.TrimPrefix(ma[4], "-"), strings.TrimPrefix(mb[4], "-")
+	switch {
+	case pa == pb:
+		return 0
+	case pa == "":
+		return 1 // a release comes after its pre-releases
+	case pb == "":
+		return -1
+	}
+	fa, fb := strings.Split(pa, "."), strings.Split(pb, ".")
+	for i := 0; i < len(fa) && i < len(fb); i++ {
+		if c := compareIdent(fa[i], fb[i]); c != 0 {
+			return c
+		}
+	}
+	return compareInts(len(fa), len(fb))
+}
+
+// compareIdent orders two pre-release identifiers: numbers as numbers,
+// before any word; words in ASCII order.
+func compareIdent(a, b string) int {
+	na, nb := numeric(a), numeric(b)
+	switch {
+	case na && nb:
+		return compareNumbers(a, b)
+	case na:
+		return -1
+	case nb:
+		return 1
+	}
+	return strings.Compare(a, b)
+}
+
+func numeric(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// compareNumbers orders decimal strings without leading zeros, of any
+// length.
+func compareNumbers(a, b string) int {
+	if c := compareInts(len(a), len(b)); c != 0 {
+		return c
+	}
+	return strings.Compare(a, b)
+}
+
+func compareInts(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
+// Set is the switches stele init was asked to change: nil keeps what the
+// installed hooks carry, so running init again never turns a hook back on.
+type Set struct{ Remind, Check *bool }
+
+// apply returns the installed switches with s applied.
+func (s Set) apply(sw claudecode.Switches) claudecode.Switches {
+	if s.Remind != nil {
+		sw.RemindOff = !*s.Remind
+	}
+	if s.Check != nil {
+		sw.CheckOff = !*s.Check
+	}
+	return sw
+}
+
+// BackstopNote is init's note for a stele.json that still sets backstop,
+// which nothing reads since ADR-0008. stele never edits the file (D38).
+const BackstopNote = "stele.json: backstop is no longer read; use stele init --remind=off"
+
 // Init sets stele up under root (spec §6, ADR-0004): the Claude Code hooks
 // before and after a write, stamped with version when it is a release and
-// with devel otherwise, .stele/ and, only when
-// there is none, stele.md. Every check comes before the first write, so a
-// refusal leaves the repository untouched. changes say what it wrote; notes
-// what the user should know.
-func Init(root, version string) (changes, notes []string, err error) {
+// with devel otherwise and carrying the switches set asks for (ADR-0006),
+// .stele/ and, only when there is none, stele.md. Every check comes before
+// the first write, so a refusal leaves the repository untouched. changes say
+// what it wrote; notes what the user should know.
+func Init(root, version string, set Set) (changes, notes []string, err error) {
 	settings := filepath.Join(root, claudecode.SettingsFile)
 	claudeDir := filepath.Dir(settings)
 	steleDir := filepath.Join(root, index.Dir)
@@ -69,7 +165,7 @@ func Init(root, version string) (changes, notes []string, err error) {
 	}
 
 	// Check.
-	hooks, _, _, _ := claudecode.Install(nil, stamp)
+	hooks, _, _, _ := claudecode.Install(nil, stamp, set.apply(claudecode.Switches{}))
 	byHand := fmt.Sprintf("; add these hooks to %s by hand:\n%s", claudecode.SettingsFile, hooks)
 	if err := plainDir(claudeDir); err != nil {
 		return nil, nil, fmt.Errorf("%w: stele will not write through it%s", err, byHand)
@@ -84,10 +180,12 @@ func Init(root, version string) (changes, notes []string, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if v, ok := claudecode.Installed(data); ok && Released(v) && !Released(version) {
+	v, installed, had := claudecode.Installed(data)
+	if had && Released(v) && !Released(version) {
 		stamp = v // a build from a commit never replaces a release's stamp
 	}
-	out, changed, notes, err := claudecode.Install(data, stamp)
+	sw := set.apply(installed)
+	out, changed, notes, err := claudecode.Install(data, stamp, sw)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: %w; fix it and run stele init again", claudecode.SettingsFile, err)
 	}
@@ -123,14 +221,32 @@ func Init(root, version string) (changes, notes []string, err error) {
 		if err := safefile.ReplacePerm(settings, out, mode); err != nil {
 			return changes, notes, err
 		}
-		changes = append(changes, "added stele hooks ("+strings.Join(claudecode.Events(), ", ")+") to "+claudecode.SettingsFile)
+		if had {
+			changes = append(changes, "updated stele hooks in "+claudecode.SettingsFile)
+		} else {
+			changes = append(changes, "added stele hooks ("+strings.Join(claudecode.Events(), ", ")+") to "+claudecode.SettingsFile)
+		}
 	}
 
 	local := filepath.Join(claudeDir, "settings.local.json")
-	if l, err := safefile.ReadRegular(local, maxSettings); err == nil && claudecode.OtherSteleHook(l, stamp) {
+	if l, err := safefile.ReadRegular(local, maxSettings); err == nil && claudecode.OtherSteleHook(l, stamp, sw) {
 		notes = append(notes, filepath.Join(".claude", "settings.local.json")+" runs another stele hook: remove it there, or stele runs twice")
 	}
+	if enforce.SetsBackstop(root) {
+		notes = append(notes, BackstopNote)
+	}
 	return changes, notes, nil
+}
+
+// InstalledSwitches returns the switches the stele hooks under root carry.
+// ok is false when there are none, or the settings cannot be read.
+func InstalledSwitches(root string) (sw claudecode.Switches, ok bool) {
+	data, _, err := readSettings(filepath.Join(root, claudecode.SettingsFile))
+	if err != nil {
+		return claudecode.Switches{}, false
+	}
+	_, sw, ok = claudecode.Installed(data)
+	return sw, ok
 }
 
 // Uninstall removes what Init and stele compile wrote: stele's hooks, the

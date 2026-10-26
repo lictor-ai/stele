@@ -265,28 +265,13 @@ func TestHookAfterWrite(t *testing.T) {
 	t.Run("long messages stay under Claude Code's limit", func(t *testing.T) {
 		long := strings.Repeat("m", 480)
 		rules := "check: regex\npattern: AAA\nmessage: " + long + "\n\nNo AAA.\n\n---\n\ncheck: regex\npattern: BBB\nblocking: false\nmessage: " + long + "\n\nNo BBB.\n"
-		root := project(t, rules)
-		if err := os.WriteFile(filepath.Join(root, "stele.json"), []byte(`{"backstop": false}`), 0o644); err != nil {
-			t.Fatal(err)
+		o, _ := postHook(t, project(t, rules), "post-write", "a.go", strings.Repeat("AAA BBB\n", 30))
+		reason, ctx := o.Reason, o.HookSpecificOutput.AdditionalContext
+		if o.Decision != "block" || len(reason) > 9000 || !strings.Contains(reason, "No AAA") || !strings.Contains(reason, "more") {
+			t.Errorf("reason is %d bytes, want the blocking message, cut, under 9000:\n%s", len(reason), reason)
 		}
-		o, _ := postHook(t, root, "post-write", "a.go", strings.Repeat("AAA BBB\n", 30))
-		ctx := o.HookSpecificOutput.AdditionalContext
-		if o.Decision != "" || len(ctx) > 9000 || !strings.Contains(ctx, "No AAA") || !strings.Contains(ctx, "No BBB") || !strings.Contains(ctx, "more") {
-			t.Errorf("context is %d bytes, want both messages, cut, under 9000:\n%s", len(ctx), ctx)
-		}
-		o, _ = postHook(t, project(t, rules), "post-write", "a.go", strings.Repeat("AAA BBB\n", 30))
-		if len(o.Reason) > 9000 || len(o.HookSpecificOutput.AdditionalContext) > 9000 {
-			t.Errorf("reason %d bytes, context %d, want each under 9000", len(o.Reason), len(o.HookSpecificOutput.AdditionalContext))
-		}
-	})
-	t.Run("backstop off: told, never blocked", func(t *testing.T) {
-		root := project(t, checkRules)
-		if err := os.WriteFile(filepath.Join(root, "stele.json"), []byte(`{"backstop": false}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		o, _ := postHook(t, root, "post-write", "a.go", "password = 1\n")
-		if o.Decision != "" || !strings.Contains(o.HookSpecificOutput.AdditionalContext, "a.go:1:1:") {
-			t.Errorf("want the violation as context and no block, got %+v", o)
+		if len(ctx) > 9000 || !strings.Contains(ctx, "No BBB") || !strings.Contains(ctx, "more") {
+			t.Errorf("context is %d bytes, want the non-blocking message, cut, under 9000:\n%s", len(ctx), ctx)
 		}
 	})
 }
@@ -335,15 +320,6 @@ func TestHookAfterWriteFailurePolicy(t *testing.T) {
 		o, _ := postHook(t, root, "post-write", "a.go", "password = 1\n")
 		if o.Decision != "block" || !strings.Contains(o.Reason, "no config directory") {
 			t.Errorf("want a block naming the failure, got %+v", o)
-		}
-	})
-	t.Run("block_on_error with backstop off: never blocks", func(t *testing.T) {
-		root := project(t, checkRules)
-		noKey(t)
-		policy(t, root, `{"block_on_error": true, "backstop": false}`)
-		o, _ := postHook(t, root, "post-write", "a.go", "password = 1\n")
-		if o.Decision != "" || !strings.Contains(o.SystemMessage, "no config directory") {
-			t.Errorf("want a warning and no block, got %+v", o)
 		}
 	})
 	t.Run("a broken stele.md keeps the last good rules", func(t *testing.T) {

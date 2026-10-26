@@ -59,11 +59,10 @@ func TestHookWarnsAgainOfNewInvalidRules(t *testing.T) {
 	}
 }
 
-func TestHookWarnsOfInvalidRulesWithBackstopOff(t *testing.T) {
+func TestHookWarnsOfInvalidRulesWithCheckOff(t *testing.T) {
 	root := project(t, checkRules+badRule)
-	writeAt(t, root, "stele.json", `{"backstop": false}`)
-	if o, _ := postHook(t, root, "post-write", "a.go", "package a\n"); !strings.Contains(o.SystemMessage, "cannot be checked") {
-		t.Errorf("backstop off: warning %q, want the invalid rule named", o.SystemMessage)
+	if o, _ := hook(t, postPayload(t, root, "post-write", "a.go", "package a\n"), "--check=off"); !strings.Contains(o.SystemMessage, "cannot be checked") {
+		t.Errorf("check off: warning %q, want the invalid rule named", o.SystemMessage)
 	}
 }
 

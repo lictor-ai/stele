@@ -70,15 +70,17 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 			code = exitOK
 		}
 	}()
+	// The switches stele init wrote on the command (ADR-0006).
+	sw := claudecode.HookSwitches(args)
 	var a claudecode.Answer
 	switch {
 	case ev.Name == "PreToolUse" && ev.ToolName == "Bash":
-		a = beforeBash(ev)
+		a = beforeBash(ev, sw)
 	case ev.Name == "PreToolUse":
-		a = beforeWrite(ev)
+		a = beforeWrite(ev, sw)
 		a.Warning = joinLines(a.Warning, versionWarning(ev, claudecode.InstalledVersion(args)))
 	case ev.Name == "PostToolUse" && writes[ev.ToolName]:
-		a = afterWrite(ev)
+		a = afterWrite(ev, sw)
 		room := install.MaxMessage
 		if a.Context != "" {
 			room -= len(a.Context) + len("\n\n") // joinNotes' separator
@@ -117,8 +119,9 @@ func target(ev claudecode.Event) (root, rel string, ok bool) {
 	return root, filepath.ToSlash(rel), true
 }
 
-// beforeWrite decides a PreToolUse call.
-func beforeWrite(ev claudecode.Event) claudecode.Answer {
+// beforeWrite decides a PreToolUse call. With --remind=off only the asks
+// for stele's own files and settings are left.
+func beforeWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 	root, rel, ok := target(ev)
 	if !ok {
 		return askOutside(ev)
@@ -127,11 +130,11 @@ func beforeWrite(ev claudecode.Event) claudecode.Answer {
 	if writes[ev.ToolName] && (guarded(root, rel, ev.File) || loadsSettings(ev, ev.File)) {
 		return claudecode.Answer{Ask: install.AskMessage(showPath(rel))}
 	}
-
-	policy, perr := enforce.Load(root)
-	if !policy.Backstop {
+	if sw.RemindOff {
 		return claudecode.Answer{}
 	}
+
+	policy, perr := enforce.Load(root)
 	fail := func(err error) claudecode.Answer { return failure(policy, ev.Name, err) }
 	if perr != nil {
 		return fail(perr)
@@ -168,7 +171,7 @@ func beforeWrite(ev claudecode.Event) claudecode.Answer {
 					return install.BlockMessageMore(rel, blockRules(rs[:k]), len(rs)-k, note)
 				}))
 			}}
-		d, *st = backstop.Decide(in, *st, policy)
+		d, *st = backstop.Decide(in, *st)
 		return nil
 	})
 	if err != nil {
@@ -226,10 +229,13 @@ func freshIndex(root string, key []byte) (idx index.Index, note string, err erro
 // afterWrite decides a PostToolUse call: it checks the lines the agent just
 // wrote against the rules with a built-in check (D45). It keeps no session
 // state, so parallel writes cannot race.
-func afterWrite(ev claudecode.Event) claudecode.Answer {
+func afterWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 	root, rel, ok := target(ev)
 	if !ok {
 		return claudecode.Answer{}
+	}
+	if sw.CheckOff {
+		return refreshOnly(root)
 	}
 
 	policy, perr := enforce.Load(root)
@@ -295,23 +301,36 @@ func afterWrite(ev claudecode.Event) claudecode.Answer {
 		more = 0
 		return install.ViolationMessageWithin(rel, vs[:min(len(vs), maxShown)], n, blocking, limit)
 	}
-	// The context holds the notes, the non-blocking violations and, with
-	// backstop off, the blocking ones too: they share one budget.
+	// The blocking violations are the block's reason; the context holds the
+	// notes and the non-blocking ones, which share its budget.
 	var a claudecode.Answer
-	budget := install.MaxMessage - len(joinNotes(notes...))
-	if len(hard) > 0 && policy.Backstop {
+	if len(hard) > 0 {
 		a.Deny, a.Reason = true, message(hard, true, install.MaxMessage)
-		hard = nil
 	}
-	// With backstop off the hook never blocks (ADR-0004): the agent is told.
-	hardBudget := budget
-	if len(soft) > 0 {
-		hardBudget = budget / 2
-	}
-	hardMsg := message(hard, true, hardBudget)
-	softMsg := message(soft, false, budget-len(hardMsg)-4)
-	a.Context = joinNotes(append([]string{hardMsg, softMsg}, notes...)...)
+	budget := install.MaxMessage - len(joinNotes(notes...))
+	softMsg := message(soft, false, budget-4)
+	a.Context = joinNotes(append([]string{softMsg}, notes...)...)
 	return a
+}
+
+// refreshOnly is the post-write answer with --check=off. Nothing is checked,
+// but the index and the rules file are rebuilt when stele.md changed: only
+// this hook compiles an agent's edit to stele.md, whose write asks before it
+// runs (ADR-0006). A failure only warns: no check was asked for, so there is
+// nothing for block_on_error to stand in for.
+func refreshOnly(root string) claudecode.Answer {
+	warn := func(err error) claudecode.Answer {
+		return claudecode.Answer{Warning: fmt.Sprintf("stele: rules not refreshed after this write: %v", err)}
+	}
+	key, err := loadKey()
+	if err != nil {
+		return warn(err)
+	}
+	_, note, err := freshIndex(root, key)
+	if err != nil {
+		return warn(err)
+	}
+	return claudecode.Answer{Context: note}
 }
 
 // written returns the lines an Edit or MultiEdit wrote: exactly, from
@@ -348,6 +367,12 @@ func versionWarning(ev claudecode.Event, installed string) string {
 	}
 	msg := fmt.Sprintf("stele: the hooks in %s were installed by stele %s; this is stele %s. Run stele init to update them.",
 		filepath.ToSlash(claudecode.SettingsFile), installed, running)
+	if install.Older(running, installed) {
+		// An older init takes hooks carrying switches for hand-written ones
+		// and adds a second set (ADR-0006): it must not be run.
+		msg = fmt.Sprintf("stele: the hooks in %s were installed by stele %s; this is stele %s, which is older. Upgrade stele; do not run stele init with it.",
+			filepath.ToSlash(claudecode.SettingsFile), installed, running)
+	}
 	key, err := loadKey()
 	if err != nil {
 		return msg
@@ -391,11 +416,11 @@ func joinNotes(notes ...string) string {
 // failure is the answer when stele itself cannot run. With block_on_error off,
 // the default, the write goes through and the user is warned; with it on, the
 // write is blocked and the agent told why (ADR-0004). After a write, nothing
-// can be stopped: the agent is told the write went unchecked. With backstop
-// off the hook never blocks, so only the warning is left.
+// can be stopped: the agent is told the write went unchecked. Only a part
+// the switches leave on gets here (ADR-0006).
 func failure(p enforce.Policy, event string, err error) claudecode.Answer {
 	post := event == "PostToolUse"
-	if p.BlockOnError && p.Backstop {
+	if p.BlockOnError {
 		if post {
 			return claudecode.Answer{Deny: true, Reason: fmt.Sprintf("stele could not check this write against the project's rules: %v. block_on_error is on in stele.json, so the write is reported as unchecked: it was saved, but fix stele before going on.", err)}
 		}

@@ -6,8 +6,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-
-	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/session"
 )
 
@@ -18,7 +16,6 @@ func TestDecideBash(t *testing.T) {
 		name           string
 		in             BashInput
 		st             session.State
-		p              enforce.Policy
 		want           BashDecision
 		wantShown      map[string]map[string]time.Time
 		wantDenied     map[string]map[string]time.Time
@@ -27,7 +24,6 @@ func TestDecideBash(t *testing.T) {
 		{
 			name:           "first write through Bash is denied with the rules",
 			in:             BashInput{PromptID: "p1", Files: []BashFile{aGo}, Now: t0},
-			p:              on,
 			want:           BashDecision{Deny: true, Files: []string{"a.go"}, Rules: []Rule{sqlRule, logRule}},
 			wantShown:      shown("", t0, "sql", "log"),
 			wantDenied:     denied("", t0, "a.go"),
@@ -38,7 +34,6 @@ func TestDecideBash(t *testing.T) {
 			in:   BashInput{PromptID: "p1", Files: []BashFile{aGo}, Now: t0.Add(RetryAfter)},
 			st: session.State{PromptID: "p1", Shown: shown("", t0, "sql", "log"),
 				Denied: denied("", t0, "a.go"), BashDenied: denied("", t0, "a.go")},
-			p:              on,
 			wantShown:      shown("", t0, "sql", "log"),
 			wantDenied:     denied("", t0, "a.go"),
 			wantBashDenied: denied("", t0, "a.go"),
@@ -47,7 +42,6 @@ func TestDecideBash(t *testing.T) {
 			name:           "a parallel call sooner is denied again, rules already shown",
 			in:             BashInput{PromptID: "p1", Files: []BashFile{aGo}, Now: t0.Add(100 * time.Millisecond)},
 			st:             session.State{PromptID: "p1", Shown: shown("", t0, "sql", "log"), BashDenied: denied("", t0, "a.go")},
-			p:              on,
 			want:           BashDecision{Deny: true, Files: []string{"a.go"}},
 			wantShown:      shown("", t0, "sql", "log"),
 			wantDenied:     denied("", t0.Add(100*time.Millisecond), "a.go"),
@@ -57,7 +51,6 @@ func TestDecideBash(t *testing.T) {
 			name:           "a deny in the future (the clock moved back) is no retry",
 			in:             BashInput{PromptID: "p1", Files: []BashFile{bGo}, Now: t0},
 			st:             session.State{PromptID: "p1", Shown: shown("", t0.Add(time.Hour), "sql"), BashDenied: denied("", t0.Add(time.Hour), "b.go")},
-			p:              on,
 			want:           BashDecision{Deny: true, Files: []string{"b.go"}},
 			wantShown:      shown("", t0.Add(time.Hour), "sql"),
 			wantDenied:     denied("", t0, "b.go"),
@@ -68,7 +61,6 @@ func TestDecideBash(t *testing.T) {
 			in:   BashInput{PromptID: "p2", Files: []BashFile{bGo}, Now: t0.Add(time.Minute)},
 			st: session.State{PromptID: "p1", Shown: shown("", t0, "sql"),
 				Denied: denied("", t0, "b.go"), BashDenied: denied("", t0, "b.go")},
-			p:              on,
 			want:           BashDecision{Deny: true, Files: []string{"b.go"}, Rules: []Rule{sqlRule}},
 			wantShown:      shown("", t0.Add(time.Minute), "sql"),
 			wantDenied:     denied("", t0.Add(time.Minute), "b.go"),
@@ -78,7 +70,6 @@ func TestDecideBash(t *testing.T) {
 			name:           "a subagent has its own record",
 			in:             BashInput{PromptID: "p1", AgentID: "sub", Files: []BashFile{bGo}, Now: t0.Add(time.Second)},
 			st:             session.State{PromptID: "p1", Shown: shown("", t0, "sql"), BashDenied: denied("", t0, "b.go")},
-			p:              on,
 			want:           BashDecision{Deny: true, Files: []string{"b.go"}, Rules: []Rule{sqlRule}},
 			wantShown:      merge(shown("", t0, "sql"), shown("sub", t0.Add(time.Second), "sql")),
 			wantDenied:     denied("sub", t0.Add(time.Second), "b.go"),
@@ -88,7 +79,6 @@ func TestDecideBash(t *testing.T) {
 			name:           "files retried go through; a new one is denied alone",
 			in:             BashInput{PromptID: "p1", Files: []BashFile{aGo, bGo}, Now: t0.Add(time.Second)},
 			st:             session.State{PromptID: "p1", Shown: shown("", t0, "sql", "log"), BashDenied: denied("", t0, "a.go")},
-			p:              on,
 			want:           BashDecision{Deny: true, Files: []string{"b.go"}},
 			wantShown:      shown("", t0, "sql", "log"),
 			wantDenied:     denied("", t0.Add(time.Second), "b.go"),
@@ -97,27 +87,20 @@ func TestDecideBash(t *testing.T) {
 		{
 			name:           "a rule two files share is shown once",
 			in:             BashInput{PromptID: "p1", Files: []BashFile{aGo, bGo}, Now: t0},
-			p:              on,
 			want:           BashDecision{Deny: true, Files: []string{"a.go", "b.go"}, Rules: []Rule{sqlRule, logRule}},
 			wantShown:      shown("", t0, "sql", "log"),
 			wantDenied:     denied("", t0, "a.go", "b.go"),
 			wantBashDenied: denied("", t0, "a.go", "b.go"),
 		},
 		{
-			name: "backstop off: no deny",
-			in:   BashInput{PromptID: "p1", Files: []BashFile{aGo}, Now: t0},
-			p:    enforce.Policy{},
-		},
-		{
 			name: "no file: nothing to decide",
 			in:   BashInput{PromptID: "p1", Now: t0},
-			p:    on,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			before := cloneState(tt.st)
-			d, next := DecideBash(tt.in, tt.st, tt.p)
+			d, next := DecideBash(tt.in, tt.st)
 			if diff := cmp.Diff(tt.want, d, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("decision (-want +got):\n%s", diff)
 			}
@@ -141,7 +124,7 @@ func TestDecideBash(t *testing.T) {
 // them.
 func TestDecideFitsTheMessage(t *testing.T) {
 	first := func(rs []Rule) int { return 1 }
-	d, st := Decide(Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Fit: first, Now: t0}, session.State{}, on)
+	d, st := Decide(Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Fit: first, Now: t0}, session.State{})
 	if !d.Deny || len(d.Rules) != 1 || d.Rules[0] != sqlRule || d.More != 1 {
 		t.Fatalf("first deny = %+v", d)
 	}
@@ -149,23 +132,23 @@ func TestDecideFitsTheMessage(t *testing.T) {
 		t.Error("a rule left out of the message is marked shown")
 	}
 	// The retry shows the rest.
-	d, st = Decide(Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Fit: first, Now: t0.Add(time.Second)}, st, on)
+	d, st = Decide(Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Fit: first, Now: t0.Add(time.Second)}, st)
 	if !d.Deny || len(d.Rules) != 1 || d.Rules[0] != logRule || d.More != 0 {
 		t.Fatalf("retry = %+v", d)
 	}
-	if d, _ := Decide(Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Fit: first, Now: t0.Add(2 * time.Second)}, st, on); d.Deny {
+	if d, _ := Decide(Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Fit: first, Now: t0.Add(2 * time.Second)}, st); d.Deny {
 		t.Errorf("third write = %+v, want it through", d)
 	}
 
 	// Bash: the same, and the Write the agent makes instead shows the rest.
-	bd, st := DecideBash(BashInput{PromptID: "p1", Files: []BashFile{{File: "b.go", Rules: []Rule{sqlRule, logRule}}}, Fit: first, Now: t0}, session.State{}, on)
+	bd, st := DecideBash(BashInput{PromptID: "p1", Files: []BashFile{{File: "b.go", Rules: []Rule{sqlRule, logRule}}}, Fit: first, Now: t0}, session.State{})
 	if !bd.Deny || len(bd.Rules) != 1 || bd.More != 1 {
 		t.Fatalf("bash deny = %+v", bd)
 	}
 	if _, ok := st.Shown[""]["log"]; ok {
 		t.Error("a rule left out of the Bash message is marked shown")
 	}
-	d, _ = Decide(Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule, logRule}, Now: t0.Add(time.Second)}, st, on)
+	d, _ = Decide(Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule, logRule}, Now: t0.Add(time.Second)}, st)
 	if !d.Deny || len(d.Rules) != 1 || d.Rules[0] != logRule {
 		t.Errorf("the Write after = %+v, want a deny with the rule left out", d)
 	}
@@ -174,8 +157,8 @@ func TestDecideFitsTheMessage(t *testing.T) {
 // A Write to a file whose Bash write was just denied is the agent doing as
 // told: the rules it was shown count as read.
 func TestDecideBashThenWrite(t *testing.T) {
-	_, st := DecideBash(BashInput{PromptID: "p1", Files: []BashFile{{File: "a.go", Rules: []Rule{sqlRule}}}, Now: t0}, session.State{}, on)
-	d, _ := Decide(Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(time.Second)}, st, on)
+	_, st := DecideBash(BashInput{PromptID: "p1", Files: []BashFile{{File: "a.go", Rules: []Rule{sqlRule}}}, Now: t0}, session.State{})
+	d, _ := Decide(Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(time.Second)}, st)
 	if d.Deny {
 		t.Errorf("the Write after a Bash deny was denied with %v", d.Rules)
 	}
@@ -185,11 +168,11 @@ func TestDecideBashThenWrite(t *testing.T) {
 // sees it first.
 func TestDecideClearsBashDenied(t *testing.T) {
 	st := session.State{PromptID: "p1", BashDenied: denied("", t0, "a.go")}
-	_, next := Decide(Input{PromptID: "p2", File: "x.go", Rules: []Rule{logRule}, Now: t0.Add(time.Minute)}, st, on)
+	_, next := Decide(Input{PromptID: "p2", File: "x.go", Rules: []Rule{logRule}, Now: t0.Add(time.Minute)}, st)
 	if next.BashDenied != nil {
 		t.Errorf("BashDenied after a new turn = %v", next.BashDenied)
 	}
-	d, _ := DecideBash(BashInput{PromptID: "p2", Files: []BashFile{{File: "a.go", Rules: []Rule{sqlRule}}}, Now: t0.Add(time.Minute + time.Second)}, next, on)
+	d, _ := DecideBash(BashInput{PromptID: "p2", Files: []BashFile{{File: "a.go", Rules: []Rule{sqlRule}}}, Now: t0.Add(time.Minute + time.Second)}, next)
 	if !d.Deny {
 		t.Error("last turn's Bash deny counted as a retry")
 	}
