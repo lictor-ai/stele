@@ -50,6 +50,15 @@ func sameHostHTTPS(link, host string) bool {
 	return u.Scheme == "https" && u.User == nil && u.Host == host && u.Opaque == ""
 }
 
+// hostOf returns the host of link, or "".
+func hostOf(link string) string {
+	u, err := url.Parse(link)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
 // csi is a terminal escape sequence: ESC [ parameters, a final letter.
 var csi = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
 
