@@ -204,9 +204,9 @@ Optional, committed next to `stele.md`. This is the default:
 ```
 $ stele init
 stele init in /home/you/project
-up to date, nothing written
 stele init: kept the existing stele.md
 stele init: stele.json: backstop is no longer read; use stele init --remind=off
+up to date, nothing written
 hooks: remind on, check on
 ```
 
@@ -245,7 +245,7 @@ Every experiment, with its numbers, is in [test/functional/agent/results/](test/
 9. **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too. So is a git worktree or submodule (a directory with its own `.git`): it gets no rules from an outer `stele.md`, only from its own. `stele check` there says nothing to check until it has its own `stele.md`, `stele.json` or `stele.lock`.
 10. **Nothing leaves the machine.** stele makes no network calls. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 11. **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
-12. **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about. A stele older than the one that wrote the hooks is told to upgrade instead: its `stele init` would not recognise the `--remind` and `--check` switches and would add a second set of hooks, and it runs both hooks whatever the switches say.
+12. **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about. **A stele from before `--remind` and `--check` must not run `stele init` on hooks that carry a switch: upgrade it first.** It doesn't recognise the switches, so its `stele init` adds a second set of hooks, and it runs both hooks whatever the switches say. Every release so far, v1.0.0-dev.2 included, still tells you to run `stele init` when it meets hooks a newer release wrote. Only a stele with the switches tells you to upgrade instead.
 13. **Asking before a write to stele's own files covers Write, Edit and MultiEdit, and their names and links.** A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock`, `.stele/` and `.claude` settings files. A Bash command that visibly writes, removes, moves or copies onto one of them is asked about too. Not asked about: other Bash forms, a NotebookEdit, managed settings, settings passed with `--settings` or the environment, and a session started above the stele project with hooks registered there by hand. With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
 14. **With `--check=off`, only `stele check` finds violations.** With both `--remind=off` and `--check=off`, the agent still loads the rules at session start, but nothing enforces them until CI.
 
