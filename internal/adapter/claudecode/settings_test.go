@@ -136,7 +136,7 @@ const user = `{
 
 func TestInstallFresh(t *testing.T) {
 	for _, in := range []string{"", "  \n", "{}"} {
-		out, changed, notes, err := Install([]byte(in), "v1.2.0")
+		out, changed, notes, err := Install([]byte(in), "v1.2.0", Switches{})
 		if err != nil || !changed || len(notes) != 0 {
 			t.Fatalf("Install(%q) = changed %v, notes %q, err %v", in, changed, notes, err)
 		}
@@ -147,7 +147,7 @@ func TestInstallFresh(t *testing.T) {
 }
 
 func TestInstallKeepsUserSettings(t *testing.T) {
-	out, changed, _, err := Install([]byte(user), "v1.2.0")
+	out, changed, _, err := Install([]byte(user), "v1.2.0", Switches{})
 	if err != nil || !changed {
 		t.Fatalf("Install = changed %v, err %v", changed, err)
 	}
@@ -181,7 +181,7 @@ func TestInstallKeepsUserSettings(t *testing.T) {
 func TestInstallIsIdempotent(t *testing.T) {
 	odd := strings.ReplaceAll(fresh, "  ", "\t") // not how stele would write it
 	for _, in := range []string{fresh, odd} {
-		out, changed, _, err := Install([]byte(in), "v1.2.0")
+		out, changed, _, err := Install([]byte(in), "v1.2.0", Switches{})
 		if err != nil || changed {
 			t.Fatalf("Install again = changed %v, err %v", changed, err)
 		}
@@ -193,7 +193,7 @@ func TestInstallIsIdempotent(t *testing.T) {
 
 func TestInstallReplacesOldStamps(t *testing.T) {
 	old := strings.ReplaceAll(fresh, "v1.2.0", "v1.1.0")
-	out, changed, _, err := Install([]byte(old), "v1.2.0")
+	out, changed, _, err := Install([]byte(old), "v1.2.0", Switches{})
 	if err != nil || !changed {
 		t.Fatalf("Install = changed %v, err %v", changed, err)
 	}
@@ -202,12 +202,12 @@ func TestInstallReplacesOldStamps(t *testing.T) {
 	}
 
 	// Two stele groups on an event collapse to one.
-	twice, _, _, _ := Install([]byte(old), "v1.1.0")
+	twice, _, _, _ := Install([]byte(old), "v1.1.0", Switches{})
 	var s map[string]map[string][]json.RawMessage
 	json.Unmarshal(twice, &s)
 	s["hooks"]["PreToolUse"] = append(s["hooks"]["PreToolUse"], s["hooks"]["PreToolUse"][0])
 	dup, _ := json.Marshal(s)
-	out, changed, _, err = Install(dup, "v1.2.0")
+	out, changed, _, err = Install(dup, "v1.2.0", Switches{})
 	if err != nil || !changed || strings.Count(string(out), "stele hook") != 4 {
 		t.Errorf("Install over duplicates = changed %v, err %v:\n%s", changed, err, out)
 	}
@@ -217,7 +217,7 @@ func TestInstallReplacesOldStamps(t *testing.T) {
 	json.Unmarshal([]byte(fresh), &one)
 	delete(one["hooks"], "PostToolUse")
 	half, _ := json.Marshal(one)
-	out, changed, _, err = Install(half, "v1.2.0")
+	out, changed, _, err = Install(half, "v1.2.0", Switches{})
 	if err != nil || !changed || strings.Count(string(out), "stele hook --installed=v1.2.0") != 4 {
 		t.Errorf("Install over one event = changed %v, err %v:\n%s", changed, err, out)
 	}
@@ -227,7 +227,7 @@ func TestInstallReplacesOldStamps(t *testing.T) {
 // even with the same stamp: a devel build stamps devel every time (#41), so
 // the stamp alone would never add them.
 func TestInstallAddsNewEvents(t *testing.T) {
-	out, changed, _, err := Install([]byte(beforeSessions), "v1.2.0")
+	out, changed, _, err := Install([]byte(beforeSessions), "v1.2.0", Switches{})
 	if err != nil || !changed {
 		t.Fatalf("Install = changed %v, err %v", changed, err)
 	}
@@ -239,14 +239,14 @@ func TestInstallAddsNewEvents(t *testing.T) {
 // An install from before Bash was hooked (#57) is out of date: init adds it.
 func TestInstallAddsBash(t *testing.T) {
 	before := strings.Replace(fresh, `"matcher": "Write|Edit|MultiEdit|Bash"`, `"matcher": "Write|Edit|MultiEdit"`, 1)
-	out, changed, _, err := Install([]byte(before), "v1.2.0")
+	out, changed, _, err := Install([]byte(before), "v1.2.0", Switches{})
 	if err != nil || !changed {
 		t.Fatalf("Install = changed %v, err %v", changed, err)
 	}
 	if diff := cmp.Diff(fresh, string(out)); diff != "" {
 		t.Errorf("mismatch (-want +got):\n%s", diff)
 	}
-	if _, changed, _, _ := Install(out, "v1.2.0"); changed {
+	if _, changed, _, _ := Install(out, "v1.2.0", Switches{}); changed {
 		t.Error("a second Install changed the settings")
 	}
 }
@@ -254,7 +254,7 @@ func TestInstallAddsBash(t *testing.T) {
 // A stele group whose matcher the user changed is rewritten with stele's own.
 func TestInstallRestoresMatcher(t *testing.T) {
 	edited := strings.Replace(fresh, `"matcher": "Write|Edit|MultiEdit"`, `"matcher": "Write"`, 1)
-	out, changed, _, err := Install([]byte(edited), "v1.2.0")
+	out, changed, _, err := Install([]byte(edited), "v1.2.0", Switches{})
 	if err != nil || !changed {
 		t.Fatalf("Install = changed %v, err %v", changed, err)
 	}
@@ -263,14 +263,14 @@ func TestInstallRestoresMatcher(t *testing.T) {
 	}
 	// A session group with a matcher is not the one init writes either.
 	matched := strings.Replace(fresh, "\"SessionStart\": [\n      {\n", "\"SessionStart\": [\n      {\n        \"matcher\": \"startup\",\n", 1)
-	if _, changed, _, _ := Install([]byte(matched), "v1.2.0"); !changed {
+	if _, changed, _, _ := Install([]byte(matched), "v1.2.0", Switches{}); !changed {
 		t.Error("a SessionStart group with a matcher counts as installed")
 	}
 }
 
 func TestInstallLeavesHandWrittenHooks(t *testing.T) {
 	in := `{"hooks":{"PreToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"stele hook"}]}]}}`
-	out, changed, notes, err := Install([]byte(in), "v1.2.0")
+	out, changed, notes, err := Install([]byte(in), "v1.2.0", Switches{})
 	if err != nil || !changed {
 		t.Fatalf("Install = changed %v, err %v", changed, err)
 	}
@@ -379,7 +379,7 @@ func TestSettingsRefusesMalformed(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out, _, _, err := Install([]byte(tt.in), "v1")
+			out, _, _, err := Install([]byte(tt.in), "v1", Switches{})
 			if err == nil || out != nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("Install = %q, %v, want an error containing %q", out, err, tt.wantErr)
 			}
@@ -393,7 +393,7 @@ func TestSettingsRefusesMalformed(t *testing.T) {
 
 func TestSettingsKeepsLineEndsAndBOM(t *testing.T) {
 	in := "\ufeff" + strings.ReplaceAll(user, "\n", "\r\n")
-	out, _, _, err := Install([]byte(in), "v1.2.0")
+	out, _, _, err := Install([]byte(in), "v1.2.0", Switches{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,11 +407,11 @@ func TestSettingsKeepsLineEndsAndBOM(t *testing.T) {
 }
 
 func TestInstalled(t *testing.T) {
-	if v, ok := Installed([]byte(fresh)); !ok || v != "v1.2.0" {
+	if v, _, ok := Installed([]byte(fresh)); !ok || v != "v1.2.0" {
 		t.Errorf("Installed(fresh) = %q, %v", v, ok)
 	}
 	for _, in := range []string{"", user, "not json", `{"hooks":{"PreToolUse":[{"hooks":[{"command":"stele hook"}]}]}}`} {
-		if v, ok := Installed([]byte(in)); ok {
+		if v, _, ok := Installed([]byte(in)); ok {
 			t.Errorf("Installed(%q) = %q, want none", in, v)
 		}
 	}
@@ -419,7 +419,7 @@ func TestInstalled(t *testing.T) {
 
 func TestInstallNotesExtendedStamp(t *testing.T) {
 	in := `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"stele hook --installed=v1.2.0 && echo mine"}]}]}}`
-	out, changed, notes, err := Install([]byte(in), "v1.2.0")
+	out, changed, notes, err := Install([]byte(in), "v1.2.0", Switches{})
 	if err != nil || !changed || len(notes) != 1 || !strings.Contains(string(out), "echo mine") {
 		t.Errorf("Install = changed %v, notes %q, err %v:\n%s", changed, notes, err, out)
 	}
@@ -427,7 +427,7 @@ func TestInstallNotesExtendedStamp(t *testing.T) {
 
 func TestInstallKeepsKeysAsWritten(t *testing.T) {
 	in := `{"\u0041key": 1, "hooks": {"\u0058": []}}`
-	out, _, _, err := Install([]byte(in), "v1")
+	out, _, _, err := Install([]byte(in), "v1", Switches{})
 	if err != nil || !strings.Contains(string(out), `"\u0041key": 1`) || !strings.Contains(string(out), `"\u0058": []`) {
 		t.Errorf("Install = %v:\n%s", err, out)
 	}
@@ -448,7 +448,7 @@ func TestOtherSteleHook(t *testing.T) {
 		{"garbage", false},
 	}
 	for _, tt := range tests {
-		if got := OtherSteleHook([]byte(tt.in), "v1.2.0"); got != tt.want {
+		if got := OtherSteleHook([]byte(tt.in), "v1.2.0", Switches{}); got != tt.want {
 			t.Errorf("OtherSteleHook(%q) = %v, want %v", tt.in, got, tt.want)
 		}
 	}

@@ -69,7 +69,7 @@ func Init(root, version string) (changes, notes []string, err error) {
 	}
 
 	// Check.
-	hooks, _, _, _ := claudecode.Install(nil, stamp)
+	hooks, _, _, _ := claudecode.Install(nil, stamp, claudecode.Switches{})
 	byHand := fmt.Sprintf("; add these hooks to %s by hand:\n%s", claudecode.SettingsFile, hooks)
 	if err := plainDir(claudeDir); err != nil {
 		return nil, nil, fmt.Errorf("%w: stele will not write through it%s", err, byHand)
@@ -84,10 +84,10 @@ func Init(root, version string) (changes, notes []string, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if v, ok := claudecode.Installed(data); ok && Released(v) && !Released(version) {
+	if v, _, ok := claudecode.Installed(data); ok && Released(v) && !Released(version) {
 		stamp = v // a build from a commit never replaces a release's stamp
 	}
-	out, changed, notes, err := claudecode.Install(data, stamp)
+	out, changed, notes, err := claudecode.Install(data, stamp, claudecode.Switches{})
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: %w; fix it and run stele init again", claudecode.SettingsFile, err)
 	}
@@ -127,7 +127,7 @@ func Init(root, version string) (changes, notes []string, err error) {
 	}
 
 	local := filepath.Join(claudeDir, "settings.local.json")
-	if l, err := safefile.ReadRegular(local, maxSettings); err == nil && claudecode.OtherSteleHook(l, stamp) {
+	if l, err := safefile.ReadRegular(local, maxSettings); err == nil && claudecode.OtherSteleHook(l, stamp, claudecode.Switches{}) {
 		notes = append(notes, filepath.Join(".claude", "settings.local.json")+" runs another stele hook: remove it there, or stele runs twice")
 	}
 	return changes, notes, nil
