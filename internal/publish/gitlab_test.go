@@ -71,6 +71,29 @@ func TestGitlabConflictFindsOpen(t *testing.T) {
 	}
 }
 
+// A 409 when one is already open from the branch, into an old base say: that
+// one is the answer, found by its source branch alone.
+func TestGitlabConflictIntoAnotherBase(t *testing.T) {
+	s := newAPI(t, func(w http.ResponseWriter, r *http.Request, body string) {
+		switch {
+		case r.Method == "POST":
+			writeJSONTo(w, 409, map[string]any{"message": "already exists"})
+		case r.Method == "GET" && r.URL.Query().Get("target_branch") == "":
+			writeJSONTo(w, 200, []map[string]any{{"iid": 6, "web_url": "https://gitlab.com/a/b/c/-/merge_requests/6"}})
+		default:
+			writeJSONTo(w, 200, []any{})
+		}
+	})
+	got, err := gitlabMR(context.Background(), glRemote, "t", ghReq)
+	if err != nil || got.Action != "found" || got.Link != "https://gitlab.com/a/b/c/-/merge_requests/6" {
+		t.Fatalf("got %+v, %v; want merge request 6 found", got, err)
+	}
+	last := s.requests()[len(s.requests())-1]
+	if !strings.Contains(last.URI, "source_branch=") || strings.Contains(last.URI, "target_branch=") {
+		t.Errorf("last request %s, want the source branch filter alone", last.URI)
+	}
+}
+
 func TestGitlabReopens(t *testing.T) {
 	s := newAPI(t, func(w http.ResponseWriter, r *http.Request, body string) {
 		switch {

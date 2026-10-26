@@ -21,14 +21,17 @@ func gitlabMR(ctx context.Context, r remote, token string, req mrRequest) (mrRes
 	}
 	// The project id is its path with every '/' encoded as %2F.
 	mrs := gitlabAPI + "/projects/" + url.PathEscape(r.Project) + "/merge_requests"
-	list := func(state string) ([]gitlabMergeRequest, error) {
-		q := url.Values{"state": {state}, "source_branch": {req.Branch}, "target_branch": {req.Base}}
+	list := func(state, target string) ([]gitlabMergeRequest, error) {
+		q := url.Values{"state": {state}, "source_branch": {req.Branch}}
+		if target != "" {
+			q.Set("target_branch", target)
+		}
 		var out []gitlabMergeRequest
 		_, err := call(ctx, "GitLab", http.MethodGet, mrs+"?"+q.Encode(), token, nil, nil, &out)
 		return out, err
 	}
 
-	open, err := list("opened")
+	open, err := list("opened", req.Base)
 	if err != nil {
 		return mrResult{}, notFoundRejects(err)
 	}
@@ -37,7 +40,7 @@ func gitlabMR(ctx context.Context, r remote, token string, req mrRequest) (mrRes
 	}
 	var reopenErr error
 	if !req.Pushed {
-		closed, err := list("closed")
+		closed, err := list("closed", req.Base)
 		if err != nil {
 			return mrResult{}, err
 		}
@@ -53,8 +56,9 @@ func gitlabMR(ctx context.Context, r remote, token string, req mrRequest) (mrRes
 	body := map[string]string{"source_branch": req.Branch, "target_branch": req.Base, "title": req.Title, "description": req.Body}
 	_, err = call(ctx, "GitLab", http.MethodPost, mrs, token, nil, body, &out)
 	if status(err) == http.StatusConflict {
-		// Opened meanwhile: find it.
-		if open, lerr := list("opened"); lerr == nil && len(open) > 0 {
+		// One is open from this branch, into another base say, or opened
+		// meanwhile: that one is the answer.
+		if open, lerr := list("opened", ""); lerr == nil && len(open) > 0 {
 			return mrResult{Link: open[0].WebURL, Action: "found"}, nil
 		}
 	}
