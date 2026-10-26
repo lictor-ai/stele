@@ -135,6 +135,42 @@ func TestSyncCache(t *testing.T) {
 	})
 }
 
+func TestSyncCacheFetchesOnlyWhatItNeeds(t *testing.T) {
+	g := testGit(t)
+	ctx := context.Background()
+	setCacheDir(t)
+	remote := newRemote(t, map[string]string{"README.md": "hi\n"})
+	gitT(t, remote, "update-ref", "refs/heads/other", "refs/heads/main")
+	gitT(t, remote, "tag", "v1", "refs/heads/main")
+	setLocalRemote(t, remote)
+	dir, _ := cachePath("https://example.invalid/me/rules.git")
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncCache(ctx, g, dir, remote, remoteState{Base: "main"}, "refs/heads/stele/publish/x.md"); err != nil {
+		t.Fatal(err)
+	}
+	refs, _ := bare(ctx, g, dir, nil, nil, "for-each-ref", "--format=%(refname)")
+	if strings.TrimSpace(refs) != "refs/heads/main" {
+		t.Errorf("cache refs =\n%s\nwant main alone", refs)
+	}
+}
+
+func TestTimeoutFor(t *testing.T) {
+	for _, args := range [][]string{
+		{"clone", "--bare"}, {"--git-dir=x", "fetch"}, {"--git-dir=x", "push"}, {"ls-remote", "--symref"},
+	} {
+		if got := timeoutFor(args); got != netTimeout {
+			t.Errorf("timeoutFor(%q) = %v, want %v", args, got, netTimeout)
+		}
+	}
+	for _, args := range [][]string{{"--git-dir=x", "write-tree"}, {"rev-parse", "HEAD"}, {"credential", "fill"}} {
+		if got := timeoutFor(args); got != gitTimeout {
+			t.Errorf("timeoutFor(%q) = %v, want %v", args, got, gitTimeout)
+		}
+	}
+}
+
 func TestSyncCacheReplacesGarbage(t *testing.T) {
 	g := testGit(t)
 	ctx := context.Background()

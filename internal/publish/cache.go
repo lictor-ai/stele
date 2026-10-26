@@ -111,7 +111,9 @@ func syncCache(ctx context.Context, g gitCmd, dir, url string, s remoteState, br
 		if err := os.RemoveAll(dir); err != nil {
 			return err
 		}
-		if _, err := g.run(ctx, filepath.Dir(dir), nil, nil, "clone", "--bare", "--no-tags", "--quiet", "--", url, dir); err != nil {
+		// Only the default branch: the publish branch comes with the fetch
+		// below. clone, unlike init, takes the remote's object format.
+		if _, err := g.run(ctx, filepath.Dir(dir), nil, nil, "clone", "--bare", "--single-branch", "--branch", s.Base, "--no-tags", "--quiet", "--", url, dir); err != nil {
 			return err
 		}
 	}

@@ -20,8 +20,30 @@ var ErrGit = errors.New("git failed")
 // transport. It is not a flag, an environment variable or a stele.json value.
 var localRemote string
 
-// gitTimeout bounds one git command that has no deadline of its own.
-var gitTimeout = 5 * time.Minute
+// gitTimeout bounds one local git command, and netTimeout one that talks to
+// the remote, when the context has no deadline of its own.
+var (
+	gitTimeout = 5 * time.Minute
+	netTimeout = 30 * time.Minute
+)
+
+// network are the git commands that talk to the remote.
+var network = map[string]bool{"clone": true, "fetch": true, "push": true, "ls-remote": true}
+
+// timeoutFor is the time limit for git with args: the first word that is not
+// an option is the command.
+func timeoutFor(args []string) time.Duration {
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if network[a] {
+			return netTimeout
+		}
+		break
+	}
+	return gitTimeout
+}
 
 // safety is passed to every git command. Only https and ssh may be used, so
 // "repo" can never run a transport command (ext::) or reach a local path;
@@ -134,7 +156,7 @@ func (g gitCmd) run(ctx context.Context, dir string, extraEnv []string, stdin []
 func (g gitCmd) runLimit(ctx context.Context, dir string, extraEnv []string, stdin []byte, limit int, args ...string) (string, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, gitTimeout)
+		ctx, cancel = context.WithTimeout(ctx, timeoutFor(args))
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, g.bin, g.args(args)...)
