@@ -15,7 +15,10 @@ scope: **/*.go
 stele never writes stele.md or stele.json (D38): no code path may create,
 edit or rewrite them, not even to fix or migrate them. Only source plugins
 (internal/source/...) open rule files (D40); every other package reads the
-rules from the compiled index (index.Load, compile.EnsureFresh).
+rules from the compiled index (index.Load, compile.EnsureFresh). The one
+exception: internal/publish reads stele.md from git (git cat-file, the
+committed blob) to copy it to the publish repository, and never parses it
+(D64).
 
 <!-- stele rule 002ec6b6-4084-4149-ab0f-16fc48253a55 -->
 scope: **/*.go
@@ -58,17 +61,26 @@ output must be real output of the current stele. When a behaviour changes,
 update "Limits" in the same change; never remove a limit that still holds.
 
 <!-- stele rule 2ab91390-1e1b-4139-a808-23f5241565c1 -->
-scope: **/*.go
-stele makes no network calls. Nothing leaves the machine except through a
-sink listed in stele.json, and only from stele push or stele check --push
-(D53); v1 has no sinks. Do not import net, net/http or any other net package.
+scope: **/*.go, !internal/publish/**
+Nothing leaves the machine except through a sink listed in stele.json, from
+stele push or stele check --push (D53), or from stele publish to the repo in
+stele.json (D66, ADR-0007); v1 has no sinks. Network code lives in
+internal/publish, the only package that imports net/http; every other
+package imports no net package.
 
 <!-- stele rule 14d7dcd8-809c-41ca-abb2-2c2454af24f4 -->
 scope: cmd/stele/{hook,compile,root,main,version}.go, internal/{adapter,backstop,check,compile,enforce,index,lock,plugin,safefile,scope,session,sign,source}/**/*.go, internal/install/{assets,install,doc}.go
 stele hook runs on every write, so nothing it reaches may start a process:
 external plugins never run on the hot path (D45), and only plugins listed in
 stele.json and found on PATH ever run, never one inside the repository
-(D43). os/exec belongs to stele check (cmd/stele/check.go) only.
+(D43). os/exec belongs to stele check (cmd/stele/check.go) and stele
+publish (internal/publish) only; stele hook never reaches either.
+
+<!-- stele rule e4949be3-548c-4bc9-9929-2d410e483f23 -->
+scope: cmd/stele/{hook,compile,root,main,version}.go, internal/{adapter,backstop,check,compile,enforce,index,lock,plugin,safefile,scope,session,sign,source}/**/*.go, internal/install/{assets,install,doc}.go
+stele publish talks to the network and starts processes, so nothing on the
+hook's path imports it. cmd/stele/hookreach_test.go checks the whole import
+graph of stele hook.
 
 <!-- stele rule d4e09005-a875-4772-8f9c-9edfc4a7e32f -->
 scope: internal/**/*.go, !**/*_test.go

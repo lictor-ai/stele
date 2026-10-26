@@ -47,6 +47,7 @@ internal/backstop/    the hook decision — pure logic
 internal/serve/       MCP wiring over the SDK
 internal/plugin/      registry of built-in and external plugins, exec protocol, sinks
 internal/status/      stele status: describe the install as JSON
+internal/publish/     stele publish: stele.md to a git repository as a merge request (D64–D66)
 internal/check/       the Checker slot: stele check's runner and report
   regex/              the built-in regex checker
 internal/adapter/     the agent adapter slot: the Adapter interface
@@ -673,7 +674,8 @@ func Sinks(root string, c Config) ([]Sink, error)             // externals only
 **Built-ins** are registered by name: `stelemd` for sources, `regex` for
 checkers. They are always present and need no entry in `stele.json`. There is no
 built-in sink: every real destination is a network call, and the engine stays
-offline (ADR-0003).
+offline (ADR-0003). The one network path is `stele publish`, in
+`internal/publish` (ADR-0007).
 
 **Externals are resolved by one function**, and it is the security boundary
 (D43):
@@ -913,6 +915,50 @@ path. Without `--format json` it prints the same as a short human summary.
 This is the whole surface a dashboard uses to see an install (D54). A dashboard
 never writes to a repository; it proposes a change to `stele.json` that a human
 reviews.
+
+### `internal/publish` — `stele publish`
+
+```go
+type Config struct{ Repo, Path string } // the "publish" key of stele.json
+func LoadConfig(root string) (Config, error)
+
+type Result struct {
+    Repo, Path, Base, Branch string
+    Unchanged bool   // the default branch already holds this stele.md
+    Pushed    bool   // false: the publish branch already held it
+    MR        string // the merge request's link
+    MRAction  string // "opened", "found", "reopened"
+    Page      string // no MR: the host's page to open one by hand
+    Why       string // no MR on github.com or gitlab.com: why not
+}
+func Run(ctx context.Context, root string) (Result, error)
+func Open(root, link string) error // the browser; cmd/stele ignores a failure
+func Clean(s string) string        // one printable line: escapes and control characters removed
+func CleanLines(s string) string   // Clean on each line, line breaks kept: git's message only
+```
+
+The design is `docs/superpowers/specs/2026-10-25-stele-publish-design.md`
+(ADR-0007). `Run` reads the committed `stele.md` with `git cat-file` (the one
+read of a rule file outside a source, D64), keeps a bare clone of `repo` under
+the user cache directory behind a `safefile` lock, commits with plumbing on a
+temporary index, pushes `stele/publish/<path>` with `--force-with-lease`, and
+asks the GitHub or GitLab API for the merge request.
+
+It is the only package that imports `net/http`, and with `stele check` the
+only one that starts processes: `git`, `gh`, `glab` and the browser opener,
+each resolved on `PATH` and refused inside the project or the repository
+that holds it (as D43 does for plugins). Every git call allows only the https
+and ssh transports, uses a bare repository only when named with
+`--git-dir`, never prompts, and keeps at most 1 MiB of what git prints. A token goes only to the fixed endpoints `api.github.com` and
+`gitlab.com/api/v4`, and only when `repo`'s host is exactly `github.com` or
+`gitlab.com` (D65). `stele hook` never reaches the package:
+`cmd/stele/hookreach_test.go` follows the hook's imports to check it.
+
+Errors are sentinels wrapped with what to do: `ErrNoConfig`, `ErrBadConfig`,
+`ErrNotRepo`, `ErrUntracked`, `ErrEdited`, `ErrNoProject`, `ErrToolNotFound`,
+`ErrToolRefused`, `ErrEmptyRepo`, `ErrBusy`, `ErrForeignBranch` and `ErrGit`.
+`cmd/stele` exits 1 on any of them; 0 once the branch is pushed, with or
+without a merge request.
 
 ### `internal/adapter` — the agent adapter slot
 

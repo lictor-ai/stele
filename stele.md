@@ -17,7 +17,10 @@ scope: ["**/*.go"]
 stele never writes stele.md or stele.json (D38): no code path may create,
 edit or rewrite them, not even to fix or migrate them. Only source plugins
 (internal/source/...) open rule files (D40); every other package reads the
-rules from the compiled index (index.Load, compile.EnsureFresh).
+rules from the compiled index (index.Load, compile.EnsureFresh). The one
+exception: internal/publish reads stele.md from git (git cat-file, the
+committed blob) to copy it to the publish repository, and never parses it
+(D64).
 
 ---
 
@@ -71,14 +74,16 @@ update "Limits" in the same change; never remove a limit that still holds.
 
 ---
 
-scope: ["**/*.go"]
+scope: ["**/*.go", "!internal/publish/**"]
 check: regex
 pattern: (?m)^\s*(import\s+)?([\w.]+\s+)?"(golang\.org/x/)?net(/[^"]*)?"\s*$
-message: stele makes no network calls; do not import net or net/...
+message: network calls live in internal/publish only (D66); do not import net or net/... elsewhere
 
-stele makes no network calls. Nothing leaves the machine except through a
-sink listed in stele.json, and only from stele push or stele check --push
-(D53); v1 has no sinks. Do not import net, net/http or any other net package.
+Nothing leaves the machine except through a sink listed in stele.json, from
+stele push or stele check --push (D53), or from stele publish to the repo in
+stele.json (D66, ADR-0007); v1 has no sinks. Network code lives in
+internal/publish, the only package that imports net/http; every other
+package imports no net package.
 
 ---
 
@@ -90,7 +95,19 @@ message: no subprocess on the hook's path (D45)
 stele hook runs on every write, so nothing it reaches may start a process:
 external plugins never run on the hot path (D45), and only plugins listed in
 stele.json and found on PATH ever run, never one inside the repository
-(D43). os/exec belongs to stele check (cmd/stele/check.go) only.
+(D43). os/exec belongs to stele check (cmd/stele/check.go) and stele
+publish (internal/publish) only; stele hook never reaches either.
+
+---
+
+scope: ["cmd/stele/{hook,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,lock,plugin,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
+check: regex
+pattern: "github\.com/lictor-ai/stele/internal/publish"
+message: stele hook never reaches stele publish (D45, D66)
+
+stele publish talks to the network and starts processes, so nothing on the
+hook's path imports it. cmd/stele/hookreach_test.go checks the whole import
+graph of stele hook.
 
 ---
 
