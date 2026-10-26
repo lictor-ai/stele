@@ -108,7 +108,7 @@ func TestHookAskKeepsTheTurn(t *testing.T) {
 func TestHookAsksWhateverTheConfig(t *testing.T) {
 	clock(t, time.Now())
 	for name, args := range map[string][]string{
-		"remind off":                   {"--installed=v1", "--remind=off"},
+		"remind off":                     {"--installed=v1", "--remind=off"},
 		"remind and check off, settings": {"--installed=v1", "--remind=off", "--check=off"},
 	} {
 		t.Run(name, func(t *testing.T) {

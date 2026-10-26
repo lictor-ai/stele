@@ -82,7 +82,7 @@ writing them happens in `cmd/` and in thin adapters, never inside the logic.
 
 ```go
 // internal/backstop
-func Decide(in Input, st session.State, p enforce.Policy) Decision
+func Decide(in Input, st session.State) (Decision, session.State)
 
 // internal/matcher
 func Select(req Request, idx index.Index) (Instruction, error)
@@ -90,7 +90,7 @@ func Fetch(sel Selection, idx index.Index, cap int) (Result, journal.Entry)
 ```
 
 `Decide` is the whole backstop. No file reads, no clock, no environment. Given a
-hook payload, the session state, and the policy, it returns allow or deny and why.
+hook payload and the session state, it returns allow or deny and why.
 That makes the most behaviour-dense part of the system a table-driven test with no
 fixtures, no temp directories, and no host agent.
 
@@ -470,20 +470,25 @@ points. A directory or link where a file belongs is moved aside by the write (§
 
 ```go
 type Policy struct {
-    Backstop     bool // default true
     BlockOnError bool // default false
 }
 
 func Load(root string) (Policy, error) // defaults when the file is absent
+func SetsBackstop(root string) bool    // the file still sets "backstop"
 ```
 
 **The file is `stele.json`, at the repository root, and it is optional.**
 
 ```json
-{"backstop": true, "block_on_error": false}
+{"block_on_error": false}
 ```
 
-The same file also lists plugins. `enforce.Load` decodes the two policy keys and
+`backstop` is gone (ADR-0008): which parts of the hook run is set by
+`stele init --remind` and `--check`, on the hook command (ADR-0006, see the
+Claude Code adapter). `Load` ignores a `backstop` key; `SetsBackstop` lets
+`init` say so, and stele never edits the file (D38).
+
+The same file also lists plugins. `enforce.Load` decodes the policy key and
 ignores the rest; `internal/plugin` decodes `sources` and `checkers` and ignores
 the rest. The hook only ever needs the policy, so it never pays for plugin
 resolution.
@@ -497,8 +502,8 @@ It sits beside `stele.md` rather than inside `.stele/` for the same reason
 `stele.md` does. The enforcement policy is a team decision, so it is committed and
 reviewed. `.stele/` holds only generated files.
 
-`Policy` is an option struct rather than functional options: both fields are
-always present, both come from the same file, and neither can fail. The Google
+`Policy` is an option struct rather than functional options: its fields are
+always present, come from the same file, and cannot fail. The Google
 style guide's test for choosing between them points here.
 
 ### `internal/journal` — the log
@@ -554,8 +559,11 @@ type Decision struct {
 
 const Window = 3 * time.Second
 
-func Decide(in Input, st session.State, p enforce.Policy) (Decision, session.State)
+func Decide(in Input, st session.State) (Decision, session.State)
 ```
+
+With `--remind=off` on the hook command (ADR-0006) the caller never calls
+`Decide` or `DecideBash`.
 
 `Input` is stele's assembled view, not the raw hook payload. `cmd/` builds it:
 the root from the written file's path (§6), the index kept fresh with
@@ -575,15 +583,14 @@ unchecked.
 The order is the whole behaviour:
 
 ```
-1. !policy.Backstop                     → allow
-2. no rules apply to the file           → allow
-3. PromptID differs from the state      → a new turn: forget what was shown and denied
-4. for each rule: not shown to AgentID  → show it, record it at Now
+1. no rules apply to the file           → allow
+2. PromptID differs from the state      → a new turn: forget what was shown and denied
+3. for each rule: not shown to AgentID  → show it, record it at Now
                   a retry (File denied ≥ RetryAfter ago), and the rule
                   shown at or before that deny          → read: skip it
                   0 ≤ Now − shown < Window → show it again (same batch)
-5. nothing to show                      → allow
-6. otherwise                            → DENY with those rules, record File at Now
+4. nothing to show                      → allow
+5. otherwise                            → DENY with those rules, record File at Now
 ```
 
 `Decide` returns the state to save, and `cmd/` saves it **before** answering:
@@ -943,12 +950,20 @@ the `.claude/settings.json` hook entries `init` writes (#12):
 
 ```go
 var SettingsFile = ".claude/settings.json"
-func Install(settings []byte, version string) (out []byte, changed bool, notes []string, err error)
+type Switches struct{ RemindOff, CheckOff bool } // zero: both on (ADR-0006)
+func Install(settings []byte, version string, sw Switches) (out []byte, changed bool, notes []string, err error)
 func Uninstall(settings []byte) (out []byte, removed int, empty bool, err error)
-func Installed(settings []byte) (version string, ok bool) // for stele status
-func InstalledVersion(args []string) string               // stele hook's own --installed=
-func OtherSteleHook(settings []byte, version string) bool // one init would not write
+func Installed(settings []byte) (version string, sw Switches, ok bool)
+func InstalledVersion(args []string) string                            // stele hook's own --installed=
+func HookSwitches(args []string) Switches                              // stele hook's own --remind=, --check=
+func OtherSteleHook(settings []byte, version string, sw Switches) bool // one init would not write
 ```
+
+A switch that is off is a flag after the stamp, in this order:
+`stele hook --installed=<version> --remind=off --check=off`. One that is on is
+never written, so a project on the defaults has the same settings as before.
+`HookSwitches` takes the last `--remind=on|off` and `--check=on|off` and
+ignores anything else, so an older stele run by newer settings has both on.
 
 Both work on bytes. Every key and every value stele does not edit is written
 back exactly as it was (key order, number literals, escapes), the layout is two spaces as Claude
@@ -988,10 +1003,20 @@ The template lives in the adapter, not in
 ### `internal/install`
 
 ```go
-func Init(root, version string) (changes, notes []string, err error)
+type Set struct{ Remind, Check *bool } // nil keeps the installed switch
+func Init(root, version string, set Set) (changes, notes []string, err error)
+func InstalledSwitches(root string) (claudecode.Switches, bool)
 func Uninstall(root string) (changes, notes []string, err error)
 func Header(version string) []byte // the comment a new stele.md starts with
+func Older(a, b string) bool       // release a comes before b, by semver precedence
 ```
+
+`init --remind=on|off --check=on|off` sets the switches (ADR-0006). A flag not
+given keeps what the installed hooks carry, so running `init` again, to
+upgrade, never turns a hook back on. Every run prints `hooks: remind on, check
+off` or the like. When only the switches or the version change, the change
+line is `updated stele hooks in .claude/settings.json`. A `stele.json` that
+still sets `backstop` gets a note, and is not touched (ADR-0008).
 
 In v1 `init` writes three things (ADR-0004), and `uninstall` removes exactly
 those (D28):
@@ -1001,8 +1026,9 @@ those (D28):
    settings files are JSON, with no comments, and Claude Code validates them
    against a schema, so an extra key could break the user's file. The stamp
    survives a fresh clone, and the hook reads it from its own arguments for
-   free. Only a command that is exactly `stele hook --installed=<version>` is
-   stele's; the first word may be a quoted path to the binary. Anything else
+   free. Only a command that is exactly `stele hook --installed=<version>`,
+   then the flags of the switches that are off in init's order, is stele's;
+   the first word may be a quoted path to the binary. Anything else
    that runs `stele hook`, a stamp with more after it included, was written by
    hand: `init` and `uninstall` leave it, and `init` says it will run twice, as
    it does for a different stele hook in `settings.local.json` (Claude Code
@@ -1075,7 +1101,7 @@ and symlinks and junctions on the way are followed, from inside a project or
 outside every project. A hard link or an 8.3 short name, which only a same-file
 test tells, is caught for the root's `stele.md`, `stele.json`, `stele.lock` and
 `.stele/` only. The ask comes before `stele.json`
-is read, so `backstop` and `block_on_error` change nothing. Claude Code shows
+is read, so `block_on_error` and the switches change nothing. Claude Code shows
 `permissionDecisionReason` to the user in the prompt; with no one to answer
 (`claude -p`) the call is refused. A deny from another hook wins over it. The
 prompt text is the asset `ask-message.tmpl`.
@@ -1126,8 +1152,9 @@ disk is what `stele check` will see. For a Write every line counts; for an Edit
 or MultiEdit only the lines the patch adds, or, with no usable patch, the lines
 its `new_string`s cover (`check.Spans`). Blocking violations go in `reason`,
 non-blocking ones in `additionalContext`, at most 20 per message. With
-`backstop` off the hook never blocks (ADR-0004), so blocking violations go in
-`additionalContext` too. Claude Code passes on a text of up to 10,000
+`--check=off` (ADR-0006) nothing is checked: the hook only recompiles, so an
+agent's edit to `stele.md` still reaches the index and the rules file and its
+invalid rules are still reported, and a failure only warns. Claude Code passes on a text of up to 10,000
 characters in full, so a rule's message is cut to 200 characters and each of
 `reason` and `additionalContext` is kept under 9,000 bytes, leaving out whole
 lines and counting them in "and N more". Failures follow the same policy as
@@ -1162,7 +1189,9 @@ scoped rule counts, so `go test > out.txt` is not stopped by unscoped rules.
 The deny is also recorded as the file's Write deny, so the Write the agent
 makes instead is its retry. Whether a file has rules is known only from the
 index, so a failure of stele here warns and never blocks, even with
-`block_on_error`. Nothing is registered after a Bash command: Claude Code's
+`block_on_error`. With `--remind=off` nothing is denied: a file a scoped rule
+covers gets only the note to run `stele check`; a target that is one of
+stele's own files still asks. Nothing is registered after a Bash command: Claude Code's
 `tool_response.bashEditDiff` lists the files one changed, but it is a beta,
 recorded only in auto mode or with a user setting, and would cost a second
 process on every Bash call.
@@ -1235,8 +1264,9 @@ never a missed rule. Every error (no key, an unreadable file, state not saved)
 primes nothing and is not reported: the deny still shows every rule.
 
 `init` is up to date only when each of these events has exactly one stele
-handler, with this version, in a group with the registered matcher; so a
-re-run adds events a newer stele registers, even with a `devel` stamp.
+handler, with this version and these switches, in a group with the registered
+matcher; so a re-run adds events a newer stele registers, even with a `devel`
+stamp.
 
 The matcher is an exact list of tools. The default timeout is 600 seconds, so
 the explicit 10 matters. `--installed=` marks the entry as `init`'s and stamps
@@ -1246,7 +1276,10 @@ with local changes (`+dirty`) stamps `devel`, and never replaces a release's
 stamp, so the committed file does not change with every commit. When both the
 stamp and the running binary are releases and differ, the hook warns the user
 once a session (in `systemMessage`, recorded in the session state) to run
-`stele init` again; otherwise it never warns.
+`stele init` again; otherwise it never warns. A binary older than the stamp
+(`install.Older`) is told to upgrade instead, never to run `init`: an older
+`init` takes handlers carrying switches for hand-written ones and adds a
+second set (ADR-0006).
 
 Four things the documentation settles that the spec had to guess at:
 
@@ -1524,7 +1557,7 @@ string literals scattered through the code, so they can be revised and diffed.
 | `status` | Temp directory: JSON shape and `v`, plugin found and missing, stale index. |
 | `regex` | Table-driven over `Match`: line and column, multiple matches, multi-line content, CRLF, multibyte text, BOM, invalid UTF-8, binary skip, invalid pattern. |
 | `shell` | Table-driven over `Targets`: redirections, heredoc bodies, quotes, `[[ ]]` and `(( ))`, substitutions, variables, `cd`, `tee`, `sed -i`, `perl -i`, removals and copies, devices, Windows and Git Bash paths, caps. A fuzz test: it never panics, and stays fast. |
-| `backstop.Decide` | Table-driven over the full cross-product of state, policy, error and `HasRules`. Pure, so no fixtures. |
+| `backstop.Decide` | Table-driven over the full cross-product of state, error and `HasRules`. Pure, so no fixtures. |
 | `matcher` | Table-driven. Cap, truncation, empty selection. |
 | `index`, `session`, `journal` | Temp directories. Concurrent-write tests for the replace path, including a locked target. |
 | `serve` | Drive the SDK over an in-memory transport, asserting schemas and results. |
@@ -1541,6 +1574,7 @@ or errors and call `t.Helper()`; they do not fail tests themselves. Comparisons 
 
 ```
 stele init         set stele up here: Claude Code hooks, stele.md, .stele/, then compile
+                     [--remind=on|off] [--check=on|off]
 stele uninstall    remove exactly what init wrote
 stele compile      every source, then compile.Plan + compile.Apply (lock, index, .claude/rules/stele-rules.md); prints the reconcile report
 stele check        validate the rules, run checkers on changed files; writes nothing (for CI)
@@ -1549,7 +1583,7 @@ stele status       describe the install [--format text|json]
 stele push         send new log entries to every listed sink
 stele mcp          run the MCP server on stdio
 stele hook         read a Claude Code hook payload on stdin, decide
-                     [--installed=<version>]
+                     [--installed=<version>] [--remind=off] [--check=off]
 ```
 
 `init` and `uninstall` work in the current directory, never an ancestor: Claude
