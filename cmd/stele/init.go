@@ -27,7 +27,7 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return exitCantRun
 	}
-	changes, notes, err := install.Init(root, binaryVersion())
+	changes, notes, err := install.Init(root, binaryVersion(), install.Set{})
 	if err == nil {
 		c, n := initCompile(root)
 		changes, notes = append(changes, c...), append(notes, n...)

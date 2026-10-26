@@ -51,7 +51,7 @@ func TestHeaderParsesAsNoRules(t *testing.T) {
 
 func TestInit(t *testing.T) {
 	root := t.TempDir()
-	changes, _, err := Init(root, "v1.2.0")
+	changes, _, err := Init(root, "v1.2.0", Set{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestInit(t *testing.T) {
 	settings := filepath.Join(root, ".claude", "settings.json")
 	old := time.Now().Add(-time.Hour)
 	os.Chtimes(settings, old, old)
-	changes, _, err = Init(root, "v1.2.0")
+	changes, _, err = Init(root, "v1.2.0", Set{})
 	if err != nil || len(changes) != 0 {
 		t.Errorf("Init again = %q, %v; want no changes", changes, err)
 	}
@@ -89,7 +89,7 @@ func TestInit(t *testing.T) {
 	}
 
 	// A new version restamps the hooks only.
-	changes, _, err = Init(root, "v1.3.0")
+	changes, _, err = Init(root, "v1.3.0", Set{})
 	if err != nil || len(changes) != 1 || !strings.Contains(read(t, settings), "--installed=v1.3.0") {
 		t.Errorf("Init v1.3.0 = %q, %v", changes, err)
 	}
@@ -130,7 +130,7 @@ const (
 // rewrite the committed settings.
 func TestInitStampsDevelForABuildFromACommit(t *testing.T) {
 	root := t.TempDir()
-	if _, _, err := Init(root, pseudoA); err != nil {
+	if _, _, err := Init(root, pseudoA, Set{}); err != nil {
 		t.Fatal(err)
 	}
 	settings := filepath.Join(root, ".claude", "settings.json")
@@ -146,7 +146,7 @@ func TestInitStampsDevelForABuildFromACommit(t *testing.T) {
 
 	old := time.Now().Add(-time.Hour)
 	os.Chtimes(settings, old, old)
-	changes, _, err := Init(root, pseudoB+"+dirty")
+	changes, _, err := Init(root, pseudoB+"+dirty", Set{})
 	if err != nil || len(changes) != 0 {
 		t.Errorf("Init from another commit = %q, %v; want no changes", changes, err)
 	}
@@ -154,7 +154,7 @@ func TestInitStampsDevelForABuildFromACommit(t *testing.T) {
 		t.Errorf("Init from another commit rewrote settings.json")
 	}
 
-	changes, _, err = Init(root, "v1.3.0")
+	changes, _, err = Init(root, "v1.3.0", Set{})
 	if err != nil || len(changes) != 1 || !strings.Contains(read(t, settings), "--installed=v1.3.0") {
 		t.Errorf("Init v1.3.0 = %q, %v", changes, err)
 	}
@@ -162,18 +162,18 @@ func TestInitStampsDevelForABuildFromACommit(t *testing.T) {
 
 func TestInitFromACommitKeepsAReleaseStamp(t *testing.T) {
 	root := t.TempDir()
-	if _, _, err := Init(root, "v1.2.0"); err != nil {
+	if _, _, err := Init(root, "v1.2.0", Set{}); err != nil {
 		t.Fatal(err)
 	}
 	settings := filepath.Join(root, ".claude", "settings.json")
-	changes, _, err := Init(root, pseudoA)
+	changes, _, err := Init(root, pseudoA, Set{})
 	if err != nil || len(changes) != 0 || !strings.Contains(read(t, settings), "--installed=v1.2.0") {
 		t.Errorf("Init from a commit over a release = %q, %v:\n%s", changes, err, read(t, settings))
 	}
 
 	// A broken install is repaired with the release's stamp, not devel.
 	write(t, settings, `{"hooks":{"PreToolUse":[{"matcher":"Write|Edit|MultiEdit","hooks":[{"type":"command","command":"stele hook --installed=v1.2.0","timeout":10}]}]}}`)
-	if _, _, err := Init(root, pseudoA); err != nil {
+	if _, _, err := Init(root, pseudoA, Set{}); err != nil {
 		t.Fatal(err)
 	}
 	got := read(t, settings)
@@ -192,11 +192,11 @@ func TestInitReplacesAPseudoVersionStamp(t *testing.T) {
 	stamped := `{"command":"stele hook --installed=` + pseudoA + `","timeout":10}`
 	write(t, settings, `{"hooks":{"PreToolUse":[{"matcher":"Write|Edit|MultiEdit","hooks":[`+stamped+`]}],"PostToolUse":[{"matcher":"Write|Edit|MultiEdit","hooks":[`+stamped+`]}]}}`)
 
-	changes, _, err := Init(root, pseudoB)
+	changes, _, err := Init(root, pseudoB, Set{})
 	if err != nil || len(changes) == 0 || !strings.Contains(read(t, settings), "--installed=devel") || strings.Contains(read(t, settings), pseudoA) {
 		t.Errorf("Init over a pseudo-version stamp = %q, %v:\n%s", changes, err, read(t, settings))
 	}
-	if changes, _, err := Init(root, pseudoB); err != nil || len(changes) != 0 {
+	if changes, _, err := Init(root, pseudoB, Set{}); err != nil || len(changes) != 0 {
 		t.Errorf("Init again = %q, %v; want no changes", changes, err)
 	}
 }
@@ -205,7 +205,7 @@ func TestInitKeepsAnExistingSteleMD(t *testing.T) {
 	root := t.TempDir()
 	mine := "My own rule.\n"
 	write(t, filepath.Join(root, "stele.md"), mine)
-	_, notes, err := Init(root, "v1.0.0")
+	_, notes, err := Init(root, "v1.0.0", Set{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestInitKeepsUserSettings(t *testing.T) {
 	root := t.TempDir()
 	settings := filepath.Join(root, ".claude", "settings.json")
 	write(t, settings, "{\n  \"model\": \"opus\"\n}\n")
-	if _, _, err := Init(root, "v1.0.0"); err != nil {
+	if _, _, err := Init(root, "v1.0.0", Set{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := read(t, settings); !strings.HasPrefix(got, "{\n  \"model\": \"opus\",\n  \"hooks\"") {
@@ -234,7 +234,7 @@ func TestInitRefusesMalformedSettings(t *testing.T) {
 	settings := filepath.Join(root, ".claude", "settings.json")
 	bad := "{\n  // mine\n}\n"
 	write(t, settings, bad)
-	_, _, err := Init(root, "v1.0.0")
+	_, _, err := Init(root, "v1.0.0", Set{})
 	if err == nil || !strings.Contains(err.Error(), "settings.json") {
 		t.Fatalf("Init = %v, want an error naming settings.json", err)
 	}
@@ -254,7 +254,7 @@ func TestInitRefusesSymlinkedSettings(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(root, ".claude", "settings.json")); err != nil {
 		t.Skipf("cannot make symlinks here: %v", err)
 	}
-	_, _, err := Init(root, "v1.0.0")
+	_, _, err := Init(root, "v1.0.0", Set{})
 	if err == nil || !strings.Contains(err.Error(), "stele hook --installed=v1.0.0") {
 		t.Errorf("Init = %v, want an error showing the hooks to add by hand", err)
 	}
@@ -271,7 +271,7 @@ func TestInitKeepsSettingsMode(t *testing.T) {
 	settings := filepath.Join(root, ".claude", "settings.json")
 	write(t, settings, "{}\n")
 	os.Chmod(settings, 0o600)
-	if _, _, err := Init(root, "v1.0.0"); err != nil {
+	if _, _, err := Init(root, "v1.0.0", Set{}); err != nil {
 		t.Fatal(err)
 	}
 	if info, _ := os.Stat(settings); info.Mode().Perm() != 0o600 {
@@ -283,7 +283,7 @@ func TestInitNotesALocalSteleHook(t *testing.T) {
 	root := t.TempDir()
 	write(t, filepath.Join(root, ".claude", "settings.local.json"),
 		`{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"stele hook"}]}]}}`)
-	_, notes, err := Init(root, "v1.0.0")
+	_, notes, err := Init(root, "v1.0.0", Set{})
 	if err != nil || !strings.Contains(strings.Join(notes, "\n"), "settings.local.json") {
 		t.Errorf("Init = %q, %v; want a note about settings.local.json", notes, err)
 	}
@@ -311,7 +311,7 @@ func TestInitNotesAnIdenticalLocalHookNot(t *testing.T) {
 	root := t.TempDir()
 	write(t, filepath.Join(root, ".claude", "settings.local.json"),
 		`{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"stele hook --installed=v1.0.0"}]}]}}`)
-	_, notes, err := Init(root, "v1.0.0")
+	_, notes, err := Init(root, "v1.0.0", Set{})
 	if err != nil || strings.Contains(strings.Join(notes, "\n"), "settings.local.json") {
 		t.Errorf("Init = %q, %v; Claude Code runs an identical handler once", notes, err)
 	}
@@ -320,7 +320,7 @@ func TestInitNotesAnIdenticalLocalHookNot(t *testing.T) {
 func TestInitWritesNothingUntilEveryCheckPasses(t *testing.T) {
 	root := t.TempDir()
 	write(t, filepath.Join(root, ".stele"), "mine")
-	if _, _, err := Init(root, "v1.0.0"); err == nil {
+	if _, _, err := Init(root, "v1.0.0", Set{}); err == nil {
 		t.Fatal("Init over a .stele file succeeded")
 	}
 	if exists(filepath.Join(root, "stele.md")) || exists(filepath.Join(root, ".claude")) {
@@ -335,7 +335,7 @@ func TestInitRefusesALinkedClaudeDir(t *testing.T) {
 	root := t.TempDir()
 	elsewhere := t.TempDir()
 	dirLink(t, filepath.Join(root, ".claude"), elsewhere)
-	_, _, err := Init(root, "v1.0.0")
+	_, _, err := Init(root, "v1.0.0", Set{})
 	if err == nil || !strings.Contains(err.Error(), "stele hook --installed=v1.0.0") || strings.Contains(err.Error(), "delete") {
 		t.Errorf("Init = %v, want a refusal showing the hooks, never asking to delete", err)
 	}
@@ -347,7 +347,7 @@ func TestInitRefusesALinkedClaudeDir(t *testing.T) {
 func TestUninstallRefusesALinkedClaudeDir(t *testing.T) {
 	root := t.TempDir()
 	elsewhere := t.TempDir()
-	if _, _, err := Init(elsewhere, "v1.0.0"); err != nil {
+	if _, _, err := Init(elsewhere, "v1.0.0", Set{}); err != nil {
 		t.Fatal(err)
 	}
 	theirs := filepath.Join(elsewhere, ".claude")
@@ -379,7 +379,7 @@ func TestUninstall(t *testing.T) {
 	settings := filepath.Join(root, ".claude", "settings.json")
 	write(t, settings, "{\n  \"model\": \"opus\"\n}\n")
 	write(t, filepath.Join(root, ".claude", "agents", "mine.md"), "mine")
-	if _, _, err := Init(root, "v1.0.0"); err != nil {
+	if _, _, err := Init(root, "v1.0.0", Set{}); err != nil {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(root, "stele.lock"), "{}")
@@ -415,7 +415,7 @@ func TestUninstall(t *testing.T) {
 
 func TestUninstallRemovesSettingsLeftEmpty(t *testing.T) {
 	root := t.TempDir()
-	if _, _, err := Init(root, "v1.0.0"); err != nil {
+	if _, _, err := Init(root, "v1.0.0", Set{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := Uninstall(root); err != nil {

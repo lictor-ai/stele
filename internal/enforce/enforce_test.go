@@ -38,3 +38,28 @@ func TestLoad(t *testing.T) {
 		})
 	}
 }
+
+func TestSetsBackstop(t *testing.T) {
+	tests := []struct {
+		content string // "" means no file
+		want    bool
+	}{
+		{"", false},
+		{`{}`, false},
+		{`{"backstop": false}`, true},
+		{`{"backstop": true}`, true},
+		{`{"block_on_error": true}`, false},
+		{`{`, false},
+	}
+	for _, tt := range tests {
+		root := t.TempDir()
+		if tt.content != "" {
+			if err := os.WriteFile(filepath.Join(root, FileName), []byte(tt.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := SetsBackstop(root); got != tt.want {
+			t.Errorf("SetsBackstop(%q) = %v, want %v", tt.content, got, tt.want)
+		}
+	}
+}

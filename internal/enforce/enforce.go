@@ -60,3 +60,19 @@ func Load(root string) (Policy, error) {
 	}
 	return p, nil
 }
+
+// SetsBackstop reports whether stele.json under root sets "backstop", which
+// nothing reads since ADR-0008: stele init says so, and never edits the file
+// (D38). A missing or invalid stele.json sets nothing.
+func SetsBackstop(root string) bool {
+	data, err := os.ReadFile(filepath.Join(root, FileName))
+	if err != nil {
+		return false
+	}
+	var keys map[string]json.RawMessage
+	if json.Unmarshal(data, &keys) != nil {
+		return false
+	}
+	_, ok := keys["backstop"]
+	return ok
+}
