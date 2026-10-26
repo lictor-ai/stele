@@ -106,6 +106,83 @@ func TestReadCommittedCRLF(t *testing.T) {
 	}
 }
 
+// copyDir copies the files under src into dst.
+func copyDir(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A cloned project can be laid out as a bare repository: HEAD, objects and
+// refs at its root, with a config whose core.worktree points back at it and
+// a clean filter that runs a command. git finds it by itself when run in that
+// directory; stele must not, or the filter runs on `git diff`.
+func TestReadCommittedRefusesPlantedBareRepository(t *testing.T) {
+	g := testGit(t)
+	src := newProject(t, ".", "x\n")
+	root := t.TempDir()
+	copyDir(t, filepath.Join(src, ".git"), root)
+	writeFile(t, filepath.Join(root, "stele.md"), "y\n")
+	if err := lock.Save(root, lock.File{Version: 1, Project: "p-1"}); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "pwned")
+	config := "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = " + filepath.ToSlash(root) + "\n" +
+		"[filter \"evil\"]\n\tclean = echo pwned > " + filepath.ToSlash(marker) + "; cat\n"
+	writeFile(t, filepath.Join(root, "config"), config)
+	writeFile(t, filepath.Join(root, "info", "attributes"), "* filter=evil\n")
+
+	_, err := readCommitted(context.Background(), g, root)
+	if err == nil {
+		t.Error("a planted bare repository was read")
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("the planted filter ran")
+	}
+}
+
+func TestReadCommittedWorktree(t *testing.T) {
+	g := testGit(t)
+	src := newProject(t, ".", "x\n")
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitT(t, src, "worktree", "add", "--quiet", wt)
+	if _, err := readCommitted(context.Background(), g, wt); err != nil {
+		t.Errorf("a worktree: %v", err)
+	}
+}
+
+func TestCheckGitDir(t *testing.T) {
+	top := t.TempDir()
+	if err := os.Mkdir(filepath.Join(top, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkGitDir(top, filepath.Join(top, ".git")); err != nil {
+		t.Errorf("<top>/.git: %v", err)
+	}
+	if err := checkGitDir(top, top); !errors.Is(err, ErrNotRepo) {
+		t.Errorf("the top itself: err = %v, want ErrNotRepo", err)
+	}
+	if err := checkGitDir(t.TempDir(), top); !errors.Is(err, ErrNotRepo) {
+		t.Errorf("no .git: err = %v, want ErrNotRepo", err)
+	}
+}
+
 func TestReadCommittedRefusals(t *testing.T) {
 	g := testGit(t)
 	ctx := context.Background()

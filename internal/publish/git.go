@@ -35,6 +35,10 @@ var safety = []string{
 	"-c", "fetch.recurseSubmodules=false",
 	"-c", "push.recurseSubmodules=no",
 	"-c", "core.fsmonitor=false",
+	// A bare repository is used only when named with --git-dir: a cloned
+	// project laid out as one could otherwise bring its own config, with
+	// filters and hooks that run commands.
+	"-c", "safe.bareRepository=explicit",
 }
 
 // quiet is added to git's environment: no prompt on the terminal, from Git

@@ -4,7 +4,6 @@ import (
 	"context"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -111,14 +110,4 @@ func TestTokenSourcesOtherHost(t *testing.T) {
 	if calls := fakeCalls(t, log); len(calls) != 0 {
 		t.Errorf("calls = %+v, want none", calls)
 	}
-}
-
-// samePath compares two directories, resolving links such as macOS's /var.
-func samePath(a, b string) bool {
-	ea, errA := filepath.EvalSymlinks(a)
-	eb, errB := filepath.EvalSymlinks(b)
-	if errA == nil && errB == nil {
-		a, b = ea, eb
-	}
-	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
 }

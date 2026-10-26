@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -42,8 +45,16 @@ type committed struct {
 // it: the one read of a rule file outside a source plugin (D40, D64).
 func readCommitted(ctx context.Context, g gitCmd, root string) (committed, error) {
 	var c committed
-	if _, err := g.run(ctx, root, nil, nil, "rev-parse", "--show-toplevel"); err != nil {
+	top, err := g.run(ctx, root, nil, nil, "rev-parse", "--show-toplevel")
+	if err != nil {
 		return c, ErrNotRepo
+	}
+	gitDir, err := g.run(ctx, root, nil, nil, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return c, ErrNotRepo
+	}
+	if err := checkGitDir(strings.TrimSpace(top), strings.TrimSpace(gitDir)); err != nil {
+		return c, err
 	}
 	if _, err := g.run(ctx, root, nil, nil, "rev-parse", "--verify", "-q", "HEAD^{commit}"); err != nil {
 		return c, fmt.Errorf("%w: the repository has no commit yet", ErrUntracked)
@@ -104,6 +115,56 @@ func readCommitted(ctx context.Context, g gitCmd, root string) (committed, error
 	}
 	c.Project = f.Project
 	return c, nil
+}
+
+// checkGitDir accepts the repository git found only when it is the one a
+// checkout has: <top>/.git, or the directory a worktree's or submodule's .git
+// file names. Anything else, such as a project laid out as a bare repository
+// whose config points its worktree back at itself, is refused before git
+// reads a file through it.
+func checkGitDir(top, gitDir string) error {
+	dotGit := filepath.Join(filepath.FromSlash(top), ".git")
+	want := dotGit
+	info, err := os.Lstat(dotGit)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%w: %s has no .git", ErrNotRepo, top)
+	case info.Mode().IsRegular():
+		data, err := os.ReadFile(dotGit)
+		if err != nil {
+			return err
+		}
+		target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+		if !ok {
+			return fmt.Errorf("%w: %s is not a gitdir file", ErrNotRepo, dotGit)
+		}
+		want = filepath.FromSlash(strings.TrimSpace(target))
+		if !filepath.IsAbs(want) {
+			want = filepath.Join(filepath.FromSlash(top), want)
+		}
+	case !info.IsDir():
+		return fmt.Errorf("%w: %s is neither a directory nor a gitdir file", ErrNotRepo, dotGit)
+	}
+	if !samePath(filepath.FromSlash(gitDir), want) {
+		return fmt.Errorf("%w: git found the repository %s, not %s", ErrNotRepo, gitDir, want)
+	}
+	return nil
+}
+
+// samePath compares two paths after resolving links, without case on
+// Windows.
+func samePath(a, b string) bool {
+	if ea, err := filepath.EvalSymlinks(a); err == nil {
+		a = ea
+	}
+	if eb, err := filepath.EvalSymlinks(b); err == nil {
+		b = eb
+	}
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // parseIdent splits git's "Name <email> time zone" into name and email.
