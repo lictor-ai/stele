@@ -167,16 +167,13 @@ func TestAgentCanDisarmItself(t *testing.T) {
 			t.Logf("FINDING: stele check passes on a violating file after the agent removed every rule (the hook rewrote stele.lock to match)")
 		}
 	})
-	t.Run("stele.json backstop off", func(t *testing.T) {
+	t.Run("turning remind off in .claude/settings.json", func(t *testing.T) {
 		p := newProject(t, goRules)
-		p.compile()
+		p.mustStele(0, "init")
 		p.commit()
-		p.agentWrite(event{Prompt: "t", File: "stele.json", Content: `{"backstop": false}`})
-		e := pre("a.go", "package a")
-		e.Prompt = "t2"
-		if a := p.hook(e); !a.Deny {
-			code, _, _ := p.stele("check")
-			t.Logf("FINDING: the agent can turn the backstop off by writing stele.json through Write; stele check exit %d", code)
+		off := strings.ReplaceAll(p.read(".claude/settings.json"), "--installed=devel", "--installed=devel --remind=off")
+		if a := p.hook(pre(".claude/settings.json", off)); !strings.Contains(a.Raw, `"permissionDecision":"ask"`) {
+			t.Errorf("the agent can turn remind off by writing .claude/settings.json without asking:\n%s", a.Raw)
 		}
 	})
 	t.Run("writing .stele/index.json", func(t *testing.T) {
