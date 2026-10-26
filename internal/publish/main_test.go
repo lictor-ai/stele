@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -58,7 +59,7 @@ type fakeCall struct {
 // to $FAKE_LOG, prints $FAKE_<NAME>_OUT and exits with $FAKE_<NAME>_EXIT,
 // where NAME is its file name without extension, upper-cased.
 func fakeMain() int {
-	name := strings.TrimSuffix(filepath.Base(os.Args[0]), filepath.Ext(os.Args[0]))
+	name := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
 	upper := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 	stdin, _ := io.ReadAll(os.Stdin)
 	dir, _ := os.Getwd()
@@ -93,8 +94,10 @@ func fakeTools(t *testing.T, names ...string) (dir, log string) {
 	}
 	dir = t.TempDir()
 	for _, name := range names {
-		if filepath.Ext(self) != "" {
-			name += filepath.Ext(self)
+		// LookPath needs .exe on Windows. Elsewhere the test binary is
+		// publish.test, and its extension must not be copied.
+		if runtime.GOOS == "windows" {
+			name += ".exe"
 		}
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0o755); err != nil {
 			t.Fatal(err)
