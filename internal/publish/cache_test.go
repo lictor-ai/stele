@@ -171,6 +171,16 @@ func TestTimeoutFor(t *testing.T) {
 	}
 }
 
+// The cache lock must outlive the longest run, or a second stele publish
+// takes it over midway: ls-remote, clone, fetch and push may each take
+// netTimeout.
+func TestLockOutlivesARun(t *testing.T) {
+	const networkCalls = 4
+	if lockStale <= networkCalls*netTimeout+gitTimeout {
+		t.Errorf("lockStale %v is not above %d × %v + %v", lockStale, networkCalls, netTimeout, gitTimeout)
+	}
+}
+
 func TestSyncCacheReplacesGarbage(t *testing.T) {
 	g := testGit(t)
 	ctx := context.Background()

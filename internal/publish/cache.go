@@ -29,9 +29,10 @@ var cacheDir = os.UserCacheDir
 // the cache. Tests shorten it.
 var lockWait = 5 * time.Second
 
-// lockStale is the age at which a cache lock was left by a crash. A first
-// clone can be slow, so it is long.
-const lockStale = time.Hour
+// lockStale is the age at which a cache lock was left by a crash. It is
+// longer than the longest run: four git calls that talk to the remote, each
+// up to netTimeout, and the local ones.
+const lockStale = 3 * time.Hour
 
 // cacheRoot is the directory that holds every publish cache.
 func cacheRoot() (string, error) {
