@@ -6,7 +6,7 @@ stele makes Claude Code follow the rules in your repository's `stele.md`:
 - **After a write**, the lines it just wrote are checked against rules that have a regex check.
 - **In CI**, `stele check` checks the changed files.
 
-It is one Go binary. It uses no model and makes no network calls.
+It is one Go binary. It uses no model. It makes no network calls, except `stele publish`, which you run yourself.
 
 ## Install
 
@@ -210,6 +210,43 @@ up to date, nothing written
 hooks: remind on, check on
 ```
 
+## Publish the rules: stele publish
+
+`stele publish` keeps a copy of the project's `stele.md` in a git repository you choose, as a merge request you review there. Name the repository in `stele.json`:
+
+```json
+{ "publish": { "repo": "git@github.com:you/guidelines.git", "path": "project-a/stele.md" } }
+```
+
+| Key | Effect |
+|---|---|
+| `repo` | The repository: `https://host/path`, `ssh://host/path` or `user@host:path`. No local path, no other transport, no password in the URL. |
+| `path` | Where `stele.md` goes in it. Default `stele.md`. Letters, digits, `.`, `_`, `-` and `/`, ending in `.md`. |
+
+One repository per project needs only `repo`. Several projects can share one repository, each with its own `path`.
+
+What it does:
+
+- **It sends the committed `stele.md`**, as it is in the project's last commit. A `stele.md` with changes not yet committed is refused. It needs the project id in `stele.lock`: run `stele compile` first.
+- **It commits it on the repository's default branch** and pushes that commit to the branch `stele/publish/<path>`. Running it again replaces that branch; it never overwrites a commit on it that it did not make for this project.
+- **It opens a merge request** into the default branch, or finds the one already open, on github.com and gitlab.com. It never merges. Run again with nothing new, it reopens a request that was closed.
+- **It never asks for a token.** It uses a login you already have, in this order: the `gh` or `glab` login, git's stored credential (Git Credential Manager), then `GITHUB_TOKEN` or `GITLAB_TOKEN`. When none works, it prints the host's page to open the request yourself and tries to open it in the browser.
+- **Nothing changes when the default branch already has this `stele.md`.**
+
+Its working copy of the repository is a bare clone under your user cache directory (`stele/publish/` in it), never in the project. It exits 0 when the branch is pushed, even if the merge request could not be opened, and 1 when nothing was pushed:
+
+```
+$ stele publish
+stele publish: stele.md has changes that are not committed; commit it first
+```
+
+```
+$ stele publish
+stele publish: bad publish setting in stele.json: repo "file:///srv/rules.git": only https and ssh are allowed; use https://host/path, ssh://host/path or user@host:path
+```
+
+What leaves the machine: the committed `stele.md`, its `path`, the project's commit hash and id, and your git name and email, to `repo`; and, to github.com or gitlab.com only, the login it found.
+
 ## Test results
 
 [test/functional/](test/functional/) holds two kinds of tests:
@@ -243,11 +280,14 @@ Every experiment, with its numbers, is in [test/functional/agent/results/](test/
 7. **Binary files and files over 32 MiB are skipped.** The skip is reported, not silent.
 8. **Output is capped.** `stele check` shows at most 100 violations per rule and file; the agent gets at most 20 per message.
 9. **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too. So is a git worktree or submodule (a directory with its own `.git`): it gets no rules from an outer `stele.md`, only from its own. `stele check` there says nothing to check until it has its own `stele.md`, `stele.json` or `stele.lock`.
-10. **Nothing leaves the machine.** stele makes no network calls. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
+10. **Only `stele publish` sends anything, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com. stele makes no other network call. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 11. **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
 12. **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about. **A stele from before `--remind` and `--check` must not run `stele init` on hooks that carry a switch: upgrade it first.** It doesn't recognise the switches, so its `stele init` adds a second set of hooks, and it runs both hooks whatever the switches say. Every release so far, v1.0.0-dev.2 included, still tells you to run `stele init` when it meets hooks a newer release wrote. Only a stele with the switches tells you to upgrade instead.
 13. **Asking before a write to stele's own files covers Write, Edit and MultiEdit, and their names and links.** A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock`, `.stele/` and `.claude` settings files. A Bash command that visibly writes, removes, moves or copies onto one of them is asked about too. Not asked about: other Bash forms, a NotebookEdit, managed settings, settings passed with `--settings` or the environment, and a session started above the stele project with hooks registered there by hand. With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
 14. **With `--check=off`, only `stele check` finds violations.** With both `--remind=off` and `--check=off`, the agent still loads the rules at session start, but nothing enforces them until CI.
+15. **`stele publish` opens merge requests on github.com and gitlab.com only.** Any other host, a self-hosted GitHub or GitLab included, gets the branch pushed and is told to open the request by hand, with no link.
+16. **`stele publish` needs a repository with at least one commit, and git access to it.** git and Git Credential Manager are never allowed to prompt. ssh still can: a key's passphrase or an unknown host key is asked by ssh itself.
+17. **`stele publish` refuses a `stele/publish/<path>` branch holding commits it did not make for this project.** Two projects that publish to the same `path` of one repository get that error; give each its own `path`.
 
 ## License
 

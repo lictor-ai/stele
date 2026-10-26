@@ -1,6 +1,7 @@
 # stele publish
 
-Status: proposed, not built. Date: 2026-10-25. Part of v1, by ADR-0007
+Status: built (#79); the manual run against real GitHub and GitLab
+repositories is still to do. Date: 2026-10-25. Part of v1, by ADR-0007
 (D64–D66).
 
 ## Why
@@ -14,8 +15,9 @@ rules back from there (#31). This one only stores them.
 request. The developer reviews and merges it there.
 
 Not in this version: one project reusing another's rules, extending them, or
-excluding some of them; self-hosted GitHub or GitLab (they get the prefilled
-page, below); reading rules from the repository (#31).
+excluding some of them; self-hosted GitHub or GitLab (stele cannot tell them
+from any other host, so they are told to open the request by hand, below);
+reading rules from the repository (#31).
 
 ## The setting
 
@@ -42,12 +44,16 @@ projects gives each project its own `path`. stele imposes no layout.
 are checked before anything runs, and a bad value is an error that names it:
 
 - **`repo`** is `https://host/...`, `ssh://host/...`, or `user@host:path`. It
-  never starts with `-`. Local paths, `file://`, `ext::` and every other
-  transport are refused.
-- **`path`** is relative, uses `/`, and ends in `.md`. Each part is made of
-  letters, digits, `.`, `_` and `-` only, does not start with `.` or `-`, and
-  does not end with `.` or `.lock`. So there is no `..`, no `.git`, no `\` or
-  `:`, and every `path` makes a valid branch name.
+  never starts with `-` and holds no space or control character. Local paths,
+  `file://`, `ext::` and every other transport are refused, and so is a
+  password in it (`https://user:secret@...`, `user:secret@host:path`): stele
+  prints `repo` in messages, and git's own login supplies the password. The
+  error never shows the password.
+- **`path`** is relative, uses `/`, ends in `.md`, and is at most 200 bytes.
+  Each part is made of letters, digits, `.`, `_` and `-` only, does not start
+  with `.` or `-`, holds no `..` anywhere (`x..md` included, which
+  `check-ref-format` refuses), and does not end with `.` or `.lock`. So there
+  is no `.git`, no `\` or `:`, and every `path` makes a valid branch name.
 
 Without a `publish` key, `stele publish` fails with a message that shows the
 key to add.
@@ -56,8 +62,10 @@ key to add.
 
 1. **Reads the rules from git.** The project must be in a git repository, and
    `stele.md` must be tracked and unchanged since `HEAD` (`git diff --quiet
-   HEAD -- stele.md`). stele publishes the committed blob, `git show
-   HEAD:<path of stele.md from the git top>`, so line endings and an
+   HEAD -- stele.md`), and committed as a plain file, not a symlink. stele
+   publishes the committed blob, `git cat-file blob HEAD:<path of stele.md
+   from the git top>` (`cat-file`, not `show`, which can apply textconv), at
+   most 16 MiB, so line endings and an
    uncommitted edit cannot change what is sent. A project without git, an
    untracked `stele.md` and an edited one each get their own error. This is the
    one place outside a source plugin that reads a rule file (an exception to
@@ -69,14 +77,16 @@ key to add.
    inside the project. A file lock keeps two publishes out of it at once.
    Nothing is ever checked out, so no file of the published repository is
    written to disk as a file and none of its hooks runs.
-3. **Finds the base**, the repository's default branch (its `HEAD`). An empty
-   repository has none: stele stops and says to push a first commit.
+3. **Finds the base**, the repository's default branch (its `HEAD`, from
+   `git ls-remote --symref`, run before the clone). An empty repository has
+   none: stele stops and says to push a first commit, and leaves no cache.
 4. **Stops when nothing changed.** If the blob at `path` on the default
    branch is already the one from step 1, it says so and stops. If the publish
    branch already has it, it skips steps 5 and 6 and goes to step 7, so a
    merge request that failed to open, or was closed, is opened again.
 5. **Commits** on top of the default branch, with git's plumbing and a
-   temporary index: `read-tree <base>`, `hash-object -w`, `update-index
+   temporary index: `read-tree <base>`, `hash-object -w --no-filters --stdin`
+   (the blob on stdin), `update-index
    --cacheinfo` for `path`, `write-tree`, `commit-tree`. Every other file of
    the base stays as it is. The author and committer are the developer's
    identity as the project sees it (`git var GIT_AUTHOR_IDENT` run in the
@@ -89,11 +99,16 @@ key to add.
    uses the same one. stele checks the name with `git check-ref-format`. The
    push replaces an earlier publish (`--force-with-lease`, against the tip it
    just fetched). It refuses if that tip is not a stele commit for this
-   project (message `stele: publish <path>` and the same `Stele-Project`), so a
+   project (a subject of exactly `stele: publish <path>`, alone in its
+   paragraph, and the same `Stele-Project` in the last paragraph), so a
    person's commits are never overwritten, and two projects that chose the
-   same `path` get an error instead of replacing each other.
+   same `path` get an error instead of replacing each other. On success,
+   git's push output is discarded.
 7. **Opens a merge request** from that branch into the default branch, or finds
-   the one already open for it, and prints its link.
+   the one already open for it, and prints its link. A closed request is
+   reopened only when step 6 pushed nothing: GitHub cannot reopen a pull
+   request whose branch was force-pushed after it closed. If reopening fails,
+   a new one is opened.
 
 The developer merges it on the host. stele does not merge.
 
@@ -101,11 +116,27 @@ The developer merges it on the host. stele does not merge.
 
 Every git call:
 
-- passes `--` before a URL or path, and names refs in full (`refs/heads/...`);
+- passes `--` before a URL or path, and names refs in full (`refs/heads/...`).
+  `check-ref-format` takes no `--`; the name it checks starts with `refs/`;
 - runs with `-c protocol.allow=never -c protocol.https.allow=always -c
-  protocol.ssh.allow=always`, `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`
-  and stdin closed, so it can neither run a transport command nor prompt;
-- never fetches submodules.
+  protocol.ssh.allow=always -c credential.interactive=never`,
+  `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never` and an empty `GIT_ASKPASS`
+  (which makes git skip `core.askPass` and `SSH_ASKPASS` too), so it can
+  neither run a transport command nor prompt;
+- gets no stdin, except the two calls that read it: `git credential fill` its
+  request and `hash-object --stdin` the blob, each a fixed buffer, never the
+  terminal;
+- runs with `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the other
+  variables that would point it elsewhere removed, and on the bare clone with
+  `--git-dir`, so git never looks for a repository above it;
+- never fetches or pushes submodules.
+
+ssh's own prompts stay possible: a key's passphrase, or an unknown host key.
+They come from the developer's own ssh setup, which stele does not override.
+
+When git fails, stele shows its message with control characters removed and
+without the `remote:` lines that hold a link: stele never shows a link the
+remote chose. A refusal such as `remote: Permission denied` stays.
 
 `git`, `gh`, `glab` and the browser opener are found on `PATH` and resolved to
 an absolute path. A program whose path is inside the project is refused, as
@@ -118,14 +149,19 @@ stele calls the GitHub or GitLab API itself. Nothing extra is installed.
 **Only two hosts receive a token: `github.com` (API `api.github.com`) and
 `gitlab.com`, over HTTPS.** The host is the one in `repo`, matched exactly. Any
 other host, including a self-hosted GitHub or GitLab, gets no token and no API
-call: it gets the prefilled page.
+call: stele prints the repository and the branch to open the request from.
+The API endpoints are fixed; nothing in `repo`, its port included, changes
+where a token goes. The HTTP client follows no redirect.
 
 **stele never asks for a token.** It reuses a login the developer already has,
 trying these in order. When the host rejects one, it tries the next:
 
 1. The host's CLI login, if that CLI is installed and logged in to that host:
-   `gh auth token --hostname github.com`, or `glab`'s token for `gitlab.com`.
-   Check which `glab` command prints it before building.
+   `gh auth token --hostname github.com`, or `glab config get token --host
+   gitlab.com`. Both print the bare token on stdout. They run outside the
+   project, with nothing on stdin and with `GH_TOKEN`, `GITHUB_TOKEN`,
+   `GITLAB_TOKEN` and the other token variables removed, since both CLIs
+   would otherwise answer with those first.
 2. git's stored credential for that host, from `git credential fill`, run with
    prompts disabled as above. Git Credential Manager, the default on Windows,
    stores an OAuth token there. A stored password is rejected by the host, and
@@ -134,9 +170,9 @@ trying these in order. When the host rejects one, it tries the next:
 
 The token is held in memory for the call and never written or printed.
 
-**The prefilled page.** With no token, every one rejected, an API error, or
-another host, the branch is already pushed. stele prints a page to open the
-merge request there:
+**The prefilled page.** With no token, every one rejected, or an API error on
+github.com or gitlab.com, the branch is already pushed. stele prints a page to
+open the merge request there:
 
 - GitHub: `https://<host>/<owner>/<repo>/compare/<base>...<branch>?expand=1`
 - GitLab: `https://<host>/<path>/-/merge_requests/new?merge_request%5Bsource_branch%5D=<branch>`
@@ -147,7 +183,8 @@ part percent-encoded. It never prints or opens a link the remote sent in its
 push output. A link from the API (`html_url`, `web_url`) is used only if it is
 HTTPS on the same host. Control characters are removed before printing.
 
-stele always prints the link. It also tries to open it: `rundll32
+stele always prints the link, the merge request's or the prefilled page. It
+also tries to open it: `rundll32
 url.dll,FileProtocolHandler` on Windows, `open` on macOS, `xdg-open` on Linux,
 with the link as a single argument and never through a shell. A failure to
 open is ignored.
@@ -169,7 +206,9 @@ Each one names what failed and what to do. None changes the project.
 | Empty repository | Exit 1. Push a first commit. |
 | Clone, fetch or push fails | Exit 1. Shows git's message, which says whether access was denied. |
 | The publish branch has commits stele did not make for this project | Exit 1. Names the branch. |
+| Another `stele publish` is using the same cache | Exit 1. Try again when it ends. |
 | No token, rejected token, API error | Exit 0. The branch is pushed; stele prints the prefilled page. |
+| An argument on the command line | Exit 2, as for every command. |
 
 ## What leaves the machine
 
@@ -193,10 +232,11 @@ compiled index, which is signed for one machine (#27) and can be rebuilt from
   prints or exits. It is the only package that imports `net/http` and the only
   one besides `stele check` that starts processes.
 - `cmd/stele/publish.go` parses flags, prints and picks the exit code.
-- `stele hook` never reaches either.
+- `stele hook` never reaches either: `cmd/stele/hookreach_test.go` follows the
+  hook's imports, and a `stele.md` rule refuses the import on the hook's path.
 
 The change that builds it updates `stele.md` with it: the network rule allows
-`net/http` in `internal/publish` only, the `os/exec` rule names it, and the D40
+`net` and `net/...` in `internal/publish` only, the `os/exec` rule names it, and the D40
 rule names its one read of `stele.md`. It also
 adds `stele publish` to the README, with its limits: GitHub and GitLab only for
 the merge request, no self-hosted instances, no empty repository.
@@ -224,5 +264,5 @@ the merge request, no self-hosted instances, no empty repository.
 | # | Decision |
 | :-- | :-- |
 | D64 | `stele publish` sends the committed `stele.md` to the `repo` and `path` under `publish` in `stele.json`, as a merge request from branch `stele/publish/<path>`. It writes nothing to disk from the published repository and never overwrites commits it did not make for this project. It reads `stele.md` from git to copy it, never parsing it: the one exception to D40. |
-| D65 | It reuses an existing login (`gh`/`glab`, git's stored credential, the environment) and never asks for a token. Tokens go only to `github.com` and `gitlab.com`; every other case gets a prefilled page that stele builds itself. |
+| D65 | It reuses an existing login (`gh`/`glab`, git's stored credential, the environment) and never asks for a token. Tokens go only to `github.com` and `gitlab.com`. When no merge request opens there, stele prints a prefilled page it builds itself; any other host is told the branch to open one from. |
 | D66 | D53 gains a second exit: `stele publish`, run by the developer, sends `stele.md`, its `path`, the project's commit hash and id, and the author's identity, and nothing else. Network calls are allowed in `internal/publish` only (ADR-0007). |
