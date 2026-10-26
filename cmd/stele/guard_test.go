@@ -103,18 +103,29 @@ func TestHookAskKeepsTheTurn(t *testing.T) {
 	}
 }
 
-// Asking does not depend on stele.json: it is what the agent would change.
+// Asking does not depend on stele.json, nor on the switches: they are what
+// the agent would change.
 func TestHookAsksWhateverTheConfig(t *testing.T) {
 	clock(t, time.Now())
+	for name, args := range map[string][]string{
+		"remind off":                   {"--installed=v1", "--remind=off"},
+		"remind and check off, settings": {"--installed=v1", "--remind=off", "--check=off"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := project(t, hookRules)
+			file := "stele.json"
+			if strings.HasSuffix(name, "settings") {
+				file = ".claude/settings.json"
+			}
+			o, out := hook(t, preWrite("Edit", filepath.Join(root, filepath.FromSlash(file))), args...)
+			if !asks(t, o, file) {
+				t.Errorf("%s: %s, want ask", name, out)
+			}
+		})
+	}
 	for name, setup := range map[string]func(t *testing.T, root string){
-		"backstop off": func(t *testing.T, root string) {
-			writeAt(t, root, "stele.json", `{"backstop": false}`)
-		},
-		"backstop off, settings": func(t *testing.T, root string) {
-			writeAt(t, root, "stele.json", `{"backstop": false}`)
-		},
 		"stele.json invalid": func(t *testing.T, root string) {
-			writeAt(t, root, "stele.json", `{"backstop": `)
+			writeAt(t, root, "stele.json", `{"block_on_error": `)
 		},
 		"block_on_error and no key": func(t *testing.T, root string) {
 			writeAt(t, root, "stele.json", `{"block_on_error": true}`)

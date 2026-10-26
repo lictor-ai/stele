@@ -42,8 +42,9 @@ func clock(t *testing.T, start time.Time) func(time.Duration) {
 	return func(d time.Duration) { cur = cur.Add(d) }
 }
 
-// hook runs stele hook on a PreToolUse payload for file.
-func hook(t *testing.T, payload map[string]any) (hookOutput, string) {
+// hook runs stele hook on payload, with args after "hook" as the settings
+// would pass them.
+func hook(t *testing.T, payload map[string]any, args ...string) (hookOutput, string) {
 	t.Helper()
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -52,7 +53,7 @@ func hook(t *testing.T, payload map[string]any) (hookOutput, string) {
 	old := stdin
 	stdin = bytes.NewReader(data)
 	defer func() { stdin = old }()
-	code, out, errOut := runCmd("hook")
+	code, out, errOut := runCmd(append([]string{"hook"}, args...)...)
 	if code != exitOK {
 		t.Fatalf("hook exit = %d, stderr %q: the hook must always exit 0", code, errOut)
 	}

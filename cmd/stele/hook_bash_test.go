@@ -255,20 +255,17 @@ func TestHookBashAsksForOwnFiles(t *testing.T) {
 	}
 }
 
-// 11. With backstop off the hook never stops a command: the agent is told
+// 11. With --remind=off the hook never stops a command: the agent is told
 // the file is unchecked. An own file is still asked about.
-func TestHookBashBackstopOff(t *testing.T) {
+func TestHookBashRemindOff(t *testing.T) {
 	root := project(t, hookRules)
 	clock(t, time.Now())
-	if err := os.WriteFile(filepath.Join(root, "stele.json"), []byte(`{"backstop": false}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	o, out := hook(t, bash(writeGo, root, "p1", ""))
+	o, out := hook(t, bash(writeGo, root, "p1", ""), "--installed=v1", "--remind=off")
 	if denied(o) || !strings.Contains(o.HookSpecificOutput.AdditionalContext, "stele check a.go") {
-		t.Errorf("backstop off: %s", out)
+		t.Errorf("remind off: %s", out)
 	}
-	if o, out := hook(t, bash("echo x >> stele.md", root, "p1", "")); !asks(t, o, "stele.md") {
-		t.Errorf("backstop off, own file: %s", out)
+	if o, out := hook(t, bash("echo x >> stele.md", root, "p1", ""), "--installed=v1", "--remind=off"); !asks(t, o, "stele.md") {
+		t.Errorf("remind off, own file: %s", out)
 	}
 }
 

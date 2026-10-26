@@ -70,15 +70,17 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 			code = exitOK
 		}
 	}()
+	// The switches stele init wrote on the command (ADR-0006).
+	sw := claudecode.HookSwitches(args)
 	var a claudecode.Answer
 	switch {
 	case ev.Name == "PreToolUse" && ev.ToolName == "Bash":
-		a = beforeBash(ev)
+		a = beforeBash(ev, sw)
 	case ev.Name == "PreToolUse":
-		a = beforeWrite(ev)
+		a = beforeWrite(ev, sw)
 		a.Warning = joinLines(a.Warning, versionWarning(ev, claudecode.InstalledVersion(args)))
 	case ev.Name == "PostToolUse" && writes[ev.ToolName]:
-		a = afterWrite(ev)
+		a = afterWrite(ev, sw)
 		room := install.MaxMessage
 		if a.Context != "" {
 			room -= len(a.Context) + len("\n\n") // joinNotes' separator
@@ -117,8 +119,9 @@ func target(ev claudecode.Event) (root, rel string, ok bool) {
 	return root, filepath.ToSlash(rel), true
 }
 
-// beforeWrite decides a PreToolUse call.
-func beforeWrite(ev claudecode.Event) claudecode.Answer {
+// beforeWrite decides a PreToolUse call. With --remind=off only the asks
+// for stele's own files and settings are left.
+func beforeWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 	root, rel, ok := target(ev)
 	if !ok {
 		return askOutside(ev)
@@ -126,6 +129,9 @@ func beforeWrite(ev claudecode.Event) claudecode.Answer {
 	// Before stele.json is read: it is one of the files that would change.
 	if writes[ev.ToolName] && (guarded(root, rel, ev.File) || loadsSettings(ev, ev.File)) {
 		return claudecode.Answer{Ask: install.AskMessage(showPath(rel))}
+	}
+	if sw.RemindOff {
+		return claudecode.Answer{}
 	}
 
 	policy, perr := enforce.Load(root)
@@ -226,10 +232,13 @@ func freshIndex(root string, key []byte) (idx index.Index, note string, err erro
 // afterWrite decides a PostToolUse call: it checks the lines the agent just
 // wrote against the rules with a built-in check (D45). It keeps no session
 // state, so parallel writes cannot race.
-func afterWrite(ev claudecode.Event) claudecode.Answer {
+func afterWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 	root, rel, ok := target(ev)
 	if !ok {
 		return claudecode.Answer{}
+	}
+	if sw.CheckOff {
+		return refreshOnly(root)
 	}
 
 	policy, perr := enforce.Load(root)
@@ -312,6 +321,26 @@ func afterWrite(ev claudecode.Event) claudecode.Answer {
 	softMsg := message(soft, false, budget-len(hardMsg)-4)
 	a.Context = joinNotes(append([]string{hardMsg, softMsg}, notes...)...)
 	return a
+}
+
+// refreshOnly is the post-write answer with --check=off. Nothing is checked,
+// but the index and the rules file are rebuilt when stele.md changed: only
+// this hook compiles an agent's edit to stele.md, whose write asks before it
+// runs (ADR-0006). A failure only warns: no check was asked for, so there is
+// nothing for block_on_error to stand in for.
+func refreshOnly(root string) claudecode.Answer {
+	warn := func(err error) claudecode.Answer {
+		return claudecode.Answer{Warning: fmt.Sprintf("stele: rules not refreshed after this write: %v", err)}
+	}
+	key, err := loadKey()
+	if err != nil {
+		return warn(err)
+	}
+	_, note, err := freshIndex(root, key)
+	if err != nil {
+		return warn(err)
+	}
+	return claudecode.Answer{Context: note}
 }
 
 // written returns the lines an Edit or MultiEdit wrote: exactly, from
