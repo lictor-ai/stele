@@ -116,6 +116,36 @@ func TestRunPublishes(t *testing.T) {
 	}
 }
 
+// When the default branch moves on, an old publish branch would bring the
+// old base back in its merge request: it is rebuilt on the new base.
+func TestRunRebuildsOnANewBase(t *testing.T) {
+	f := newFixture(t, otherRepo, "", "Use tabs.\n", map[string]string{"README.md": "hi\n"})
+	ctx := context.Background()
+	if _, err := Run(ctx, f.root); err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	gitT(t, work, "clone", "--quiet", f.remote, ".")
+	writeFile(t, filepath.Join(work, "other.md"), "other\n")
+	gitT(t, work, "add", "-A")
+	gitT(t, work, "commit", "--quiet", "-m", "other work")
+	gitT(t, work, "push", "--quiet", "origin", "main")
+
+	res, err := Run(ctx, f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Pushed {
+		t.Errorf("result = %+v, want the branch rebuilt", res)
+	}
+	if parent := gitT(t, f.remote, "rev-parse", branch+"^"); parent != f.tip(t, "refs/heads/main") {
+		t.Errorf("parent = %s, want the new main", parent)
+	}
+	if tree := gitT(t, f.remote, "ls-tree", "-r", "--name-only", branch); tree != "README.md\nother.md\nstele.md" {
+		t.Errorf("tree =\n%s", tree)
+	}
+}
+
 func TestRunNestedPath(t *testing.T) {
 	f := newFixture(t, otherRepo, "project-a/stele.md", "Rules.\n", map[string]string{"README.md": "hi\n"})
 	res, err := Run(context.Background(), f.root)

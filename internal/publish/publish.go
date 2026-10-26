@@ -102,7 +102,10 @@ func Run(ctx context.Context, root string) (Result, error) {
 		if !ours {
 			return Result{}, fmt.Errorf("branch %s in %s %w", res.Branch, cfg.Repo, ErrForeignBranch)
 		}
-		push = blobAt(ctx, g, dir, s.Tip, cfg.Path) != blob
+		// Rebuild when the branch holds an older stele.md, or sits on an
+		// older base: its merge request would otherwise bring that base
+		// back.
+		push = blobAt(ctx, g, dir, s.Tip, cfg.Path) != blob || revParse(ctx, g, dir, s.Tip+"^") != revParse(ctx, g, dir, baseRef)
 	}
 	if push {
 		commit, err := buildCommit(ctx, g, dir, baseRef, cfg.Path, blob, c)
@@ -125,7 +128,12 @@ func Run(ctx context.Context, root string) (Result, error) {
 
 // blobAt returns the blob at path in rev, or "" if there is none.
 func blobAt(ctx context.Context, g gitCmd, dir, rev, path string) string {
-	out, err := bare(ctx, g, dir, nil, nil, "rev-parse", "--verify", "-q", rev+":"+path)
+	return revParse(ctx, g, dir, rev+":"+path)
+}
+
+// revParse returns the object rev names, or "" if it names none.
+func revParse(ctx context.Context, g gitCmd, dir, rev string) string {
+	out, err := bare(ctx, g, dir, nil, nil, "rev-parse", "--verify", "-q", rev)
 	if err != nil {
 		return ""
 	}
