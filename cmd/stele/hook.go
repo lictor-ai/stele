@@ -377,6 +377,12 @@ func versionWarning(ev claudecode.Event, installed string) string {
 	}
 	msg := fmt.Sprintf("stele: the hooks in %s were installed by stele %s; this is stele %s. Run stele init to update them.",
 		filepath.ToSlash(claudecode.SettingsFile), installed, running)
+	if install.Older(running, installed) {
+		// An older init takes hooks carrying switches for hand-written ones
+		// and adds a second set (ADR-0006): it must not be run.
+		msg = fmt.Sprintf("stele: the hooks in %s were installed by stele %s; this is stele %s, which is older. Upgrade stele; do not run stele init with it.",
+			filepath.ToSlash(claudecode.SettingsFile), installed, running)
+	}
 	key, err := loadKey()
 	if err != nil {
 		return msg

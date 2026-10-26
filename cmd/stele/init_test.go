@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -200,6 +201,32 @@ func TestHookWarnsOfAnotherVersion(t *testing.T) {
 	}
 	if o := hookWith(t, file, "p2", "--installed=v0.0.1"); o.SystemMessage != "" {
 		t.Errorf("second write: warning %q, want it once a session", o.SystemMessage)
+	}
+	if !strings.Contains(o.SystemMessage, "Run stele init") {
+		t.Errorf("a newer binary: warning %q, want it sent to stele init", o.SystemMessage)
+	}
+
+	// An older binary must not run init: its init would take flagged hooks
+	// for hand-written ones and add a second set (ADR-0006).
+	for _, tt := range []struct {
+		name, binary string
+		args         []string
+	}{
+		{"older release", "v0.0.1", []string{"--installed=v0.0.2"}},
+		{"pre-release of the stamp", "v1.0.0-dev.2", []string{"--installed=v1.0.0"}},
+		{"older, with a switch", "v0.0.1", []string{"--installed=v0.0.2", "--remind=off"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := project(t, hookRules)
+			setVersion(t, tt.binary)
+			o := hookWith(t, filepath.Join(root, "a.go"), "p1", tt.args...)
+			if !strings.Contains(o.SystemMessage, "Upgrade stele") || strings.Contains(o.SystemMessage, "Run stele init") {
+				t.Errorf("warning %q, want it told to upgrade, not to run init", o.SystemMessage)
+			}
+			if slices.Contains(tt.args, "--remind=off") && o.HookSpecificOutput.PermissionDecision == "deny" {
+				t.Error("remind off, yet the write was denied")
+			}
+		})
 	}
 
 	for _, tt := range []struct{ name, binary, installed string }{
