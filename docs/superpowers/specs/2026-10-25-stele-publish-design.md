@@ -67,14 +67,20 @@ key to add.
    from the git top>` (`cat-file`, not `show`, which can apply textconv), at
    most 16 MiB, so line endings and an
    uncommitted edit cannot change what is sent. A project without git, an
-   untracked `stele.md` and an edited one each get their own error. This is the
+   untracked `stele.md` and an edited one each get their own error. git must
+   have found the checkout's own repository, `<top>/.git` or the directory a
+   worktree's `.git` file names: a project laid out as a bare repository,
+   whose config could run a filter, is refused before git reads a file
+   through it. This is the
    one place outside a source plugin that reads a rule file (an exception to
    D40, ADR-0007): it copies the file and never parses it.
    It also reads the project id from `stele.lock` (D51); without one, it says
    to run `stele compile` first.
 2. **Updates its clone** of `repo`: a bare repository under stele's cache
    directory (`os.UserCacheDir()/stele/publish/<SHA-256 of the URL>`), never
-   inside the project. A file lock keeps two publishes out of it at once.
+   inside the project. The first clone takes only the default branch
+   (`--single-branch`, no tags); the publish branch comes with the fetch. A
+   file lock keeps two publishes out of it at once.
    Nothing is ever checked out, so no file of the published repository is
    written to disk as a file and none of its hooks runs.
 3. **Finds the base**, the repository's default branch (its `HEAD`, from
@@ -82,8 +88,10 @@ key to add.
    none: stele stops and says to push a first commit, and leaves no cache.
 4. **Stops when nothing changed.** If the blob at `path` on the default
    branch is already the one from step 1, it says so and stops. If the publish
-   branch already has it, it skips steps 5 and 6 and goes to step 7, so a
-   merge request that failed to open, or was closed, is opened again.
+   branch already has it, on top of the current default branch, it skips
+   steps 5 and 6 and goes to step 7, so a merge request that failed to open,
+   or was closed, is opened again. A publish branch on an older base is
+   rebuilt: its merge request would otherwise bring that base back.
 5. **Commits** on top of the default branch, with git's plumbing and a
    temporary index: `read-tree <base>`, `hash-object -w --no-filters --stdin`
    (the blob on stdin), `update-index
@@ -118,6 +126,8 @@ Every git call:
 
 - passes `--` before a URL or path, and names refs in full (`refs/heads/...`).
   `check-ref-format` takes no `--`; the name it checks starts with `refs/`;
+- runs with `-c safe.bareRepository=explicit`, so git uses a bare repository
+  only when stele names it with `--git-dir`;
 - runs with `-c protocol.allow=never -c protocol.https.allow=always -c
   protocol.ssh.allow=always -c credential.interactive=never`,
   `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never` and an empty `GIT_ASKPASS`
@@ -129,7 +139,11 @@ Every git call:
 - runs with `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the other
   variables that would point it elsewhere removed, and on the bare clone with
   `--git-dir`, so git never looks for a repository above it;
-- never fetches or pushes submodules.
+- never fetches or pushes submodules;
+- has at most 30 minutes when it talks to the remote (`ls-remote`, `clone`,
+  `fetch`, `push`) and 5 otherwise;
+- has at most 1 MiB of its output and of its error kept (16 MiB for
+  `stele.md` itself); the rest is read and dropped.
 
 ssh's own prompts stay possible: a key's passphrase, or an unknown host key.
 They come from the developer's own ssh setup, which stele does not override.
@@ -139,8 +153,10 @@ without the `remote:` lines that hold a link: stele never shows a link the
 remote chose. A refusal such as `remote: Permission denied` stays.
 
 `git`, `gh`, `glab` and the browser opener are found on `PATH` and resolved to
-an absolute path. A program whose path is inside the project is refused, as
-D43 refuses plugins from inside the repository.
+an absolute path. A program whose path is inside the project, or inside the
+git repository that holds it (the nearest directory above with a `.git`,
+found without running git), is refused, as D43 refuses plugins from inside
+the repository.
 
 ## Opening the merge request
 
@@ -168,7 +184,16 @@ trying these in order. When the host rejects one, it tries the next:
    stele moves on.
 3. `GITHUB_TOKEN` for `github.com` only, `GITLAB_TOKEN` for `gitlab.com` only.
 
-The token is held in memory for the call and never written or printed.
+The token is held in memory for the call and never written or printed. A
+login is rejected, and the next one tried, on a 401 or a 403, and on a 404
+to the first call: a private repository is invisible to a login without
+access to it.
+
+Both hosts then behave the same. An open request from the branch is
+"found". When nothing was pushed, a closed one is reopened; if that fails, a
+new one is opened, and if that fails too the error gives both reasons. When
+GitHub answers 422 to the new one ("a pull request already exists", into
+another base say), or GitLab 409, the open one from the branch is the answer.
 
 **The prefilled page.** With no token, every one rejected, or an API error on
 github.com or gitlab.com, the branch is already pushed. stele prints a page to
@@ -181,7 +206,10 @@ open the merge request there:
 stele builds every link itself, over HTTPS, on the host of `repo`, with each
 part percent-encoded. It never prints or opens a link the remote sent in its
 push output. A link from the API (`html_url`, `web_url`) is used only if it is
-HTTPS on the same host. Control characters are removed before printing.
+HTTPS on the same host. Before printing, escape sequences, control characters
+and the characters that reorder text are removed, and every field is one
+line: a newline or tab in it becomes a space. Only git's message, when it
+fails, keeps its lines, each cleaned.
 
 stele always prints the link, the merge request's or the prefilled page. It
 also tries to open it: `rundll32

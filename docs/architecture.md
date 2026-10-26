@@ -933,7 +933,8 @@ type Result struct {
 }
 func Run(ctx context.Context, root string) (Result, error)
 func Open(root, link string) error // the browser; cmd/stele ignores a failure
-func Clean(s string) string        // strip escapes and control characters before printing
+func Clean(s string) string        // one printable line: escapes and control characters removed
+func CleanLines(s string) string   // Clean on each line, line breaks kept: git's message only
 ```
 
 The design is `docs/superpowers/specs/2026-10-25-stele-publish-design.md`
@@ -945,9 +946,10 @@ asks the GitHub or GitLab API for the merge request.
 
 It is the only package that imports `net/http`, and with `stele check` the
 only one that starts processes: `git`, `gh`, `glab` and the browser opener,
-each resolved on `PATH` and refused inside the project (as D43 does for
-plugins). Every git call allows only the https and ssh transports and never
-prompts. A token goes only to the fixed endpoints `api.github.com` and
+each resolved on `PATH` and refused inside the project or the repository
+that holds it (as D43 does for plugins). Every git call allows only the https
+and ssh transports, uses a bare repository only when named with
+`--git-dir`, never prompts, and keeps at most 1 MiB of what git prints. A token goes only to the fixed endpoints `api.github.com` and
 `gitlab.com/api/v4`, and only when `repo`'s host is exactly `github.com` or
 `gitlab.com` (D65). `stele hook` never reaches the package:
 `cmd/stele/hookreach_test.go` follows the hook's imports to check it.

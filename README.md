@@ -220,7 +220,7 @@ hooks: remind on, check on
 
 | Key | Effect |
 |---|---|
-| `repo` | The repository: `https://host/path`, `ssh://host/path` or `user@host:path`. No local path, no other transport, no password in the URL. |
+| `repo` | The repository: `https://host/path`, `ssh://host/path` or `user@host:path`. No local path, no other transport, no password in the URL. In the `user@host:path` form the path can't start with `/`: write `ssh://user@host/abs/path` instead. |
 | `path` | Where `stele.md` goes in it. Default `stele.md`. Letters, digits, `.`, `_`, `-` and `/`, ending in `.md`. |
 
 One repository per project needs only `repo`. Several projects can share one repository, each with its own `path`.
@@ -228,7 +228,7 @@ One repository per project needs only `repo`. Several projects can share one rep
 What it does:
 
 - **It sends the committed `stele.md`**, as it is in the project's last commit. A `stele.md` with changes not yet committed is refused. It needs the project id in `stele.lock`: run `stele compile` first.
-- **It commits it on the repository's default branch** and pushes that commit to the branch `stele/publish/<path>`. Running it again replaces that branch; it never overwrites a commit on it that it did not make for this project.
+- **It commits it on the repository's default branch** and pushes that commit to the branch `stele/publish/<path>`. Running it again replaces that branch when `stele.md` changed or the default branch moved on; it never overwrites a commit on it that it did not make for this project.
 - **It opens a merge request** into the default branch, or finds the one already open, on github.com and gitlab.com. It never merges. Run again with nothing new, it reopens a request that was closed.
 - **It never asks for a token.** It uses a login you already have, in this order: the `gh` or `glab` login, git's stored credential (Git Credential Manager), then `GITHUB_TOKEN` or `GITLAB_TOKEN`. When none works, it prints the host's page to open the request yourself and tries to open it in the browser.
 - **Nothing changes when the default branch already has this `stele.md`.**
