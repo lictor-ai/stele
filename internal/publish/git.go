@@ -214,8 +214,8 @@ func firstWord(args []string) string {
 // chose. A refusal such as "remote: Permission denied" stays.
 func gitMessage(stderr string) string {
 	var keep []string
-	for _, line := range strings.Split(Clean(stderr), "\n") {
-		line = strings.TrimRight(line, " \t")
+	for _, line := range strings.Split(CleanLines(stderr), "\n") {
+		line = strings.TrimRight(line, " ")
 		if line == "" {
 			continue
 		}

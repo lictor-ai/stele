@@ -96,6 +96,15 @@ func TestPublishOutput(t *testing.T) {
 			stdout: []string{"no merge request opened: bad\n"},
 			opened: "https://github.com/me/rules/compare/x",
 		},
+		{
+			name: "no line can be added",
+			res: with(func(r *publish.Result) {
+				r.Why = "bad\nmerge request opened: https://evil.example"
+				r.Page = "https://github.com/me/rules/compare/x"
+			}),
+			stdout: []string{"no merge request opened: bad merge request opened: https://evil.example\n"},
+			opened: "https://github.com/me/rules/compare/x",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

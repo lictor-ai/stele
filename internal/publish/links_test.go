@@ -54,12 +54,19 @@ func TestClean(t *testing.T) {
 		{"\x1b[31mred\x1b[0m", "red"},
 		{"a\rb", "ab"},
 		{"x‮gnp.exe", "xgnp.exe"},
-		{"line1\nline2\tx", "line1\nline2\tx"},
+		{"line1\nline2\tx", "line1 line2 x"},
 		{"bell\a", "bell"},
 	}
 	for _, tt := range tests {
 		if got := Clean(tt.in); got != tt.want {
 			t.Errorf("Clean(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestCleanLines(t *testing.T) {
+	in := "fatal: one\r\n\x1b[31mtwo\tthree\x1b[0m\nfour‮"
+	if got, want := CleanLines(in), "fatal: one\ntwo three\nfour"; got != want {
+		t.Errorf("CleanLines = %q, want %q", got, want)
 	}
 }

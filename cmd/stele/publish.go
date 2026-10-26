@@ -27,7 +27,8 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	}
 	res, err := publishRun(context.Background(), root)
 	if err != nil {
-		fmt.Fprintf(stderr, "stele publish: %s\n", publish.Clean(err.Error()))
+		// The only text printed over several lines: git's own message.
+		fmt.Fprintf(stderr, "stele publish: %s\n", publish.CleanLines(err.Error()))
 		return exitFailed
 	}
 	c := publish.Clean
