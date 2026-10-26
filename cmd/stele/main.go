@@ -8,7 +8,8 @@ import (
 	"sort"
 )
 
-// Exit codes. check uses all three (spec §8); the other commands use 0 and 2.
+// Exit codes. check and publish use all three (spec §8); the other commands
+// use 0 and 2.
 const (
 	exitOK      = 0
 	exitFailed  = 1
@@ -27,6 +28,7 @@ var commands = map[string]command{
 	"check":     {"validate the rules and run checkers on changed files", runCheck},
 	"status":    {"describe the install", notImplemented("status")},
 	"push":      {"send new log entries to every listed sink", notImplemented("push")},
+	"publish":   {"send stele.md to the repository in stele.json as a merge request", runPublish},
 	"mcp":       {"run the MCP server on stdio", notImplemented("mcp")},
 	"hook":      {"read a Claude Code hook payload on stdin, decide", runHook},
 }

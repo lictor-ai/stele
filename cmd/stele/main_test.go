@@ -10,7 +10,7 @@ import (
 )
 
 func TestRunDispatchesEveryCommand(t *testing.T) {
-	want := []string{"check", "compile", "hook", "init", "mcp", "push", "status", "uninstall"}
+	want := []string{"check", "compile", "hook", "init", "mcp", "publish", "push", "status", "uninstall"}
 	var got []string
 	for name := range commands {
 		got = append(got, name)
