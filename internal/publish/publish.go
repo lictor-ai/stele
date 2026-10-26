@@ -119,7 +119,7 @@ func Run(ctx context.Context, root string) (Result, error) {
 		res.Pushed = true
 	}
 
-	mergeRequest(ctx, g, root, parseRemote(cfg.Repo), c, &res)
+	mergeRequest(ctx, g, root, parent, parseRemote(cfg.Repo), c, &res)
 	return res, nil
 }
 
