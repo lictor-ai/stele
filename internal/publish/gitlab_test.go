@@ -94,6 +94,39 @@ func TestGitlabReopens(t *testing.T) {
 	}
 }
 
+func TestGitlabNotFoundIsRejected(t *testing.T) {
+	newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) { writeJSONTo(w, 404, map[string]any{}) })
+	if _, err := gitlabMR(context.Background(), glRemote, "t", ghReq); !errors.Is(err, errRejected) {
+		t.Errorf("err = %v, want errRejected", err)
+	}
+}
+
+func TestGitlabReopenFailureOpensNew(t *testing.T) {
+	createStatus := 201
+	newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) {
+		switch {
+		case r.Method == "GET" && r.URL.Query().Get("state") == "opened":
+			writeJSONTo(w, 200, []any{})
+		case r.Method == "GET":
+			writeJSONTo(w, 200, []map[string]any{{"iid": 7, "web_url": "https://gitlab.com/a/b/c/-/merge_requests/7"}})
+		case r.Method == "PUT":
+			writeJSONTo(w, 500, map[string]any{})
+		case r.Method == "POST":
+			writeJSONTo(w, createStatus, map[string]any{"iid": 8, "web_url": "https://gitlab.com/a/b/c/-/merge_requests/8"})
+		}
+	})
+	req := ghReq
+	req.Pushed = false
+	if got, err := gitlabMR(context.Background(), glRemote, "t", req); err != nil || got.Action != "opened" {
+		t.Errorf("got %+v, %v; want opened", got, err)
+	}
+	createStatus = 502
+	_, err := gitlabMR(context.Background(), glRemote, "t", req)
+	if err == nil || !strings.Contains(err.Error(), "502") || !strings.Contains(err.Error(), "500") {
+		t.Errorf("err = %v, want both the create and the reopen failure", err)
+	}
+}
+
 func TestGitlabErrors(t *testing.T) {
 	newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) { writeJSONTo(w, 401, map[string]any{}) })
 	if _, err := gitlabMR(context.Background(), glRemote, "t", ghReq); !errors.Is(err, errRejected) {

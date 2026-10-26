@@ -101,6 +101,33 @@ func call(ctx context.Context, host, method, url, token string, extra map[string
 	return resp.StatusCode, nil
 }
 
+// status returns the HTTP status of an API error, or 0.
+func status(err error) int {
+	var ae *apiError
+	if errors.As(err, &ae) {
+		return ae.status
+	}
+	return 0
+}
+
+// notFoundRejects turns a 404 into errRejected: a private repository is
+// invisible to a login without access to it, and the next login may see it.
+func notFoundRejects(err error) error {
+	if status(err) == http.StatusNotFound {
+		return errRejected
+	}
+	return err
+}
+
+// alsoReopen adds why reopening a closed merge request failed to the error
+// that opening a new one then gave.
+func alsoReopen(err, reopenErr error) error {
+	if err == nil || reopenErr == nil {
+		return err
+	}
+	return fmt.Errorf("%w (reopening the closed one failed too: %v)", err, reopenErr)
+}
+
 // redact keeps a transport error's kind but not its request, whose URL is
 // stele's own and whose headers are never printed by net/http anyway.
 func redact(err error) error {

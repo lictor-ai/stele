@@ -196,6 +196,66 @@ func TestGithubErrors(t *testing.T) {
 	}
 }
 
+// A private repository is invisible to a token without access to it: the
+// host answers 404, and the next login may see it.
+func TestGithubNotFoundIsRejected(t *testing.T) {
+	newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) { writeJSONTo(w, 404, map[string]any{}) })
+	if _, err := githubMR(context.Background(), ghRemote, "t", ghReq); !errors.Is(err, errRejected) {
+		t.Errorf("err = %v, want errRejected", err)
+	}
+}
+
+// GitHub answers 422 when a pull request from the branch is already open,
+// against another base say: that one is the answer.
+func TestGithubAlreadyExists(t *testing.T) {
+	s := newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) {
+		switch {
+		case r.Method == "POST":
+			writeJSONTo(w, 422, map[string]any{"message": "A pull request already exists for me:stele/publish/stele.md."})
+		case r.Method == "GET" && r.URL.Query().Get("base") == "":
+			writeJSONTo(w, 200, []map[string]any{{"number": 5, "html_url": "https://github.com/me/rules/pull/5"}})
+		default:
+			writeJSONTo(w, 200, []any{})
+		}
+	})
+	got, err := githubMR(context.Background(), ghRemote, "t", ghReq)
+	if err != nil || got.Action != "found" || got.Link != "https://github.com/me/rules/pull/5" {
+		t.Fatalf("got %+v, %v; want pull 5 found", got, err)
+	}
+	last := s.requests()[len(s.requests())-1]
+	if !strings.Contains(last.URI, "head=me%3Astele%2Fpublish%2Fstele.md") || strings.Contains(last.URI, "base=") {
+		t.Errorf("last request %s, want the head filter alone", last.URI)
+	}
+}
+
+// A reopen that fails for any reason falls through to opening a new one; if
+// that fails too, both reasons are given.
+func TestGithubReopenFailureOpensNew(t *testing.T) {
+	createStatus := 201
+	newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) {
+		switch {
+		case r.Method == "GET" && r.URL.Query().Get("state") == "open":
+			writeJSONTo(w, 200, []any{})
+		case r.Method == "GET":
+			writeJSONTo(w, 200, []map[string]any{{"number": 7, "html_url": "https://github.com/me/rules/pull/7"}})
+		case r.Method == "PATCH":
+			writeJSONTo(w, 500, map[string]any{})
+		case r.Method == "POST":
+			writeJSONTo(w, createStatus, map[string]any{"number": 8, "html_url": "https://github.com/me/rules/pull/8"})
+		}
+	})
+	req := ghReq
+	req.Pushed = false
+	if got, err := githubMR(context.Background(), ghRemote, "t", req); err != nil || got.Action != "opened" {
+		t.Errorf("got %+v, %v; want opened", got, err)
+	}
+	createStatus = 502
+	_, err := githubMR(context.Background(), ghRemote, "t", req)
+	if err == nil || !strings.Contains(err.Error(), "502") || !strings.Contains(err.Error(), "500") {
+		t.Errorf("err = %v, want both the create and the reopen failure", err)
+	}
+}
+
 func TestGithubDoesNotFollowRedirects(t *testing.T) {
 	var hit bool
 	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
