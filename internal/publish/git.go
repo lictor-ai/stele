@@ -98,9 +98,40 @@ func dropName(name string) bool {
 	return false
 }
 
-// run runs git in dir and returns its standard output. stdin is what git
-// reads, or nothing: git never reads the terminal.
+// maxOutput caps what stele keeps of git's standard output and of its
+// standard error. The rest is read and dropped, so a remote or a repository
+// cannot make stele hold more.
+const maxOutput = 1 << 20
+
+// capped is a writer that keeps the first max bytes written to it and drops
+// the rest. The buffer is a field, not embedded: an embedded bytes.Buffer
+// would bring ReadFrom, which io.Copy would use instead of Write.
+type capped struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := c.max - c.buf.Len(); room > 0 {
+		if len(p) > room {
+			c.buf.Write(p[:room])
+		} else {
+			c.buf.Write(p)
+		}
+	}
+	return len(p), nil
+}
+
+func (c *capped) String() string { return c.buf.String() }
+
+// run runs git in dir and returns its standard output, up to maxOutput
+// bytes. stdin is what git reads, or nothing: git never reads the terminal.
 func (g gitCmd) run(ctx context.Context, dir string, extraEnv []string, stdin []byte, args ...string) (string, error) {
+	return g.runLimit(ctx, dir, extraEnv, stdin, maxOutput, args...)
+}
+
+// runLimit is run keeping up to limit bytes of standard output.
+func (g gitCmd) runLimit(ctx context.Context, dir string, extraEnv []string, stdin []byte, limit int, args ...string) (string, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, gitTimeout)
@@ -112,9 +143,9 @@ func (g gitCmd) run(ctx context.Context, dir string, extraEnv []string, stdin []
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
-	var out, errOut bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errOut
+	out, errOut := &capped{max: limit}, &capped{max: maxOutput}
+	cmd.Stdout = out
+	cmd.Stderr = errOut
 	if err := cmd.Run(); err != nil {
 		msg := gitMessage(errOut.String())
 		if msg == "" {

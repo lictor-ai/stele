@@ -89,7 +89,7 @@ func readCommitted(ctx context.Context, g gitCmd, root string) (committed, error
 	if n, err := strconv.ParseInt(strings.TrimSpace(size), 10, 64); err != nil || n > maxRules {
 		return c, fmt.Errorf("stele.md is over %d bytes", maxRules)
 	}
-	blob, err := g.run(ctx, root, nil, nil, "cat-file", "blob", "HEAD:"+path)
+	blob, err := g.runLimit(ctx, root, nil, nil, maxRules, "cat-file", "blob", "HEAD:"+path)
 	if err != nil {
 		return c, err
 	}

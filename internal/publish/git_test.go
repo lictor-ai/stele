@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -82,6 +83,39 @@ func TestGitMessage(t *testing.T) {
 		"fatal: unable to access 'https://github.com/me/g.git/': The requested URL returned error: 403"
 	if got != want {
 		t.Errorf("gitMessage =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestGitOutputIsCapped(t *testing.T) {
+	g := testGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	gitT(t, dir, "init", "--quiet")
+	big := filepath.Join(dir, "big")
+	writeFile(t, big, strings.Repeat("x", 3*maxOutput))
+	blob := gitT(t, dir, "hash-object", "-w", "big")
+	out, err := g.run(ctx, dir, nil, nil, "cat-file", "blob", blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != maxOutput {
+		t.Errorf("run kept %d bytes, want %d", len(out), maxOutput)
+	}
+	out, err = g.runLimit(ctx, dir, nil, nil, 4*maxOutput, "cat-file", "blob", blob)
+	if err != nil || len(out) != 3*maxOutput {
+		t.Errorf("runLimit kept %d bytes, %v; want all %d", len(out), err, 3*maxOutput)
+	}
+}
+
+func TestCappedWriter(t *testing.T) {
+	w := &capped{max: 4}
+	for _, s := range []string{"ab", "cdef", "gh"} {
+		if n, err := w.Write([]byte(s)); n != len(s) || err != nil {
+			t.Errorf("Write(%q) = %d, %v", s, n, err)
+		}
+	}
+	if w.String() != "abcd" {
+		t.Errorf("kept %q, want abcd", w.String())
 	}
 }
 

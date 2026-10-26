@@ -1,7 +1,6 @@
 package publish
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -65,8 +64,8 @@ func cliToken(ctx context.Context, root, dir string, argv []string) string {
 	cmd := exec.CommandContext(ctx, bin, argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = withoutTokens(os.Environ())
-	var out bytes.Buffer
-	cmd.Stdout = &out
+	out := &capped{max: maxOutput}
+	cmd.Stdout = out
 	if err := cmd.Run(); err != nil {
 		return ""
 	}
