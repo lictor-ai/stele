@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/lictor-ai/stele/internal/adapter"
 )
 
 func TestParse(t *testing.T) {
@@ -22,7 +24,7 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "PreToolUse", "session_id": "s1", "prompt_id": "p1",
 				"tool_name": "Write", "tool_input": map[string]any{"file_path": abs, "content": "package db"},
 			},
-			want: Event{Name: "PreToolUse", SessionID: "s1", PromptID: "p1", ToolName: "Write", File: abs, NewText: []string{"package db"}},
+			want: Event{Kind: adapter.PreTool, Writes: true, Whole: true, Name: "PreToolUse", SessionID: "s1", PromptID: "p1", ToolName: "Write", File: abs, NewText: []string{"package db"}},
 		},
 		{
 			name: "edit from a subagent, path relative to cwd",
@@ -30,7 +32,7 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "PostToolUse", "session_id": "s1", "agent_id": "a1", "cwd": cwd,
 				"tool_name": "Edit", "tool_input": map[string]any{"file_path": "internal/db.go", "old_string": "x", "new_string": "y"},
 			},
-			want: Event{Name: "PostToolUse", SessionID: "s1", AgentID: "a1", Cwd: cwd, ToolName: "Edit", File: abs, NewText: []string{"y"}, ReplaceAll: []bool{false}},
+			want: Event{Kind: adapter.PostTool, Writes: true, Name: "PostToolUse", SessionID: "s1", AgentID: "a1", Cwd: cwd, ToolName: "Edit", File: abs, NewText: []string{"y"}, ReplaceAll: []bool{false}},
 		},
 		{
 			name: "bash",
@@ -38,7 +40,7 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": cwd, "tool_name": "Bash", "tool_use_id": "toolu_2",
 				"tool_input": map[string]any{"command": "cat > a.go <<EOF\nx\nEOF", "description": "write a.go", "run_in_background": true},
 			},
-			want: Event{Name: "PreToolUse", SessionID: "s1", Cwd: cwd, ToolName: "Bash", Command: "cat > a.go <<EOF\nx\nEOF", Background: true},
+			want: Event{Kind: adapter.PreShell, Name: "PreToolUse", SessionID: "s1", Cwd: cwd, ToolName: "Bash", Command: "cat > a.go <<EOF\nx\nEOF", Background: true},
 		},
 		{
 			name: "multiedit",
@@ -46,7 +48,7 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "PreToolUse", "tool_name": "MultiEdit",
 				"tool_input": map[string]any{"file_path": abs, "edits": []map[string]any{{"new_string": "a"}, {"new_string": "b", "replace_all": true}}},
 			},
-			want: Event{Name: "PreToolUse", ToolName: "MultiEdit", File: abs, NewText: []string{"a", "b"}, ReplaceAll: []bool{false, true}},
+			want: Event{Kind: adapter.PreTool, Writes: true, Name: "PreToolUse", ToolName: "MultiEdit", File: abs, NewText: []string{"a", "b"}, ReplaceAll: []bool{false, true}},
 		},
 		{
 			name: "post-write, with the tool's response",
@@ -56,7 +58,7 @@ func TestParse(t *testing.T) {
 				"tool_input":    map[string]any{"file_path": abs, "content": "package db"},
 				"tool_response": map[string]any{"filePath": abs, "type": "create"},
 			},
-			want: Event{Name: "PostToolUse", SessionID: "s1", Cwd: cwd, ToolName: "Write", File: abs, NewText: []string{"package db"}},
+			want: Event{Kind: adapter.PostTool, Writes: true, Whole: true, Name: "PostToolUse", SessionID: "s1", Cwd: cwd, ToolName: "Write", File: abs, NewText: []string{"package db"}},
 		},
 		{
 			name: "edit that deletes text",
@@ -64,7 +66,7 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "PostToolUse", "tool_name": "Edit",
 				"tool_input": map[string]any{"file_path": abs, "old_string": "x", "new_string": ""},
 			},
-			want: Event{Name: "PostToolUse", ToolName: "Edit", File: abs},
+			want: Event{Kind: adapter.PostTool, Writes: true, Name: "PostToolUse", ToolName: "Edit", File: abs},
 		},
 		{
 			name: "edit with replace_all and Claude Code's patch",
@@ -77,7 +79,7 @@ func TestParse(t *testing.T) {
 				}},
 			},
 			want: Event{
-				Name: "PostToolUse", ToolName: "Edit", File: abs, NewText: []string{"C\nD"}, ReplaceAll: []bool{true},
+				Kind: adapter.PostTool, Writes: true, Name: "PostToolUse", ToolName: "Edit", File: abs, NewText: []string{"C\nD"}, ReplaceAll: []bool{true},
 				Added: []Lines{{First: 5, Last: 6}, {First: 22, Last: 22}}, Patched: true,
 			},
 		},
@@ -90,7 +92,7 @@ func TestParse(t *testing.T) {
 					{"oldStart": 1, "oldLines": 2, "newStart": 1, "newLines": 1, "lines": []string{" a", "-b"}},
 				}},
 			},
-			want: Event{Name: "PostToolUse", ToolName: "MultiEdit", File: abs, NewText: []string{""}, ReplaceAll: []bool{false}, Patched: true},
+			want: Event{Kind: adapter.PostTool, Writes: true, Name: "PostToolUse", ToolName: "MultiEdit", File: abs, NewText: []string{""}, ReplaceAll: []bool{false}, Patched: true},
 		},
 		{
 			name: "a patch whose counts are wrong is not used",
@@ -101,7 +103,7 @@ func TestParse(t *testing.T) {
 					{"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 5, "lines": []string{"-a", "+x"}},
 				}},
 			},
-			want: Event{Name: "PostToolUse", ToolName: "Edit", File: abs, NewText: []string{"x"}, ReplaceAll: []bool{false}},
+			want: Event{Kind: adapter.PostTool, Writes: true, Name: "PostToolUse", ToolName: "Edit", File: abs, NewText: []string{"x"}, ReplaceAll: []bool{false}},
 		},
 		{
 			name: "a response that is not an object",
@@ -110,14 +112,14 @@ func TestParse(t *testing.T) {
 				"tool_input":    map[string]any{"file_path": abs, "new_string": "x"},
 				"tool_response": "edited",
 			},
-			want: Event{Name: "PostToolUse", ToolName: "Edit", File: abs, NewText: []string{"x"}, ReplaceAll: []bool{false}},
+			want: Event{Kind: adapter.PostTool, Writes: true, Name: "PostToolUse", ToolName: "Edit", File: abs, NewText: []string{"x"}, ReplaceAll: []bool{false}},
 		},
 		{
 			name: "a tool with no file",
 			payload: map[string]any{
 				"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": map[string]any{"command": "ls"},
 			},
-			want: Event{Name: "PreToolUse", ToolName: "Bash", Command: "ls"},
+			want: Event{Kind: adapter.PreShell, Name: "PreToolUse", ToolName: "Bash", Command: "ls"},
 		},
 		{
 			name: "session start: no tool, the directory Claude Code runs in",
@@ -125,7 +127,7 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "SessionStart", "session_id": "s1", "transcript_path": "/t.jsonl",
 				"cwd": cwd, "source": "startup", "model": "claude-sonnet-5-5",
 			},
-			want: Event{Name: "SessionStart", SessionID: "s1", Source: "startup", Cwd: cwd},
+			want: Event{Kind: adapter.SessionStart, Name: "SessionStart", SessionID: "s1", Source: "startup", Cwd: cwd},
 		},
 	}
 	for _, tt := range tests {

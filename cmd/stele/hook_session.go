@@ -10,12 +10,6 @@ import (
 	"github.com/lictor-ai/stele/internal/session"
 )
 
-// startsSession reports whether event starts a session or a subagent: hook
-// calls that name no file.
-func startsSession(event string) bool {
-	return event == "SessionStart" || event == "SubagentStart"
-}
-
 // sessionStart tells the agent, before its first prompt, to write files with
 // Write and Edit only. Agents in tests wrote whole files through Bash, which
 // stele never sees; the deny message alone comes too late when that first
@@ -38,34 +32,21 @@ func sessionStart(ev claudecode.Event) claudecode.Answer {
 // costs denies, never a missed rule.
 const maxPrimed = 32
 
-// prime records the rules the agent starting now loaded from
-// .claude/rules/stele-rules.md: Claude Code reads that file at launch,
-// resume and compaction, and when a subagent starts, before this hook runs.
-// So the file as it is now is what the agent read, and it is recorded first;
-// only then is a stale file rewritten, for the next session. Recording after
-// the rewrite would count rules the agent never saw.
+// prime records the rules the agent starting now loaded from the rules file,
+// as the adapter says it did (claudecode.Loaded): the agent reads that file
+// before this hook runs, so the file as it is now is what the agent read,
+// and it is recorded first; only then is a stale file rewritten, for the
+// next session. Recording after the rewrite would count rules the agent
+// never saw.
 //
-// It primes only a session that Claude Code runs in the root itself: whether
-// a session in a subdirectory loads the root's file is not measured, and
-// priming a rule the agent did not load is the one unsafe mistake. And
-// Claude Code reloads the file from the directory it was launched in, while
-// the hook's cwd follows the agent's cd: so a startup or resume marks this
-// root as the session's launch root, and a compaction, a clear or a
-// subagent's start primes only a root so marked. A subagent is primed only
-// when its type is measured to load the file. Every error leaves the deny to
-// show the rules, as before; none is reported.
+// The agent reloads the file from the directory it was launched in, while
+// the hook's cwd follows the agent's cd: so a launch marks this root as the
+// session's launch root, and any other start primes only a root so marked.
+// Every error leaves the deny to show the rules, as before; none is
+// reported.
 func prime(ev claudecode.Event, root string) {
-	agent, launch := "", false
-	switch {
-	case ev.Name == "SubagentStart":
-		if ev.AgentID == "" || !loadsRules[ev.AgentType] {
-			return // no agent id would overwrite the main agent's record
-		}
-		agent = ev.AgentID
-	case ev.Source == "startup" || ev.Source == "resume":
-		launch = true
-	}
-	if cwd, err := filepath.Abs(ev.Cwd); err != nil || filepath.Clean(cwd) != root {
+	agent, launch, ok := claudecode.Loaded(ev, root)
+	if !ok {
 		return
 	}
 	key, err := loadKey()
@@ -82,7 +63,7 @@ func prime(ev claudecode.Event, root string) {
 			st.LaunchRoot = true
 		}
 		if !st.LaunchRoot {
-			// Launched elsewhere: Claude Code reloaded that directory's
+			// Launched elsewhere: the agent reloaded that directory's
 			// rules, not this root's file.
 			if agent == "" {
 				st.Primed = withPrimed(st.Primed, "", nil)
@@ -94,12 +75,6 @@ func prime(ev claudecode.Event, root string) {
 	})
 	_, _, _ = freshIndex(root, key)
 }
-
-// loadsRules lists the subagent types measured to load .claude/rules when
-// they start (Claude Code 2.1.310, 2026-10-25): general-purpose loads it;
-// the built-in Explore and Plan do not. Any other type, a custom agent's
-// included, is not primed until measured.
-var loadsRules = map[string]bool{"general-purpose": true}
 
 // withPrimed returns a copy of m in which agent's record is loaded, replacing
 // what the agent loaded before: Claude Code read the file again. Past

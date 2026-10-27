@@ -32,7 +32,7 @@ const maxProblemsShown = 5
 // stele.json (#14), a rule naming one would show as "not a checker" here:
 // leave those out then.
 func invalidRules(ev claudecode.Event, room int) (warning, context string) {
-	root, rel, ok := target(ev)
+	root, rel, ok := target(ev.File)
 	if !ok {
 		return "", ""
 	}

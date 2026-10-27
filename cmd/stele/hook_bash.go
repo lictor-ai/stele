@@ -23,7 +23,7 @@ func beforeBash(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 	var asks, roots []string
 	rels := map[string][]string{}
 	for _, t := range targets {
-		root, rel, ok := target(claudecode.Event{File: t.Path})
+		root, rel, ok := target(t.Path)
 		// The Claude Code settings the session loads, wherever they are (#56).
 		if !(ok && guarded(root, rel, t.Path)) && loadsSettings(ev, t.Path) {
 			asks = append(asks, filepath.ToSlash(t.Path))
@@ -32,7 +32,7 @@ func beforeBash(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 		if !ok {
 			// Outside every project, but a link may lead into one.
 			if r, ok := resolve(t.Path); ok && r != t.Path {
-				if rroot, rrel, ok := target(claudecode.Event{File: r}); ok && guarded(rroot, rrel, r) {
+				if rroot, rrel, ok := target(r); ok && guarded(rroot, rrel, r) {
 					asks = append(asks, rrel)
 				}
 			}

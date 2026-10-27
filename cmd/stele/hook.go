@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/adapter/claudecode"
 	"github.com/lictor-ai/stele/internal/backstop"
 	"github.com/lictor-ai/stele/internal/check"
@@ -58,7 +59,7 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 		return exitOK
 	}
 	ev, err := claudecode.Parse(data)
-	if err != nil || (ev.File == "" && ev.Command == "" && !startsSession(ev.Name)) {
+	if err != nil || (ev.File == "" && ev.Command == "" && !ev.Kind.Starts()) {
 		return exitOK
 	}
 	// Go exits 2 on a panic, which would block the write: a bug in stele
@@ -74,12 +75,12 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 	sw := claudecode.HookSwitches(args)
 	var a claudecode.Answer
 	switch {
-	case ev.Name == "PreToolUse" && ev.ToolName == "Bash":
+	case ev.Kind == adapter.PreShell:
 		a = beforeBash(ev, sw)
-	case ev.Name == "PreToolUse":
+	case ev.Kind == adapter.PreTool:
 		a = beforeWrite(ev, sw)
 		a.Warning = joinLines(a.Warning, versionWarning(ev, claudecode.InstalledVersion(args)))
-	case ev.Name == "PostToolUse" && writes[ev.ToolName]:
+	case ev.Kind == adapter.PostTool && ev.Writes:
 		a = afterWrite(ev, sw)
 		room := install.MaxMessage
 		if a.Context != "" {
@@ -88,7 +89,7 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 		w, c := invalidRules(ev, room)
 		a.Warning = joinLines(a.Warning, w)
 		a.Context = joinNotes(a.Context, c)
-	case startsSession(ev.Name):
+	case ev.Kind.Starts():
 		a = sessionStart(ev)
 	default:
 		return exitOK
@@ -99,20 +100,16 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 	return exitOK
 }
 
-// writes are the tools whose result the post-write check reads. A Read also
-// names a file_path.
-var writes = map[string]bool{"Write": true, "Edit": true, "MultiEdit": true}
-
-// target returns the stele root for the file ev writes, and the file
+// target returns the stele root for file, which a tool writes, and the file
 // relative to it. ok is false when the file is in no stele project.
-func target(ev claudecode.Event) (root, rel string, ok bool) {
+func target(file string) (root, rel string, ok bool) {
 	// The root is found from the file, not from where the agent runs, so a
 	// subproject with its own stele.md gets its own rules (ADR-0004).
-	root, err := findRoot(filepath.Dir(ev.File))
+	root, err := findRoot(filepath.Dir(file))
 	if err != nil || !usesStele(root) {
 		return "", "", false // not a stele project: write nothing, enforce nothing
 	}
-	rel, err = filepath.Rel(root, ev.File)
+	rel, err = filepath.Rel(root, file)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", "", false
 	}
@@ -122,12 +119,12 @@ func target(ev claudecode.Event) (root, rel string, ok bool) {
 // beforeWrite decides a PreToolUse call. With --remind=off only the asks
 // for stele's own files and settings are left.
 func beforeWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
-	root, rel, ok := target(ev)
+	root, rel, ok := target(ev.File)
 	if !ok {
 		return askOutside(ev)
 	}
 	// Before stele.json is read: it is one of the files that would change.
-	if writes[ev.ToolName] && (guarded(root, rel, ev.File) || loadsSettings(ev, ev.File)) {
+	if ev.Writes && (guarded(root, rel, ev.File) || loadsSettings(ev, ev.File)) {
 		return claudecode.Answer{Ask: install.AskMessage(showPath(rel))}
 	}
 	if sw.RemindOff {
@@ -135,7 +132,7 @@ func beforeWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer 
 	}
 
 	policy, perr := enforce.Load(root)
-	fail := func(err error) claudecode.Answer { return failure(policy, ev.Name, err) }
+	fail := func(err error) claudecode.Answer { return failure(policy, ev.Kind, err) }
 	if perr != nil {
 		return fail(perr)
 	}
@@ -230,7 +227,7 @@ func freshIndex(root string, key []byte) (idx index.Index, note string, err erro
 // wrote against the rules with a built-in check (D45). It keeps no session
 // state, so parallel writes cannot race.
 func afterWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
-	root, rel, ok := target(ev)
+	root, rel, ok := target(ev.File)
 	if !ok {
 		return claudecode.Answer{}
 	}
@@ -239,7 +236,7 @@ func afterWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 	}
 
 	policy, perr := enforce.Load(root)
-	fail := func(err error) claudecode.Answer { return failure(policy, ev.Name, err) }
+	fail := func(err error) claudecode.Answer { return failure(policy, ev.Kind, err) }
 	if perr != nil {
 		return fail(perr)
 	}
@@ -268,7 +265,7 @@ func afterWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 
 	// Only the agent's lines count: older violations are left to stele check.
 	var keep func(int) bool
-	if ev.ToolName != "Write" {
+	if !ev.Whole {
 		spans := written(ev, content)
 		if len(spans) == 0 {
 			return claudecode.Answer{Context: note} // a deletion, or text not found
@@ -361,7 +358,7 @@ func versionWarning(ev claudecode.Event, installed string) string {
 	if installed == running || !install.Released(installed) || !install.Released(running) {
 		return ""
 	}
-	root, _, ok := target(ev)
+	root, _, ok := target(ev.File)
 	if !ok {
 		return ""
 	}
@@ -418,8 +415,8 @@ func joinNotes(notes ...string) string {
 // write is blocked and the agent told why (ADR-0004). After a write, nothing
 // can be stopped: the agent is told the write went unchecked. Only a part
 // the switches leave on gets here (ADR-0006).
-func failure(p enforce.Policy, event string, err error) claudecode.Answer {
-	post := event == "PostToolUse"
+func failure(p enforce.Policy, kind adapter.Kind, err error) claudecode.Answer {
+	post := kind == adapter.PostTool
 	if p.BlockOnError {
 		if post {
 			return claudecode.Answer{Deny: true, Reason: fmt.Sprintf("stele could not check this write against the project's rules: %v. block_on_error is on in stele.json, so the write is reported as unchecked: it was saved, but fix stele before going on.", err)}

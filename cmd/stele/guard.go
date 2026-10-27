@@ -38,7 +38,7 @@ func guarded(root, rel, file string) bool {
 		return true
 	}
 	if r, ok := resolve(file); ok && r != file {
-		if _, rrel, ok := target(claudecode.Event{File: r}); ok && ownName(rrel) {
+		if _, rrel, ok := target(r); ok && ownName(rrel) {
 			return true
 		}
 	}
@@ -116,7 +116,7 @@ func sessionSettings(ev claudecode.Event, file string) bool {
 	if ev.Cwd == "" {
 		return false
 	}
-	root, _, ok := target(claudecode.Event{File: filepath.Join(ev.Cwd, "x")})
+	root, _, ok := target(filepath.Join(ev.Cwd, "x"))
 	if !ok {
 		return false
 	}
@@ -177,7 +177,7 @@ func below(dir, file string) (string, bool) {
 // it is a settings file the session loads, or a link leads it to one of a
 // project's own files (#52, #56), else nothing.
 func askOutside(ev claudecode.Event) claudecode.Answer {
-	if !writes[ev.ToolName] {
+	if !ev.Writes {
 		return claudecode.Answer{}
 	}
 	if loadsSettings(ev, ev.File) {
@@ -187,7 +187,7 @@ func askOutside(ev claudecode.Event) claudecode.Answer {
 	if !ok || r == ev.File {
 		return claudecode.Answer{}
 	}
-	if root, rel, ok := target(claudecode.Event{File: r}); ok && guarded(root, rel, r) {
+	if root, rel, ok := target(r); ok && guarded(root, rel, r) {
 		return claudecode.Answer{Ask: install.AskMessage(showPath(rel))}
 	}
 	return claudecode.Answer{}

@@ -44,6 +44,10 @@ import (
 
 // Event is one hook call, as stele needs it.
 type Event struct {
+	// Kind, Writes and Whole say what the call is, in no agent's words.
+	Kind          adapter.Kind
+	Writes, Whole bool
+
 	Name      string // hook_event_name: "PreToolUse", "PostToolUse", "SessionStart", "SubagentStart"
 	SessionID string
 	PromptID  string // the user turn; empty before the first prompt
@@ -123,6 +127,28 @@ func added(hunks []hunk) (lines []Lines, ok bool) {
 	return lines, true
 }
 
+// writeTool are the tools that write a file: the post-write check reads
+// their result. A Read also names a file_path. Write replaces the whole file.
+var writeTool = map[string]bool{"Write": true, "Edit": true, "MultiEdit": true}
+
+// kind is what a hook event, run for tool, is about: Bash is the shell.
+func kind(event, tool string) adapter.Kind {
+	switch event {
+	case "PreToolUse":
+		if tool == "Bash" {
+			return adapter.PreShell
+		}
+		return adapter.PreTool
+	case "PostToolUse":
+		return adapter.PostTool
+	case "SessionStart":
+		return adapter.SessionStart
+	case "SubagentStart":
+		return adapter.SubagentStart
+	}
+	return adapter.Other
+}
+
 // Parse reads a hook payload.
 func Parse(stdin []byte) (Event, error) {
 	var p struct {
@@ -159,6 +185,9 @@ func Parse(stdin []byte) (Event, error) {
 		return Event{}, errors.New("not a hook payload: no hook_event_name")
 	}
 	e := Event{
+		Kind:      kind(p.HookEventName, p.ToolName),
+		Writes:    writeTool[p.ToolName],
+		Whole:     p.ToolName == "Write",
 		Name:      p.HookEventName,
 		SessionID: p.SessionID,
 		PromptID:  p.PromptID,
