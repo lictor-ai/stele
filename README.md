@@ -358,23 +358,86 @@ What leaves the machine: the committed `stele.md`, its `path`, the project's com
 
 ## Limits
 
-1. **If `stele` is missing from `PATH`, or the hook crashes or times out, writes go through.** `block_on_error` only acts when stele runs and fails, so it can't prevent this.
-2. **Only Write, Edit and MultiEdit are checked.** The agent is told at the start of each session to write files with those only. A Bash command that writes, by redirection, `tee`, `sed -i` or `perl -i`, into a file a scoped rule covers is stopped once per file each turn: the agent gets the rules and is told to use Write or Edit; run again, the command goes through unchecked. With `--remind=off` it is not stopped at all. stele reads the command, it does not run it, so scripts, generators, `xargs`, `find -exec`, `$VAR` targets, brace expansion and writes into files only unscoped rules cover are not seen. NotebookEdit and PowerShell are not hooked. `stele check` in CI is the only catch.
-3. **The agent can ignore the rules.** It is shown them and told about violations, but it can still choose not to follow them.
-4. **A regex check only catches what a pattern can express.** It matches text, not code, so it also fires in comments and strings. RE2 has no lookaround or backreferences. The pattern runs over the whole file: use `(?m)` for `^` and `$` to mean line start and end.
-5. **A rule with no `scope`, or only `!` exclusions, is shown for every other file.** Keep such rules few. Rules are chosen by path, not by task.
-6. **After an Edit, only the lines it wrote are checked.** If stele can't locate them (Claude Code sent no patch and the new text appears more than once), nothing is checked after that edit. Older violations in the file are left to `stele check`.
-7. **Binary files and files over 32 MiB are skipped.** The skip is reported, not silent.
-8. **Output is capped.** `stele check` shows at most 100 violations per rule and file; the agent gets at most 20 per message.
-9. **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too. So is a git worktree or submodule (a directory with its own `.git`): it gets no rules from an outer `stele.md`, only from its own. `stele check` there says nothing to check until it has its own `stele.md`, `stele.json` or `stele.lock`.
-10. **Only `stele publish` sends anything, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com. stele makes no other network call. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
-11. **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
-12. **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about. **A stele from before `--remind` and `--check` must not run `stele init` on hooks that carry a switch: upgrade it first.** It doesn't recognise the switches, so its `stele init` adds a second set of hooks, and it runs both hooks whatever the switches say. Every release so far, v1.0.0-dev.2 included, still tells you to run `stele init` when it meets hooks a newer release wrote. Only a stele with the switches tells you to upgrade instead.
-13. **Asking before a write to stele's own files covers Write, Edit and MultiEdit, and their names and links.** A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock`, `.stele/` and `.claude` settings files. A Bash command that visibly writes, removes, moves or copies onto one of them is asked about too. Not asked about: other Bash forms, a NotebookEdit, managed settings, settings passed with `--settings` or the environment, and a session started above the stele project with hooks registered there by hand. With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
-14. **With `--check=off`, only `stele check` finds violations.** With both `--remind=off` and `--check=off`, the agent still loads the rules at session start, but nothing enforces them until CI.
-15. **`stele publish` opens merge requests on github.com and gitlab.com only.** Any other host, a self-hosted GitHub or GitLab included, gets the branch pushed and is told to open the request by hand, with no link.
-16. **`stele publish` needs a repository with at least one commit, and git access to it.** git and Git Credential Manager are never allowed to prompt. ssh still can: a key's passphrase or an unknown host key is asked by ssh itself.
-17. **`stele publish` refuses a `stele/publish/<path>` branch holding commits it did not make for this project.** Two projects that publish to the same `path` of one repository get that error; give each its own `path`.
+stele makes the rules hard to miss. It doesn't make them impossible to break. Know where it stops:
+
+| | Limit | What covers it |
+|---|---|---|
+| 🚪 | A missing, crashed or timed-out hook lets writes through | `stele check` in CI |
+| 🐚 | Bash, NotebookEdit and PowerShell writes aren't checked | `stele check` in CI |
+| 🤷 | The agent can ignore the rules | Blocks after a write, then CI |
+| 🔍 | A regex sees text, not code | Precise patterns, review |
+| 📁 | Rules are chosen by path, not by task | Few unscoped rules |
+
+### Enforcement
+
+**If `stele` is missing from `PATH`, or the hook crashes or times out, writes go through.** `block_on_error` only acts when stele runs and fails, so it can't prevent this.
+
+**The agent can ignore the rules.** It is shown them and told about violations, but it can still choose not to follow them.
+
+**With `--check=off`, only `stele check` finds violations.** With both `--remind=off` and `--check=off`, the agent still loads the rules at session start, but nothing enforces them until CI.
+
+**Only Write, Edit and MultiEdit are checked.** The agent is told at the start of each session to write files with those only. `stele check` in CI is the only catch for anything else.
+
+<details>
+<summary>What happens to writes through Bash</summary>
+
+A Bash command that writes, by redirection, `tee`, `sed -i` or `perl -i`, into a file a scoped rule covers is stopped once per file each turn: the agent gets the rules and is told to use Write or Edit; run again, the command goes through unchecked. With `--remind=off` it is not stopped at all.
+
+stele reads the command, it does not run it, so scripts, generators, `xargs`, `find -exec`, `$VAR` targets, brace expansion and writes into files only unscoped rules cover are not seen. NotebookEdit and PowerShell are not hooked.
+
+</details>
+
+**Asking before a write to stele's own files covers Write, Edit and MultiEdit, and their names and links.**
+
+<details>
+<summary>What is and isn't asked about</summary>
+
+A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock`, `.stele/` and `.claude` settings files. A Bash command that visibly writes, removes, moves or copies onto one of them is asked about too.
+
+Not asked about: other Bash forms, a NotebookEdit, managed settings, settings passed with `--settings` or the environment, and a session started above the stele project with hooks registered there by hand.
+
+With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
+
+</details>
+
+### Checks
+
+**A regex check only catches what a pattern can express.** It matches text, not code, so it also fires in comments and strings. RE2 has no lookaround or backreferences. The pattern runs over the whole file: use `(?m)` for `^` and `$` to mean line start and end.
+
+**After an Edit, only the lines it wrote are checked.** If stele can't locate them (Claude Code sent no patch and the new text appears more than once), nothing is checked after that edit. Older violations in the file are left to `stele check`.
+
+**Binary files and files over 32 MiB are skipped.** The skip is reported, not silent.
+
+**Output is capped.** `stele check` shows at most 100 violations per rule and file; the agent gets at most 20 per message.
+
+### Rules
+
+**A rule with no `scope`, or only `!` exclusions, is shown for every other file.** Keep such rules few. Rules are chosen by path, not by task.
+
+**Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
+
+### Projects
+
+**A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too.
+
+**So is a git worktree or submodule** (a directory with its own `.git`). It gets no rules from an outer `stele.md`, only from its own. `stele check` there says nothing to check until it has its own `stele.md`, `stele.json` or `stele.lock`.
+
+### Upgrades
+
+**The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about.
+
+> [!WARNING]
+> **A stele from before `--remind` and `--check` must not run `stele init` on hooks that carry a switch: upgrade it first.** It doesn't recognise the switches, so its `stele init` adds a second set of hooks, and it runs both hooks whatever the switches say. Every release so far, v1.0.0-dev.2 included, still tells you to run `stele init` when it meets hooks a newer release wrote. Only a stele with the switches tells you to upgrade instead.
+
+### Network and publishing
+
+**Only `stele publish` sends anything, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com. stele makes no other network call. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
+
+**`stele publish` opens merge requests on github.com and gitlab.com only.** Any other host, a self-hosted GitHub or GitLab included, gets the branch pushed and is told to open the request by hand, with no link.
+
+**`stele publish` needs a repository with at least one commit, and git access to it.** git and Git Credential Manager are never allowed to prompt. ssh still can: a key's passphrase or an unknown host key is asked by ssh itself.
+
+**`stele publish` refuses a `stele/publish/<path>` branch holding commits it did not make for this project.** Two projects that publish to the same `path` of one repository get that error; give each its own `path`.
 
 ## Learn more
 
