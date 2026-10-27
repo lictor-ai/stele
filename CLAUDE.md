@@ -46,6 +46,8 @@ enterprise idea. Do not implement it or use it as a v1 format.
   The one exception: `stele publish` reads `stele.md` from git to copy it (D64).
 - External plugins never run on the hot path: not in `stele hook`, not in
   `stele mcp` (D45).
+- Only `internal/adapter/<agent>` and `cmd/stele/agents.go` import an agent
+  adapter; nothing else names Claude Code's events, tools or files (ADR-0009).
 - Only plugins listed in `stele.json` and found on `PATH` run, never one inside
   the repository (D43).
 - Nothing leaves the machine except through a sink listed in `stele.json`, and

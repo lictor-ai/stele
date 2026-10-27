@@ -811,6 +811,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D65 | `stele publish` reuses an existing login and never asks for a token. Tokens go only to `github.com` and `gitlab.com`. When no merge request opens there, stele prints a prefilled page; any other host is told the branch to open one from (ADR-0007). | — |
 | D66 | D53 gains a second exit: `stele publish`, run by the developer, sends `stele.md`, its `path`, the project's commit hash and id, and the author's identity. Network calls are allowed in `internal/publish` only (ADR-0007). | — |
 | D67 | **Amends D16 and D63.** `backstop` is removed from `stele.json`: `--remind` decides whether the hook may deny a write to show rules, `--check` whether a blocking violation after a write is sent back as a block. `block_on_error` stays and applies to whatever part runs. stele does not edit a `stele.json` that still sets `backstop`; `init` notes that it is no longer read (ADR-0008). | #71 |
+| D68 | Everything specific to one coding agent is behind the `adapter.Adapter` interface, in `internal/adapter/<agent>`: the hook protocol, install, the rules file the agent loads, what it loaded at a session start, the files that configure it, and the words that name its tools. Only those packages and one registry file in `cmd/stele` import an adapter (ADR-0009). | — |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 
