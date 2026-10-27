@@ -66,7 +66,7 @@ func beforeBash(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 		a.Warning = joinLines(a.Warning, r.Warning)
 	}
 	if !a.Deny && len(asks) > 0 {
-		a.Ask = install.AskMessage(showPath(strings.Join(asks, ", ")))
+		a.Ask = install.AskMessage(agent.Words(), showPath(strings.Join(asks, ", ")))
 	}
 	return a
 }
@@ -80,7 +80,7 @@ func bashRoot(ev adapter.Event, sw adapter.Switches, root string, rels []string,
 	// here comes before stele can tell go test > out.txt from a source
 	// file: it warns, never blocks, even with block_on_error.
 	fail := func(err error) adapter.Answer {
-		return adapter.Answer{Warning: "stele: rules not enforced for this Bash command: " + err.Error()}
+		return adapter.Answer{Warning: "stele: rules not enforced for this " + agent.Words().Shell + " command: " + err.Error()}
 	}
 	key, err := loadKey()
 	if err != nil {
@@ -124,7 +124,7 @@ func bashRoot(ev adapter.Event, sw adapter.Switches, root string, rels []string,
 	}
 	fit := func(rs []backstop.Rule) int {
 		k := install.FitRules(len(rs), budget, func(k int) string {
-			return install.BashMessageMore(all, blockRules(rs[:k]), len(rs)-k, note)
+			return install.BashMessageMore(agent.Words(), all, blockRules(rs[:k]), len(rs)-k, note)
 		})
 		// The first message shows at least one rule, or a rule too long
 		// for any would never be shown; a later project's may show none,
@@ -150,7 +150,7 @@ func bashRoot(ev adapter.Event, sw adapter.Switches, root string, rels []string,
 	for i, f := range d.Files {
 		paths[i] = showPath(f)
 	}
-	return adapter.Answer{Deny: true, Reason: install.BashMessageMore(paths, blockRules(d.Rules), d.More, note)}
+	return adapter.Answer{Deny: true, Reason: install.BashMessageMore(agent.Words(), paths, blockRules(d.Rules), d.More, note)}
 }
 
 // scoped reports whether patterns name files: a scope with an include, not
@@ -168,7 +168,7 @@ func scoped(patterns []string) bool {
 func throughBash(files []backstop.BashFile) string {
 	notes := make([]string, len(files))
 	for i, f := range files {
-		notes[i] = unchecked(showPath(f.File), "it was written through Bash. Run stele check "+showPath(f.File))
+		notes[i] = unchecked(showPath(f.File), "it was written through "+agent.Words().Shell+". Run stele check "+showPath(f.File))
 	}
 	return joinNotes(notes...)
 }

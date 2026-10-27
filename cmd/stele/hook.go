@@ -124,7 +124,7 @@ func beforeWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	}
 	// Before stele.json is read: it is one of the files that would change.
 	if ev.Writes && (guarded(root, rel, ev.File) || loadsSettings(ev, ev.File)) {
-		return adapter.Answer{Ask: install.AskMessage(showPath(rel))}
+		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(rel))}
 	}
 	if sw.RemindOff {
 		return adapter.Answer{}
@@ -164,7 +164,7 @@ func beforeWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 				// At least one: a rule too long for any message would
 				// otherwise be denied forever.
 				return max(1, install.FitRules(len(rs), install.MaxMessage, func(k int) string {
-					return install.BlockMessageMore(rel, blockRules(rs[:k]), len(rs)-k, note)
+					return install.BlockMessageMore(agent.Words(), rel, blockRules(rs[:k]), len(rs)-k, note)
 				}))
 			}}
 		d, *st = backstop.Decide(in, *st)
@@ -176,7 +176,7 @@ func beforeWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	if !d.Deny {
 		return adapter.Answer{Context: note}
 	}
-	return adapter.Answer{Deny: true, Reason: install.BlockMessageMore(rel, blockRules(d.Rules), d.More, note)}
+	return adapter.Answer{Deny: true, Reason: install.BlockMessageMore(agent.Words(), rel, blockRules(d.Rules), d.More, note)}
 }
 
 // blockRules is rules as a message shows them.
@@ -295,7 +295,7 @@ func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 		}
 		n := more + max(0, len(vs)-maxShown)
 		more = 0
-		return install.ViolationMessageWithin(rel, vs[:min(len(vs), maxShown)], n, blocking, limit)
+		return install.ViolationMessageWithin(agent.Words(), rel, vs[:min(len(vs), maxShown)], n, blocking, limit)
 	}
 	// The blocking violations are the block's reason; the context holds the
 	// notes and the non-blocking ones, which share its budget.

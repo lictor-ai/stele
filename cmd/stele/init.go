@@ -134,7 +134,8 @@ func installRoot(name string, args []string, stdout, stderr io.Writer, define fu
 	// submodule's too, whatever is above it (#42).
 	if parent := filepath.Dir(root); parent != root && !holdsGit(root) {
 		if up, ok := walkUp(parent, rootMarkers...); ok {
-			fmt.Fprintf(stderr, "stele %s: this is not the repository root (%s); Claude Code reads .claude/settings.json from the directory it starts in\n", name, up)
+			fmt.Fprintf(stderr, "stele %s: this is not the repository root (%s); %s reads %s from the directory it starts in\n",
+				name, up, agent.Words().Agent, filepath.ToSlash(agent.SettingsFile()))
 		}
 	}
 	return root, true

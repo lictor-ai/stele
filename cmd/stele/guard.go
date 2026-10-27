@@ -177,14 +177,14 @@ func askOutside(ev adapter.Event) adapter.Answer {
 		return adapter.Answer{}
 	}
 	if loadsSettings(ev, ev.File) {
-		return adapter.Answer{Ask: install.AskMessage(showPath(filepath.ToSlash(ev.File)))}
+		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(filepath.ToSlash(ev.File)))}
 	}
 	r, ok := resolve(ev.File)
 	if !ok || r == ev.File {
 		return adapter.Answer{}
 	}
 	if root, rel, ok := target(r); ok && guarded(root, rel, r) {
-		return adapter.Answer{Ask: install.AskMessage(showPath(rel))}
+		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(rel))}
 	}
 	return adapter.Answer{}
 }
