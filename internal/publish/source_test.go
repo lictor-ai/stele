@@ -3,6 +3,7 @@ package publish
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,10 +107,14 @@ func TestReadCommittedCRLF(t *testing.T) {
 	}
 }
 
-// copyDir copies the files under src into dst.
+// copyDir copies the files under src into dst. A file that vanishes during
+// the walk, such as a lock git's background maintenance removes, is skipped.
 func copyDir(t *testing.T, src, dst string) {
 	t.Helper()
 	err := filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -119,6 +124,9 @@ func copyDir(t *testing.T, src, dst string) {
 			return os.MkdirAll(target, 0o755)
 		}
 		data, err := os.ReadFile(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
