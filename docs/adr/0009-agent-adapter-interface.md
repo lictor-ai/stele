@@ -34,8 +34,8 @@ line be, and should it be drawn now, before a second agent exists?
   interface when its shape is known from two examples.
 * **Draw the line now**: an `adapter.Adapter` interface in `internal/adapter`,
   agent-neutral `Event` and `Answer` types, and every Claude Code fact behind
-  it in `internal/adapter/claudecode`. Only one file in `cmd/stele` names
-  `claudecode`.
+  it in `internal/adapter/claudecode`. Only one file in `cmd/stele`, and the
+  install tests, name `claudecode`.
 
 ## Decision Outcome
 
@@ -80,8 +80,10 @@ Agent-specific, inside an adapter, and nowhere else:
 
 * `internal/adapter` defines the interface and the neutral types. It imports
   no adapter.
-* Only `internal/adapter/<agent>` and one registry file in `cmd/stele`
-  import an adapter package. A test fails the build otherwise.
+* Only `internal/adapter/<agent>`, `cmd/stele/agents.go` (the registry) and
+  `internal/install/agent_test.go` (the install tests, which check the real
+  adapter's output) import an adapter package. A test fails the build
+  otherwise.
 * `stele hook` uses the Claude Code adapter. The installed hook command does
   not change in v1, so no project has to run `stele init` again. A second
   agent adds a way to choose (a flag on the command it installs).

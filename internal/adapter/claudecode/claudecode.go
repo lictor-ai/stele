@@ -42,19 +42,6 @@ import (
 	"github.com/lictor-ai/stele/internal/adapter"
 )
 
-// Event is one hook call, as stele needs it. Parse fills it from the
-// payload: hook_event_name and tool_name make its Kind, Writes and Whole;
-// tool_input.file_path, relative to cwd when it is not absolute, its File; a
-// Bash call's command and run_in_background its Command and Background; a
-// Write's content, an Edit's new_string or each MultiEdit edit's new_string
-// its NewText, with their replace_all; the structuredPatch in Claude Code's
-// response to an Edit or MultiEdit its Added. A SessionStart's source and a
-// SubagentStart's agent_type are its Native, for Loaded.
-type Event = adapter.Event
-
-// Lines is lines First to Last of a file, 1-based and inclusive.
-type Lines = adapter.Lines
-
 // hunk is one hunk of a structuredPatch. Each line starts with ' ' for
 // context, '-' for a line removed or '+' for a line added.
 type hunk struct {
@@ -68,7 +55,7 @@ type hunk struct {
 // added returns the lines the hunks add, numbered in the new file. ok is
 // false when a hunk does not add up: its counts disagree with its lines, or
 // a line has no known prefix.
-func added(hunks []hunk) (lines []Lines, ok bool) {
+func added(hunks []hunk) (lines []adapter.Lines, ok bool) {
 	for _, h := range hunks {
 		n, olds, news := h.NewStart, 0, 0
 		for _, l := range h.Lines {
@@ -86,7 +73,7 @@ func added(hunks []hunk) (lines []Lines, ok bool) {
 				if k := len(lines); k > 0 && lines[k-1].Last == n-1 {
 					lines[k-1].Last = n
 				} else {
-					lines = append(lines, Lines{First: n, Last: n})
+					lines = append(lines, adapter.Lines{First: n, Last: n})
 				}
 				news++
 				n++
@@ -124,8 +111,15 @@ func kind(event, tool string) adapter.Kind {
 	return adapter.Other
 }
 
-// Parse reads a hook payload.
-func Parse(stdin []byte) (Event, error) {
+// Parse reads a hook payload into an Event: hook_event_name and tool_name
+// make its Kind, Writes and Whole; tool_input.file_path, relative to cwd
+// when it is not absolute, its File; a
+// Bash call's command and run_in_background its Command and Background; a
+// Write's content, an Edit's new_string or each MultiEdit edit's new_string
+// its NewText, with their replace_all; the structuredPatch in Claude Code's
+// response to an Edit or MultiEdit its Added. A SessionStart's source and a
+// SubagentStart's agent_type are its Native, for Loaded.
+func Parse(stdin []byte) (adapter.Event, error) {
 	var p struct {
 		HookEventName string `json:"hook_event_name"`
 		SessionID     string `json:"session_id"`
@@ -154,12 +148,12 @@ func Parse(stdin []byte) (Event, error) {
 	// PowerShell add one when they pipe text; a wrapper must not disarm stele.
 	stdin = bytes.TrimPrefix(stdin, []byte("\xef\xbb\xbf"))
 	if err := json.Unmarshal(stdin, &p); err != nil {
-		return Event{}, err
+		return adapter.Event{}, err
 	}
 	if p.HookEventName == "" {
-		return Event{}, errors.New("not a hook payload: no hook_event_name")
+		return adapter.Event{}, errors.New("not a hook payload: no hook_event_name")
 	}
-	e := Event{
+	e := adapter.Event{
 		Kind:      kind(p.HookEventName, p.ToolName),
 		Writes:    writeTool[p.ToolName],
 		Whole:     p.ToolName == "Write",
@@ -200,15 +194,12 @@ func Parse(stdin []byte) (Event, error) {
 	return e, nil
 }
 
-// Answer is what stele tells Claude Code.
-type Answer = adapter.Answer
-
 // Render returns the stdout for an answer to the named event, or nil when
 // there is nothing to say. The exit code is always 0. Deny is
 // permissionDecision "deny" before a tool and decision "block" after it;
 // Ask is permissionDecision "ask", ignored after a tool; Context is
 // additionalContext, for Claude; Warning is systemMessage, for the user.
-func Render(event string, a Answer) []byte {
+func Render(event string, a adapter.Answer) []byte {
 	type specific struct {
 		HookEventName            string `json:"hookEventName"`
 		PermissionDecision       string `json:"permissionDecision,omitempty"`

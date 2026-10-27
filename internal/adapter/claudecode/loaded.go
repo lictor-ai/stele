@@ -25,7 +25,7 @@ type start struct {
 // compaction or a clear reloads the file from where the session was
 // launched. A subagent is primed only when its type is measured to load the
 // file; one with no agent id would overwrite the main agent's record.
-func Loaded(ev Event, root string) (agent string, launch, ok bool) {
+func Loaded(ev adapter.Event, root string) (agent string, launch, ok bool) {
 	st, _ := ev.Native.(start)
 	switch {
 	case ev.Kind == adapter.SubagentStart:

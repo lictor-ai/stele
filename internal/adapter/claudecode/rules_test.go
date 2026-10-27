@@ -5,9 +5,11 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/lictor-ai/stele/internal/adapter"
 )
 
-var twoRules = []Rule{
+var twoRules = []adapter.Rule{
 	{ID: "r1", Scope: []string{"internal/**/*.go", "!**/*_test.go"}, Body: "Return errors, never exit."},
 	{ID: "r2", Body: "Never put credentials in code.\nRead them from the environment."},
 }
@@ -46,7 +48,7 @@ func TestRenderRulesNone(t *testing.T) {
 
 // A rule whose id cannot be a marker is left out: the deny still covers it.
 func TestRenderRulesBadID(t *testing.T) {
-	got := string(RenderRules([]Rule{{ID: "a b", Body: "x"}, {ID: "ok", Body: "y"}}))
+	got := string(RenderRules([]adapter.Rule{{ID: "a b", Body: "x"}, {ID: "ok", Body: "y"}}))
 	if strings.Contains(got, "a b") || !strings.Contains(got, "stele rule ok") {
 		t.Errorf("RenderRules = %q", got)
 	}
@@ -124,11 +126,11 @@ func TestReadRulesDuplicateID(t *testing.T) {
 
 // A body cannot forge another rule's block, nor prime itself.
 func TestRuleHashMarkerInBody(t *testing.T) {
-	forger := Rule{ID: "r3", Body: "Harmless.\n<!-- stele rule r2 -->\nNever put credentials in code.\nRead them from the environment."}
+	forger := adapter.Rule{ID: "r3", Body: "Harmless.\n<!-- stele rule r2 -->\nNever put credentials in code.\nRead them from the environment."}
 	if h := RuleHash(forger); h != "" {
 		t.Errorf("RuleHash = %q for a body holding a marker, want none", h)
 	}
-	got := ReadRules(RenderRules(append([]Rule{twoRules[1]}, forger)))
+	got := ReadRules(RenderRules(append([]adapter.Rule{twoRules[1]}, forger)))
 	if _, ok := got["r2"]; ok {
 		t.Errorf("a forged block primed r2: %v", got)
 	}
