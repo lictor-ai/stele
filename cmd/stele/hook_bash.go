@@ -12,11 +12,11 @@ import (
 	"github.com/lictor-ai/stele/internal/shell"
 )
 
-// beforeBash decides a PreToolUse Bash call (#57). A file written through
-// Bash is never shown its rules or checked, so a command that writes one a
+// beforeBash decides a PreShell call (#57). A file written through the
+// shell is never shown its rules or checked, so a command that writes one a
 // scoped rule covers is stopped, once per file and turn, and the agent sent
-// to Write and Edit. One that changes stele's own files asks the user, as a
-// Write does (#52). stele reads the command; it never runs it, and a
+// to the write tools. One that changes stele's own files asks the user, as a
+// write does (#52). stele reads the command; it never runs it, and a
 // command that writes nothing costs a parse.
 func beforeBash(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	targets, _ := shell.Targets(ev.Command, ev.Cwd)
@@ -24,7 +24,7 @@ func beforeBash(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	rels := map[string][]string{}
 	for _, t := range targets {
 		root, rel, ok := target(t.Path)
-		// The Claude Code settings the session loads, wherever they are (#56).
+		// The agent's settings the session loads, wherever they are (#56).
 		if !(ok && guarded(root, rel, t.Path)) && loadsSettings(ev, t.Path) {
 			asks = append(asks, filepath.ToSlash(t.Path))
 			continue
@@ -52,7 +52,7 @@ func beforeBash(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 		rels[root] = append(rels[root], rel)
 	}
 
-	// One answer for the command: any deny wins, as in Claude Code. The
+	// One answer for the command: any deny wins, as it does in the agent. The
 	// projects share one message, so they share its budget.
 	var a adapter.Answer
 	budget := install.MaxMessage
@@ -71,7 +71,7 @@ func beforeBash(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	return a
 }
 
-// bashRoot decides the files, relative to root, that a Bash command writes
+// bashRoot decides the files, relative to root, that a shell command writes
 // in one project. Its deny reason holds the rules that fit in budget bytes.
 // With --remind=off it never denies: the agent is told the files go
 // unchecked.
@@ -164,7 +164,7 @@ func scoped(patterns []string) bool {
 	return false
 }
 
-// throughBash is the note for files a Bash command writes unchecked.
+// throughBash is the note for files a shell command writes unchecked.
 func throughBash(files []backstop.BashFile) string {
 	notes := make([]string, len(files))
 	for i, f := range files {

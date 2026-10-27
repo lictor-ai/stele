@@ -16,9 +16,9 @@ import (
 	"github.com/lictor-ai/stele/internal/lock"
 )
 
-// runInit sets stele up in the current directory: the Claude Code hooks,
+// runInit sets stele up in the current directory: the agent's hooks,
 // .stele/ and, when there is none, stele.md (spec §6, ADR-0004). It then
-// compiles, which writes stele.lock and the rules file Claude Code loads at
+// compiles, which writes stele.lock and the rules file the agent loads at
 // launch (#68). Run again, it writes nothing unless the hooks carry another
 // stele version or the rules changed. --remind and --check switch the two
 // write hooks (ADR-0006); a switch not given keeps what is installed.
@@ -107,7 +107,7 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 }
 
 // installRoot parses init's or uninstall's flags and returns the current
-// directory. Claude Code reads .claude/settings.json from the directory it
+// directory. The agent reads its settings file from the directory it
 // starts in, so both work where they run, never on an ancestor a root search
 // would find; when there is one, a note says so. define, when not nil, adds
 // the command's own flags.

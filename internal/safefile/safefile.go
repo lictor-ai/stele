@@ -24,7 +24,7 @@ func Replace(path string, data []byte) error {
 }
 
 // ReplacePerm is Replace leaving the file with mode perm, for a file stele
-// rewrites but does not own, such as Claude Code's settings, which may hold
+// rewrites but does not own, such as an agent's settings, which may hold
 // secrets.
 func ReplacePerm(path string, data []byte, perm os.FileMode) error {
 	return replace(path, data, perm, transientWait)

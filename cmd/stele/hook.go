@@ -115,7 +115,7 @@ func target(file string) (root, rel string, ok bool) {
 	return root, filepath.ToSlash(rel), true
 }
 
-// beforeWrite decides a PreToolUse call. With --remind=off only the asks
+// beforeWrite decides a PreTool call. With --remind=off only the asks
 // for stele's own files and settings are left.
 func beforeWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	root, rel, ok := target(ev.File)
@@ -222,7 +222,7 @@ func freshIndex(root string, key []byte) (idx index.Index, note string, err erro
 	return last, fmt.Sprintf("%v. The last valid rules still apply; fix stele.md for your changes to it to take effect.", err), nil
 }
 
-// afterWrite decides a PostToolUse call: it checks the lines the agent just
+// afterWrite decides a PostTool call: it checks the lines the agent just
 // wrote against the rules with a built-in check (D45). It keeps no session
 // state, so parallel writes cannot race.
 func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
@@ -271,7 +271,12 @@ func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 		}
 		keep = func(line int) bool { return check.Contain(spans, line) }
 	}
-	r := check.RunFileLines(idx, rel, content, plugin.BuiltinCheckers(), keep)
+	// A file stele generated for the agent holds every rule's text: it is
+	// never checked, as check.RunFileLines skips stele's other files.
+	var r check.Report
+	if !own(rel) {
+		r = check.RunFileLines(idx, rel, content, plugin.BuiltinCheckers(), keep)
+	}
 
 	var hard, soft []install.Violation
 	for _, f := range r.Violations {
@@ -348,7 +353,7 @@ func written(ev adapter.Event, content []byte) []check.Span {
 
 // versionWarning tells the user, once a session, that the hooks were
 // installed by another stele than the one running (spec §6). Every write
-// passes through PreToolUse, so the post-write path does not repeat it. A
+// passes through PreTool, so the post-write path does not repeat it. A
 // matching version costs a string compare; only a mismatch reads anything.
 func versionWarning(ev adapter.Event, installed string) string {
 	// Only two different releases warn: a build from a commit, or with local

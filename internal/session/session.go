@@ -3,7 +3,7 @@
 //
 // Every hook call is a separate process, and the agent often writes several
 // files at once, so the state is shared through files (spec §2.3):
-// .stele/state/<session>.json, one per Claude Code session (D37). Two sessions
+// .stele/state/<session>.json, one per agent session (D37). Two sessions
 // on one repository each have their own file and never touch each other's.
 //
 // Parallel hook calls update the same record, so every update is
@@ -50,7 +50,7 @@ var lockWait = 2 * time.Second
 // commit, and becomes part of a path, so it is checked.
 var ErrBadSessionID = errors.New("bad session id")
 
-// idChars is what a session id may hold. Claude Code's are UUIDs.
+// idChars is what a session id may hold. Claude Code's, for one, are UUIDs.
 var idChars = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // reserved holds the Windows device names. CON.json is the console whatever
@@ -74,18 +74,19 @@ type State struct {
 	// time. A later write to that file is the agent's retry after reading
 	// the reason.
 	Denied map[string]map[string]time.Time `json:"denied,omitempty"`
-	// BashDenied records, for each agent this turn, the files a Bash command
+	// BashDenied records, for each agent this turn, the files a shell command
 	// was stopped from writing and when (#57): agent id to root-relative file
 	// to time. The same command run again is let through.
 	BashDenied map[string]map[string]time.Time `json:"bash_denied,omitempty"`
 	// Primed records, per agent ("" for the main agent), the rules in
-	// .claude/rules/stele-rules.md as that agent loaded it: rule id to a hash
-	// of the block's text (#68). Claude Code loads the file at session start,
-	// resume and compaction, and when a subagent starts, and keeps it for the
-	// session, so the turn reset does not clear it.
+	// the agent's rules file as that agent loaded it: rule id to a hash
+	// of the block's text (#68). The agent loads the file at session start,
+	// and again as its adapter says (Claude Code: at a resume, a compaction,
+	// a subagent's start), and keeps it for the session, so the turn reset
+	// does not clear it.
 	Primed map[string]map[string]string `json:"primed,omitempty"`
 	// LaunchRoot marks this root as the one the session was launched or
-	// resumed in. Claude Code reloads the rules file from there at a
+	// resumed in. The agent reloads the rules file from there at a
 	// compaction, a clear or a subagent's start, while the hook's cwd
 	// follows the agent's cd; so those prime only a launch root (#68).
 	LaunchRoot bool `json:"launch_root,omitempty"`

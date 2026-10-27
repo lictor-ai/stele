@@ -6,8 +6,10 @@ import (
 
 	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/backstop"
+	"github.com/lictor-ai/stele/internal/check"
 	"github.com/lictor-ai/stele/internal/compile"
 	"github.com/lictor-ai/stele/internal/index"
+	"github.com/lictor-ai/stele/internal/scope"
 )
 
 // generated is what compile writes besides stele.lock and the index: the
@@ -34,6 +36,22 @@ func generated() []compile.Generated {
 // agentRule is an index entry as the rules file shows it.
 func agentRule(e index.Entry) adapter.Rule {
 	return adapter.Rule{ID: e.ID, Scope: e.Scope, Body: e.Body}
+}
+
+// own reports whether rel, relative to a root, is one of stele's own files:
+// those check.Own names, and the files compile generates for the agent, such
+// as the rules file it loads, which holds every rule's text (#68). A rule is
+// never checked against them.
+func own(rel string) bool {
+	if check.Own(rel) {
+		return true
+	}
+	for _, g := range generated() {
+		if scope.Match("/"+g.Path, rel) {
+			return true
+		}
+	}
+	return false
 }
 
 // backstopRule is an index entry as the backstop decides on it, with the

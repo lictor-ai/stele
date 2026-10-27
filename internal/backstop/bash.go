@@ -6,14 +6,14 @@ import (
 	"github.com/lictor-ai/stele/internal/session"
 )
 
-// BashFile is a file a Bash command writes, with every rule that applies to
+// BashFile is a file a shell command writes, with every rule that applies to
 // it. The caller passes only files a scoped rule covers.
 type BashFile struct {
 	File  string // root-relative
 	Rules []Rule
 }
 
-// BashInput is what the hook knows about one Bash command.
+// BashInput is what the hook knows about one shell command.
 type BashInput struct {
 	PromptID string
 	AgentID  string
@@ -22,7 +22,7 @@ type BashInput struct {
 	Fit      func([]Rule) int // as for Input
 }
 
-// BashDecision is the hook's answer to a Bash command.
+// BashDecision is the hook's answer to a shell command.
 type BashDecision struct {
 	Deny  bool
 	Files []string // the files denied, in input order
@@ -30,14 +30,14 @@ type BashDecision struct {
 	More  int      // unseen rules left out of the message; they stay unseen
 }
 
-// DecideBash decides a Bash command that writes files with rules (#57). A
-// file written through Bash is never shown its rules or checked, so the
+// DecideBash decides a shell command that writes files with rules (#57). A
+// file written through the shell is never shown its rules or checked, so the
 // first such command for a file, per agent and turn, is denied: the agent
-// is told to use Write or Edit, and given the rules it has not seen. The
+// is told to use its write tools, and given the rules it has not seen. The
 // same command run again, at least RetryAfter later, goes through: the file
 // may have to come from the command itself.
 //
-// The deny also counts as a deny of the file's Write (Denied), so a Write
+// The deny also counts as a deny of the file's write (Denied), so a write
 // the agent makes instead is its retry, and is not denied again.
 func DecideBash(in BashInput, st session.State) (BashDecision, session.State) {
 	if len(in.Files) == 0 {

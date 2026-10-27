@@ -10,9 +10,9 @@ import (
 )
 
 // sessionStart tells the agent, before its first prompt, to write files with
-// Write and Edit only. Agents in tests wrote whole files through Bash, which
-// stele never sees; the deny message alone comes too late when that first
-// write is a Bash one (#50). It also records which rules the agent loaded
+// its write tools only, in the adapter's session context. Agents in tests
+// wrote whole files through the shell, which stele never sees; the deny
+// message alone comes too late when that first write is a shell one (#50). It also records which rules the agent loaded
 // from the rules file (#68). It says nothing outside a stele project.
 func sessionStart(ev adapter.Event) adapter.Answer {
 	if ev.Cwd == "" {

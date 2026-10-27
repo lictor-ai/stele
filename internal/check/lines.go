@@ -20,10 +20,10 @@ type Fragment struct {
 const maxOccurrences = 1000
 
 // Spans returns the lines each fragment covers in content, sorted and merged:
-// the lines an Edit wrote, found from its new_string when Claude Code gave no
+// the lines an edit wrote, found from its new text when the agent gave no
 // patch. Line ends at either end of a fragment do not count, so "\nx" covers
 // only the line of x. In a CRLF file, a fragment with LF line ends is looked
-// for with CRLF ones too, as Claude Code keeps a file's line ends.
+// for with CRLF ones too, as an agent keeps a file's line ends.
 //
 // A fragment without ReplaceAll was written once. When it occurs more than
 // once, which occurrence is the edit cannot be told, and it covers no lines:
