@@ -33,7 +33,7 @@ func testMain(m *testing.M) int {
 	}
 	defer os.RemoveAll(dir)
 	global := filepath.Join(dir, "gitconfig")
-	config := "[user]\n\tname = t\n\temail = t@example.com\n[commit]\n\tgpgsign = false\n[core]\n\tautocrlf = false\n[init]\n\tdefaultBranch = main\n"
+	config := "[user]\n\tname = t\n\temail = t@example.com\n[commit]\n\tgpgsign = false\n[core]\n\tautocrlf = false\n[init]\n\tdefaultBranch = main\n[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n"
 	if err := os.WriteFile(global, []byte(config), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
