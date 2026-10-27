@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/lictor-ai/stele/internal/adapter/claudecode"
+	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/check"
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/install"
@@ -31,7 +31,7 @@ const maxProblemsShown = 5
 // already pays. Only the built-in checkers run (D45). Once checkers come from
 // stele.json (#14), a rule naming one would show as "not a checker" here:
 // leave those out then.
-func invalidRules(ev claudecode.Event, room int) (warning, context string) {
+func invalidRules(ev adapter.Event, room int) (warning, context string) {
 	root, rel, ok := target(ev.File)
 	if !ok {
 		return "", ""

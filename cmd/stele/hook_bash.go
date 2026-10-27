@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lictor-ai/stele/internal/adapter/claudecode"
+	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/backstop"
 	"github.com/lictor-ai/stele/internal/install"
 	"github.com/lictor-ai/stele/internal/scope"
@@ -18,7 +18,7 @@ import (
 // to Write and Edit. One that changes stele's own files asks the user, as a
 // Write does (#52). stele reads the command; it never runs it, and a
 // command that writes nothing costs a parse.
-func beforeBash(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
+func beforeBash(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	targets, _ := shell.Targets(ev.Command, ev.Cwd)
 	var asks, roots []string
 	rels := map[string][]string{}
@@ -54,7 +54,7 @@ func beforeBash(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 
 	// One answer for the command: any deny wins, as in Claude Code. The
 	// projects share one message, so they share its budget.
-	var a claudecode.Answer
+	var a adapter.Answer
 	budget := install.MaxMessage
 	for _, root := range roots {
 		r := bashRoot(ev, sw, root, rels[root], budget)
@@ -75,12 +75,12 @@ func beforeBash(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 // in one project. Its deny reason holds the rules that fit in budget bytes.
 // With --remind=off it never denies: the agent is told the files go
 // unchecked.
-func bashRoot(ev claudecode.Event, sw claudecode.Switches, root string, rels []string, budget int) claudecode.Answer {
+func bashRoot(ev adapter.Event, sw adapter.Switches, root string, rels []string, budget int) adapter.Answer {
 	// Whether a file has rules is known only from the index, so a failure
 	// here comes before stele can tell go test > out.txt from a source
 	// file: it warns, never blocks, even with block_on_error.
-	fail := func(err error) claudecode.Answer {
-		return claudecode.Answer{Warning: "stele: rules not enforced for this Bash command: " + err.Error()}
+	fail := func(err error) adapter.Answer {
+		return adapter.Answer{Warning: "stele: rules not enforced for this Bash command: " + err.Error()}
 	}
 	key, err := loadKey()
 	if err != nil {
@@ -108,11 +108,11 @@ func bashRoot(ev claudecode.Event, sw claudecode.Switches, root string, rels []s
 		}
 	}
 	if len(files) == 0 {
-		return claudecode.Answer{Context: note}
+		return adapter.Answer{Context: note}
 	}
 	// With --remind=off the hook never stops a command: the agent is told.
 	if sw.RemindOff {
-		return claudecode.Answer{Context: joinNotes(note, throughBash(files))}
+		return adapter.Answer{Context: joinNotes(note, throughBash(files))}
 	}
 
 	// Decide inside the update, so the deny is saved before it is answered.
@@ -144,13 +144,13 @@ func bashRoot(ev claudecode.Event, sw claudecode.Switches, root string, rels []s
 		return fail(err)
 	}
 	if !d.Deny {
-		return claudecode.Answer{Context: joinNotes(note, throughBash(files))}
+		return adapter.Answer{Context: joinNotes(note, throughBash(files))}
 	}
 	paths := make([]string, len(d.Files))
 	for i, f := range d.Files {
 		paths[i] = showPath(f)
 	}
-	return claudecode.Answer{Deny: true, Reason: install.BashMessageMore(paths, blockRules(d.Rules), d.More, note)}
+	return adapter.Answer{Deny: true, Reason: install.BashMessageMore(paths, blockRules(d.Rules), d.More, note)}
 }
 
 // scoped reports whether patterns name files: a scope with an include, not

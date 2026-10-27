@@ -42,40 +42,15 @@ import (
 	"github.com/lictor-ai/stele/internal/adapter"
 )
 
-// Event is one hook call, as stele needs it.
-type Event struct {
-	// Kind, Writes and Whole say what the call is, in no agent's words.
-	Kind          adapter.Kind
-	Writes, Whole bool
-
-	Name      string // hook_event_name: "PreToolUse", "PostToolUse", "SessionStart", "SubagentStart"
-	SessionID string
-	PromptID  string // the user turn; empty before the first prompt
-	AgentID   string // empty for the main agent
-	AgentType string // a SubagentStart's agent_type: "general-purpose", "Explore", …
-	Source    string // a SessionStart's source: "startup", "resume", "clear", "compact"
-	Cwd       string // the directory Claude Code runs in
-	ToolName  string
-	// File is the absolute path of the file the tool writes, or "" when the
-	// tool writes no file stele knows how to find.
-	File string
-	// Command is a Bash call's command line, which stele reads for the files
-	// it writes (#57); Background is its run_in_background.
-	Command    string
-	Background bool
-	// NewText is what the tool puts in the file: the content of a Write, the
-	// new_string of an Edit, or each edit's new_string of a MultiEdit.
-	NewText []string
-	// ReplaceAll is, for each NewText of an Edit or MultiEdit, its
-	// replace_all.
-	ReplaceAll []bool
-	// Added is the lines of the file as written that the tool added, read
-	// from the structuredPatch in Claude Code's response to an Edit or
-	// MultiEdit. Patched is false when the response carries no patch stele
-	// can trust; Added then means nothing.
-	Added   []Lines
-	Patched bool
-}
+// Event is one hook call, as stele needs it. Parse fills it from the
+// payload: hook_event_name and tool_name make its Kind, Writes and Whole;
+// tool_input.file_path, relative to cwd when it is not absolute, its File; a
+// Bash call's command and run_in_background its Command and Background; a
+// Write's content, an Edit's new_string or each MultiEdit edit's new_string
+// its NewText, with their replace_all; the structuredPatch in Claude Code's
+// response to an Edit or MultiEdit its Added. A SessionStart's source and a
+// SubagentStart's agent_type are its Native, for Loaded.
+type Event = adapter.Event
 
 // Lines is lines First to Last of a file, 1-based and inclusive.
 type Lines = adapter.Lines
@@ -188,14 +163,13 @@ func Parse(stdin []byte) (Event, error) {
 		Kind:      kind(p.HookEventName, p.ToolName),
 		Writes:    writeTool[p.ToolName],
 		Whole:     p.ToolName == "Write",
-		Name:      p.HookEventName,
 		SessionID: p.SessionID,
 		PromptID:  p.PromptID,
 		AgentID:   p.AgentID,
-		AgentType: p.AgentType,
-		Source:    p.Source,
 		Cwd:       p.Cwd,
-		ToolName:  p.ToolName,
+	}
+	if e.Kind.Starts() {
+		e.Native = start{Source: p.Source, AgentType: p.AgentType}
 	}
 	if p.ToolName == "Bash" {
 		e.Command, e.Background = p.ToolInput.Command, p.ToolInput.RunInBackground

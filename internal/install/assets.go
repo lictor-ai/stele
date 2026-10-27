@@ -152,17 +152,6 @@ func renderViolations(path string, vs []Violation, more int, blocking bool) stri
 	return strings.TrimSpace(b.String())
 }
 
-// sessionContext is what the agent reads at the start of a session or
-// subagent in a stele project: write files with Write and Edit, which stele
-// sees, not through Bash, which it does not (#50).
-//
-//go:embed assets/session-context.tmpl
-var sessionContext string
-
-// SessionContext returns the text the agent reads when a session or subagent
-// starts.
-func SessionContext() string { return strings.TrimSpace(sessionContext) }
-
 // FitRules returns how many of n rules, kept whole and in order, fit in a
 // message within limit bytes; render renders it with the first k. Rules are
 // not cut: Claude Code passes a hook text on in full only up to 10,000

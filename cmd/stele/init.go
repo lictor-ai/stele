@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/lictor-ai/stele/internal/adapter/claudecode"
 	"github.com/lictor-ai/stele/internal/compile"
 	"github.com/lictor-ai/stele/internal/install"
 	"github.com/lictor-ai/stele/internal/lock"
@@ -72,7 +71,7 @@ func (f switchFlag) Set(s string) error {
 // initCompile compiles the rules init set up. A failure is a note, not an
 // error: the hooks are installed, and the next stele compile writes the rest.
 func initCompile(root string) (changes, notes []string) {
-	later := "run stele compile to write " + claudecode.RulesFile
+	later := "run stele compile to write " + agent.RulesFile()
 	key, err := loadKey()
 	if err != nil {
 		return nil, []string{fmt.Sprintf("%v: %s", err, later)}

@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lictor-ai/stele/internal/adapter"
-	"github.com/lictor-ai/stele/internal/adapter/claudecode"
 	"github.com/lictor-ai/stele/internal/backstop"
 	"github.com/lictor-ai/stele/internal/check"
 	"github.com/lictor-ai/stele/internal/compile"
@@ -45,7 +44,7 @@ var maxChecked int64 = 32 << 20
 // maxShown caps the violations one message shows; the rest are counted.
 const maxShown = 20
 
-// runHook answers one Claude Code hook call (ADR-0004). Before a write, it
+// runHook answers one hook call from the agent (ADR-0004). Before a write, it
 // shows the agent the rules for the file it has not seen this turn, by
 // denying the write with them as the reason. After a write, it checks the
 // lines the agent wrote and sends back the rules they break.
@@ -58,7 +57,7 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 	if err != nil {
 		return exitOK
 	}
-	ev, err := claudecode.Parse(data)
+	ev, err := agent.Parse(data)
 	if err != nil || (ev.File == "" && ev.Command == "" && !ev.Kind.Starts()) {
 		return exitOK
 	}
@@ -67,19 +66,19 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 	defer func() {
 		if r := recover(); r != nil {
 			w := fmt.Sprintf("stele: rules not checked for this write: internal error: %v", r)
-			stdout.Write(claudecode.Render(ev.Name, claudecode.Answer{Warning: w}))
+			stdout.Write(agent.Render(ev, adapter.Answer{Warning: w}))
 			code = exitOK
 		}
 	}()
-	// The switches stele init wrote on the command (ADR-0006).
-	sw := claudecode.HookSwitches(args)
-	var a claudecode.Answer
+	// The version and switches stele init wrote on the command (ADR-0006).
+	installed, sw := agent.HookArgs(args)
+	var a adapter.Answer
 	switch {
 	case ev.Kind == adapter.PreShell:
 		a = beforeBash(ev, sw)
 	case ev.Kind == adapter.PreTool:
 		a = beforeWrite(ev, sw)
-		a.Warning = joinLines(a.Warning, versionWarning(ev, claudecode.InstalledVersion(args)))
+		a.Warning = joinLines(a.Warning, versionWarning(ev, installed))
 	case ev.Kind == adapter.PostTool && ev.Writes:
 		a = afterWrite(ev, sw)
 		room := install.MaxMessage
@@ -94,7 +93,7 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 	default:
 		return exitOK
 	}
-	if out := claudecode.Render(ev.Name, a); out != nil {
+	if out := agent.Render(ev, a); out != nil {
 		stdout.Write(out)
 	}
 	return exitOK
@@ -118,21 +117,21 @@ func target(file string) (root, rel string, ok bool) {
 
 // beforeWrite decides a PreToolUse call. With --remind=off only the asks
 // for stele's own files and settings are left.
-func beforeWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
+func beforeWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	root, rel, ok := target(ev.File)
 	if !ok {
 		return askOutside(ev)
 	}
 	// Before stele.json is read: it is one of the files that would change.
 	if ev.Writes && (guarded(root, rel, ev.File) || loadsSettings(ev, ev.File)) {
-		return claudecode.Answer{Ask: install.AskMessage(showPath(rel))}
+		return adapter.Answer{Ask: install.AskMessage(showPath(rel))}
 	}
 	if sw.RemindOff {
-		return claudecode.Answer{}
+		return adapter.Answer{}
 	}
 
 	policy, perr := enforce.Load(root)
-	fail := func(err error) claudecode.Answer { return failure(policy, ev.Kind, err) }
+	fail := func(err error) adapter.Answer { return failure(policy, ev.Kind, err) }
 	if perr != nil {
 		return fail(perr)
 	}
@@ -153,7 +152,7 @@ func beforeWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer 
 		}
 	}
 	if len(rules) == 0 {
-		return claudecode.Answer{Context: note}
+		return adapter.Answer{Context: note}
 	}
 
 	// Decide inside the update, so the rules shown are saved before the deny
@@ -175,9 +174,9 @@ func beforeWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer 
 		return fail(err)
 	}
 	if !d.Deny {
-		return claudecode.Answer{Context: note}
+		return adapter.Answer{Context: note}
 	}
-	return claudecode.Answer{Deny: true, Reason: install.BlockMessageMore(rel, blockRules(d.Rules), d.More, note)}
+	return adapter.Answer{Deny: true, Reason: install.BlockMessageMore(rel, blockRules(d.Rules), d.More, note)}
 }
 
 // blockRules is rules as a message shows them.
@@ -226,17 +225,17 @@ func freshIndex(root string, key []byte) (idx index.Index, note string, err erro
 // afterWrite decides a PostToolUse call: it checks the lines the agent just
 // wrote against the rules with a built-in check (D45). It keeps no session
 // state, so parallel writes cannot race.
-func afterWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
+func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	root, rel, ok := target(ev.File)
 	if !ok {
-		return claudecode.Answer{}
+		return adapter.Answer{}
 	}
 	if sw.CheckOff {
 		return refreshOnly(root)
 	}
 
 	policy, perr := enforce.Load(root)
-	fail := func(err error) claudecode.Answer { return failure(policy, ev.Kind, err) }
+	fail := func(err error) adapter.Answer { return failure(policy, ev.Kind, err) }
 	if perr != nil {
 		return fail(perr)
 	}
@@ -254,11 +253,11 @@ func afterWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 	content, err := safefile.ReadRegular(ev.File, maxChecked)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return claudecode.Answer{Context: note} // removed since: nothing to check
+		return adapter.Answer{Context: note} // removed since: nothing to check
 	case errors.Is(err, safefile.ErrNotRegular):
-		return claudecode.Answer{Context: joinNotes(note, unchecked(rel, "not a regular file"))}
+		return adapter.Answer{Context: joinNotes(note, unchecked(rel, "not a regular file"))}
 	case errors.Is(err, safefile.ErrTooLarge):
-		return claudecode.Answer{Context: joinNotes(note, unchecked(rel, fmt.Sprintf("larger than %d bytes", maxChecked)))}
+		return adapter.Answer{Context: joinNotes(note, unchecked(rel, fmt.Sprintf("larger than %d bytes", maxChecked)))}
 	case err != nil:
 		return fail(err)
 	}
@@ -268,7 +267,7 @@ func afterWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 	if !ev.Whole {
 		spans := written(ev, content)
 		if len(spans) == 0 {
-			return claudecode.Answer{Context: note} // a deletion, or text not found
+			return adapter.Answer{Context: note} // a deletion, or text not found
 		}
 		keep = func(line int) bool { return check.Contain(spans, line) }
 	}
@@ -300,7 +299,7 @@ func afterWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 	}
 	// The blocking violations are the block's reason; the context holds the
 	// notes and the non-blocking ones, which share its budget.
-	var a claudecode.Answer
+	var a adapter.Answer
 	if len(hard) > 0 {
 		a.Deny, a.Reason = true, message(hard, true, install.MaxMessage)
 	}
@@ -315,9 +314,9 @@ func afterWrite(ev claudecode.Event, sw claudecode.Switches) claudecode.Answer {
 // this hook compiles an agent's edit to stele.md, whose write asks before it
 // runs (ADR-0006). A failure only warns: no check was asked for, so there is
 // nothing for block_on_error to stand in for.
-func refreshOnly(root string) claudecode.Answer {
-	warn := func(err error) claudecode.Answer {
-		return claudecode.Answer{Warning: fmt.Sprintf("stele: rules not refreshed after this write: %v", err)}
+func refreshOnly(root string) adapter.Answer {
+	warn := func(err error) adapter.Answer {
+		return adapter.Answer{Warning: fmt.Sprintf("stele: rules not refreshed after this write: %v", err)}
 	}
 	key, err := loadKey()
 	if err != nil {
@@ -327,12 +326,12 @@ func refreshOnly(root string) claudecode.Answer {
 	if err != nil {
 		return warn(err)
 	}
-	return claudecode.Answer{Context: note}
+	return adapter.Answer{Context: note}
 }
 
 // written returns the lines an Edit or MultiEdit wrote: exactly, from
-// Claude Code's patch, or else from where its new text is in the file.
-func written(ev claudecode.Event, content []byte) []check.Span {
+// the agent's patch, or else from where its new text is in the file.
+func written(ev adapter.Event, content []byte) []check.Span {
 	if ev.Patched {
 		spans := make([]check.Span, len(ev.Added))
 		for i, l := range ev.Added {
@@ -351,7 +350,7 @@ func written(ev claudecode.Event, content []byte) []check.Span {
 // installed by another stele than the one running (spec §6). Every write
 // passes through PreToolUse, so the post-write path does not repeat it. A
 // matching version costs a string compare; only a mismatch reads anything.
-func versionWarning(ev claudecode.Event, installed string) string {
+func versionWarning(ev adapter.Event, installed string) string {
 	// Only two different releases warn: a build from a commit, or with local
 	// changes, stamps devel and is never told to re-run init (#41).
 	running := binaryVersion()
@@ -363,12 +362,12 @@ func versionWarning(ev claudecode.Event, installed string) string {
 		return ""
 	}
 	msg := fmt.Sprintf("stele: the hooks in %s were installed by stele %s; this is stele %s. Run stele init to update them.",
-		filepath.ToSlash(claudecode.SettingsFile), installed, running)
+		filepath.ToSlash(agent.SettingsFile()), installed, running)
 	if install.Older(running, installed) {
 		// An older init takes hooks carrying switches for hand-written ones
 		// and adds a second set (ADR-0006): it must not be run.
 		msg = fmt.Sprintf("stele: the hooks in %s were installed by stele %s; this is stele %s, which is older. Upgrade stele; do not run stele init with it.",
-			filepath.ToSlash(claudecode.SettingsFile), installed, running)
+			filepath.ToSlash(agent.SettingsFile()), installed, running)
 	}
 	key, err := loadKey()
 	if err != nil {
@@ -415,16 +414,16 @@ func joinNotes(notes ...string) string {
 // write is blocked and the agent told why (ADR-0004). After a write, nothing
 // can be stopped: the agent is told the write went unchecked. Only a part
 // the switches leave on gets here (ADR-0006).
-func failure(p enforce.Policy, kind adapter.Kind, err error) claudecode.Answer {
+func failure(p enforce.Policy, kind adapter.Kind, err error) adapter.Answer {
 	post := kind == adapter.PostTool
 	if p.BlockOnError {
 		if post {
-			return claudecode.Answer{Deny: true, Reason: fmt.Sprintf("stele could not check this write against the project's rules: %v. block_on_error is on in stele.json, so the write is reported as unchecked: it was saved, but fix stele before going on.", err)}
+			return adapter.Answer{Deny: true, Reason: fmt.Sprintf("stele could not check this write against the project's rules: %v. block_on_error is on in stele.json, so the write is reported as unchecked: it was saved, but fix stele before going on.", err)}
 		}
-		return claudecode.Answer{Deny: true, Reason: fmt.Sprintf("stele could not check this write against the project's rules: %v. block_on_error is on in stele.json, so the write is blocked until this is fixed.", err)}
+		return adapter.Answer{Deny: true, Reason: fmt.Sprintf("stele could not check this write against the project's rules: %v. block_on_error is on in stele.json, so the write is blocked until this is fixed.", err)}
 	}
 	if post {
-		return claudecode.Answer{Warning: fmt.Sprintf("stele: rules not checked for this write: %v", err)}
+		return adapter.Answer{Warning: fmt.Sprintf("stele: rules not checked for this write: %v", err)}
 	}
-	return claudecode.Answer{Warning: fmt.Sprintf("stele: rules not enforced for this write: %v", err)}
+	return adapter.Answer{Warning: fmt.Sprintf("stele: rules not enforced for this write: %v", err)}
 }

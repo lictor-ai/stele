@@ -4,43 +4,43 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	"github.com/lictor-ai/stele/internal/adapter/claudecode"
+	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/backstop"
 	"github.com/lictor-ai/stele/internal/compile"
 	"github.com/lictor-ai/stele/internal/index"
 )
 
 // generated is what compile writes besides stele.lock and the index: the
-// rules file Claude Code loads at launch, so the agent has the rules before
+// rules file the agent loads at launch, so the agent has the rules before
 // its first write (#68). Every root gets its own, holding its own rules. A
 // file there without stele's header is the user's, never overwritten, and
 // the file is up to date when it gives the same rules, whatever the intro's
 // words: so a stele of another version does not rewrite a committed file.
 func generated() []compile.Generated {
 	return []compile.Generated{{
-		Path: claudecode.RulesFile,
+		Path: agent.RulesFile(),
 		Render: func(idx index.Index) []byte {
-			rules := make([]claudecode.Rule, len(idx.Rules))
+			rules := make([]adapter.Rule, len(idx.Rules))
 			for i, e := range idx.Rules {
-				rules[i] = ccRule(e)
+				rules[i] = agentRule(e)
 			}
-			return claudecode.RenderRules(rules)
+			return agent.RenderRules(rules)
 		},
-		Owned: claudecode.OwnedRules,
-		Same:  claudecode.SameRules,
+		Owned: agent.OwnedRules,
+		Same:  agent.SameRules,
 	}}
 }
 
-// ccRule is an index entry as the rules file shows it.
-func ccRule(e index.Entry) claudecode.Rule {
-	return claudecode.Rule{ID: e.ID, Scope: e.Scope, Body: e.Body}
+// agentRule is an index entry as the rules file shows it.
+func agentRule(e index.Entry) adapter.Rule {
+	return adapter.Rule{ID: e.ID, Scope: e.Scope, Body: e.Body}
 }
 
 // backstopRule is an index entry as the backstop decides on it, with the
 // hash its block has in the rules file, so a rule the agent loaded from
 // there counts as seen (#68).
 func backstopRule(e index.Entry) backstop.Rule {
-	return backstop.Rule{ID: e.ID, Text: e.Body, Hash: claudecode.RuleHash(ccRule(e))}
+	return backstop.Rule{ID: e.ID, Text: e.Body, Hash: agent.RuleHash(agentRule(e))}
 }
 
 // notStele is the message for a generated file's path holding a file stele
@@ -59,7 +59,7 @@ func generatedNotes(files []compile.File) []string {
 			notes = append(notes, notStele(f.Path))
 			continue
 		}
-		if n := utf8.RuneCount(f.Data); n > claudecode.MaxRulesChars {
+		if n := utf8.RuneCount(f.Data); n > agent.MaxRulesChars() {
 			notes = append(notes, fmt.Sprintf("%s is %d characters: every session loads it whole, so its rules cost context on every turn; keep stele.md short",
 				f.Path, n))
 		}

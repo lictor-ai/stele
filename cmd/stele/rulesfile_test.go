@@ -7,13 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lictor-ai/stele/internal/adapter/claudecode"
 	"github.com/lictor-ai/stele/internal/check"
 )
 
 // rulesFile is the rules file under root.
 func rulesFile(root string) string {
-	return filepath.Join(root, filepath.FromSlash(claudecode.RulesFile))
+	return filepath.Join(root, filepath.FromSlash(agent.RulesFile()))
 }
 
 func TestCompileWritesTheRulesFile(t *testing.T) {
@@ -30,7 +29,7 @@ func TestCompileWritesTheRulesFile(t *testing.T) {
 			t.Errorf("rules file lacks %q:\n%s", want, data)
 		}
 	}
-	if got := len(claudecode.ReadRules(data)); got != 2 {
+	if got := len(agent.ReadRules(data)); got != 2 {
 		t.Errorf("rules file holds %d rules, want 2", got)
 	}
 }
