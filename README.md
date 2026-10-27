@@ -1,12 +1,95 @@
+<div align="center">
+
 # stele
 
-stele makes Claude Code follow the rules in your repository's `stele.md`:
+**Make Claude Code follow your repository's rules.**
+
+Write your rules once in `stele.md`. stele shows them to the agent before it writes,<br>
+checks what it wrote, and checks again in CI.
+
+[![CI](https://github.com/lictor-ai/stele/actions/workflows/ci.yml/badge.svg)](https://github.com/lictor-ai/stele/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/badge/release-v1.0.0--dev.2-blue)](https://github.com/lictor-ai/stele/releases)
+[![Go](https://img.shields.io/badge/go-1.27%2B-00ADD8?logo=go&logoColor=white)](go.mod)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
+
+[Quick start](#quick-start) ·
+[How it works](#how-it-works) ·
+[Does it work?](#does-it-work) ·
+[Writing stele.md](#writing-stelemd) ·
+[CI](#ci-stele-check) ·
+[Limits](#limits)
+
+</div>
+
+---
+
+## Why stele
+
+Rules in `CLAUDE.md` are guidance: nothing checks them. In [our eval](#does-it-work), with the rules in `CLAUDE.md`, the agent broke one in 3 of 8 runs of a task that pulls against it. stele flagged each break right after the write, and the agent fixed it.
+
+stele puts each rule in front of the agent when it matters, and catches what slips through:
 
 - **Before a write**, the agent is shown the rules for the file it is about to write.
 - **After a write**, the lines it just wrote are checked against rules that have a regex check.
 - **In CI**, `stele check` checks the changed files.
 
-It is one Go binary. It uses no model. It makes no network calls, except `stele publish`, which you run yourself.
+And it stays out of your way:
+
+- 📦 **One Go binary.** No daemon, no service, no config server.
+- 🧠 **No model.** Rules are chosen by path and checked by regex: same input, same answer.
+- 🔒 **No network calls**, except `stele publish`, which you run yourself.
+- ⚡ **About 0.1 s per write.** See the [measured times](#does-it-work).
+
+## Quick start
+
+```sh
+go install github.com/lictor-ai/stele/cmd/stele@latest   # install
+cd your-project && stele init                            # add the hooks and a starter stele.md
+$EDITOR stele.md && stele compile                        # write your rules, compile them
+```
+
+Commit what `stele init` and `stele compile` wrote, start Claude Code, and the rules apply. Add [`stele check`](#ci-stele-check) to CI to catch the rest.
+
+## How it works
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Claude Code
+    participant S as stele hook
+    A->>S: Session or subagent starts
+    S-->>A: Rules loaded from .claude/rules/stele-rules.md
+    A->>S: Write src/server.go
+    Note over S: A rule for this file the agent hasn't seen?<br/>Deny once, with the rule. The retry goes through.
+    Note over S: Check the lines just written
+    S-->>A: Blocked: server.go:12 breaks "log through internal/log"
+    A->>S: Edit src/server.go (fix)
+    S-->>A: Clean
+```
+
+Then, in the pull request, `stele check --base origin/main` checks every changed file against the same rules. Details: [What the agent sees](#what-the-agent-sees).
+
+## Does it work?
+
+[test/functional/](test/functional/) holds two kinds of tests:
+
+- **Black-box tests** of the binary: 52 tests of init, compile, check and the hook, built and run with `go test ./test/functional/`.
+- **An agent eval** that gives headless Claude Code the same coding tasks in three setups by default and grades every run the same way:
+  - no rules;
+  - the rules pasted into `CLAUDE.md`;
+  - stele.
+
+Every experiment, with its numbers, is in [test/functional/agent/results/](test/functional/agent/results/README.md). The main results, with Claude Sonnet 5.5:
+
+| | No rules | Rules in `CLAUDE.md` | stele v1.0.0-dev.2 |
+|---|---|---|---|
+| 9 tasks, 18 runs per setup: runs that broke no blocking rule | 33% | 100% | 100% |
+| tokens per run | 143k | 163k | 163k |
+| A task that pulls against a rule, 8 runs: runs that broke no blocking rule | | 5 of 8 | 8 of 8 |
+
+- **The 9 tasks** range from adding one function to building a small HTTP service. The large ones run under a 74-rule `stele.md`.
+- **The task that pulls against a rule** asks for a test of an HTTP client. The rules forbid a real test server. With the rules in `CLAUDE.md`, the agent used one anyway in 3 of 8 runs. stele flagged each use right after the write, and the agent fixed it.
+- **The hook adds about 0.1 s per write** on Windows: Claude Code runs it before and after every write. With 500 rules it adds up to 0.17 s. The measured times are in [test/functional/results/](test/functional/results/), one file per stele measured.
 
 ## Install
 
@@ -233,7 +316,28 @@ What it does:
 - **It never asks for a token.** It uses a login you already have, in this order: the `gh` or `glab` login, git's stored credential (Git Credential Manager), then `GITHUB_TOKEN` or `GITLAB_TOKEN`. When none works, it prints the host's page to open the request yourself and tries to open it in the browser.
 - **Nothing changes when the default branch already has this `stele.md`.**
 
-Its working copy of the repository is a bare clone under your user cache directory (`stele/publish/` in it), never in the project. It exits 0 when the branch is pushed, even if the merge request could not be opened, and 1 when nothing was pushed:
+Its working copy of the repository is a bare clone under your user cache directory (`stele/publish/` in it), never in the project.
+
+A first publish, then the same `stele.md` again, then again after the pull request was closed, then after it was merged:
+
+```
+$ stele publish
+pushed branch stele/publish/project-a/stele.md to https://github.com/nacer-noubir/stele-publish-test.git
+merge request opened: https://github.com/nacer-noubir/stele-publish-test/pull/1
+
+$ stele publish
+branch stele/publish/project-a/stele.md in https://github.com/nacer-noubir/stele-publish-test.git already has this stele.md
+merge request found: https://github.com/nacer-noubir/stele-publish-test/pull/1
+
+$ stele publish
+branch stele/publish/project-a/stele.md in https://github.com/nacer-noubir/stele-publish-test.git already has this stele.md
+merge request reopened: https://github.com/nacer-noubir/stele-publish-test/pull/1
+
+$ stele publish
+project-a/stele.md on main in https://github.com/nacer-noubir/stele-publish-test.git is already this stele.md: nothing to publish
+```
+
+It exits 0 in all of these, and also when the branch is pushed but the merge request could not be opened. It exits 1 when it stops on an error, and pushes nothing:
 
 ```
 $ stele publish
@@ -245,29 +349,12 @@ $ stele publish
 stele publish: bad publish setting in stele.json: repo "file:///srv/rules.git": only https and ssh are allowed; use https://host/path, ssh://host/path or user@host:path
 ```
 
+```
+$ stele publish
+stele publish: branch stele/publish/project-a/stele.md in https://github.com/nacer-noubir/stele-publish-test.git holds commits stele publish did not make for this project; it is left alone
+```
+
 What leaves the machine: the committed `stele.md`, its `path`, the project's commit hash and id, and your git name and email, to `repo`; and, to github.com or gitlab.com only, the login it found.
-
-## Test results
-
-[test/functional/](test/functional/) holds two kinds of tests:
-
-- **Black-box tests** of the binary: 52 tests of init, compile, check and the hook, built and run with `go test ./test/functional/`.
-- **An agent eval** that gives headless Claude Code the same coding tasks in three setups by default and grades every run the same way:
-  - no rules;
-  - the rules pasted into `CLAUDE.md`;
-  - stele.
-
-Every experiment, with its numbers, is in [test/functional/agent/results/](test/functional/agent/results/README.md). The main results, with Claude Sonnet 5.5:
-
-| | No rules | Rules in `CLAUDE.md` | stele v1.0.0-dev.2 |
-|---|---|---|---|
-| 9 tasks, 18 runs per setup: runs that broke no blocking rule | 33% | 100% | 100% |
-| tokens per run | 143k | 163k | 163k |
-| A task that pulls against a rule, 8 runs: runs that broke no blocking rule | | 5 of 8 | 8 of 8 |
-
-- **The 9 tasks** range from adding one function to building a small HTTP service. The large ones run under a 74-rule `stele.md`.
-- **The task that pulls against a rule** asks for a test of an HTTP client. The rules forbid a real test server. With the rules in `CLAUDE.md`, the agent used one anyway in 3 of 8 runs. stele flagged each use right after the write, and the agent fixed it.
-- **The hook adds about 0.1 s per write** on Windows: Claude Code runs it before and after every write. With 500 rules it adds up to 0.17 s. The measured times are in [test/functional/results/](test/functional/results/), one file per stele measured.
 
 ## Limits
 
@@ -289,6 +376,12 @@ Every experiment, with its numbers, is in [test/functional/agent/results/](test/
 16. **`stele publish` needs a repository with at least one commit, and git access to it.** git and Git Credential Manager are never allowed to prompt. ssh still can: a key's passphrase or an unknown host key is asked by ssh itself.
 17. **`stele publish` refuses a `stele/publish/<path>` branch holding commits it did not make for this project.** Two projects that publish to the same `path` of one repository get that error; give each its own `path`.
 
+## Learn more
+
+- [docs/architecture.md](docs/architecture.md): how stele is built, its packages and contracts.
+- [docs/adr/](docs/adr/): the decisions behind it.
+- [test/functional/](test/functional/): the black-box tests and the agent eval.
+
 ## License
 
-See [LICENSE](LICENSE).
+[Apache 2.0](LICENSE).
