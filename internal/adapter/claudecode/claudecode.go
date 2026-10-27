@@ -38,41 +38,9 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+
+	"github.com/lictor-ai/stele/internal/adapter"
 )
-
-// Event is one hook call, as stele needs it.
-type Event struct {
-	Name      string // hook_event_name: "PreToolUse", "PostToolUse", "SessionStart", "SubagentStart"
-	SessionID string
-	PromptID  string // the user turn; empty before the first prompt
-	AgentID   string // empty for the main agent
-	AgentType string // a SubagentStart's agent_type: "general-purpose", "Explore", …
-	Source    string // a SessionStart's source: "startup", "resume", "clear", "compact"
-	Cwd       string // the directory Claude Code runs in
-	ToolName  string
-	// File is the absolute path of the file the tool writes, or "" when the
-	// tool writes no file stele knows how to find.
-	File string
-	// Command is a Bash call's command line, which stele reads for the files
-	// it writes (#57); Background is its run_in_background.
-	Command    string
-	Background bool
-	// NewText is what the tool puts in the file: the content of a Write, the
-	// new_string of an Edit, or each edit's new_string of a MultiEdit.
-	NewText []string
-	// ReplaceAll is, for each NewText of an Edit or MultiEdit, its
-	// replace_all.
-	ReplaceAll []bool
-	// Added is the lines of the file as written that the tool added, read
-	// from the structuredPatch in Claude Code's response to an Edit or
-	// MultiEdit. Patched is false when the response carries no patch stele
-	// can trust; Added then means nothing.
-	Added   []Lines
-	Patched bool
-}
-
-// Lines is lines First to Last of a file, 1-based and inclusive.
-type Lines struct{ First, Last int }
 
 // hunk is one hunk of a structuredPatch. Each line starts with ' ' for
 // context, '-' for a line removed or '+' for a line added.
@@ -87,7 +55,7 @@ type hunk struct {
 // added returns the lines the hunks add, numbered in the new file. ok is
 // false when a hunk does not add up: its counts disagree with its lines, or
 // a line has no known prefix.
-func added(hunks []hunk) (lines []Lines, ok bool) {
+func added(hunks []hunk) (lines []adapter.Lines, ok bool) {
 	for _, h := range hunks {
 		n, olds, news := h.NewStart, 0, 0
 		for _, l := range h.Lines {
@@ -105,7 +73,7 @@ func added(hunks []hunk) (lines []Lines, ok bool) {
 				if k := len(lines); k > 0 && lines[k-1].Last == n-1 {
 					lines[k-1].Last = n
 				} else {
-					lines = append(lines, Lines{n, n})
+					lines = append(lines, adapter.Lines{First: n, Last: n})
 				}
 				news++
 				n++
@@ -121,8 +89,37 @@ func added(hunks []hunk) (lines []Lines, ok bool) {
 	return lines, true
 }
 
-// Parse reads a hook payload.
-func Parse(stdin []byte) (Event, error) {
+// writeTool are the tools that write a file: the post-write check reads
+// their result. A Read also names a file_path. Write replaces the whole file.
+var writeTool = map[string]bool{"Write": true, "Edit": true, "MultiEdit": true}
+
+// kind is what a hook event, run for tool, is about: Bash is the shell.
+func kind(event, tool string) adapter.Kind {
+	switch event {
+	case "PreToolUse":
+		if tool == "Bash" {
+			return adapter.PreShell
+		}
+		return adapter.PreTool
+	case "PostToolUse":
+		return adapter.PostTool
+	case "SessionStart":
+		return adapter.SessionStart
+	case "SubagentStart":
+		return adapter.SubagentStart
+	}
+	return adapter.Other
+}
+
+// Parse reads a hook payload into an Event: hook_event_name and tool_name
+// make its Kind, Writes and Whole; tool_input.file_path, relative to cwd
+// when it is not absolute, its File; a
+// Bash call's command and run_in_background its Command and Background; a
+// Write's content, an Edit's new_string or each MultiEdit edit's new_string
+// its NewText, with their replace_all; the structuredPatch in Claude Code's
+// response to an Edit or MultiEdit its Added. A SessionStart's source and a
+// SubagentStart's agent_type are its Native, for Loaded.
+func Parse(stdin []byte) (adapter.Event, error) {
 	var p struct {
 		HookEventName string `json:"hook_event_name"`
 		SessionID     string `json:"session_id"`
@@ -151,20 +148,22 @@ func Parse(stdin []byte) (Event, error) {
 	// PowerShell add one when they pipe text; a wrapper must not disarm stele.
 	stdin = bytes.TrimPrefix(stdin, []byte("\xef\xbb\xbf"))
 	if err := json.Unmarshal(stdin, &p); err != nil {
-		return Event{}, err
+		return adapter.Event{}, err
 	}
 	if p.HookEventName == "" {
-		return Event{}, errors.New("not a hook payload: no hook_event_name")
+		return adapter.Event{}, errors.New("not a hook payload: no hook_event_name")
 	}
-	e := Event{
-		Name:      p.HookEventName,
+	e := adapter.Event{
+		Kind:      kind(p.HookEventName, p.ToolName),
+		Writes:    writeTool[p.ToolName],
+		Whole:     p.ToolName == "Write",
 		SessionID: p.SessionID,
 		PromptID:  p.PromptID,
 		AgentID:   p.AgentID,
-		AgentType: p.AgentType,
-		Source:    p.Source,
 		Cwd:       p.Cwd,
-		ToolName:  p.ToolName,
+	}
+	if e.Kind.Starts() {
+		e.Native = start{Source: p.Source, AgentType: p.AgentType}
 	}
 	if p.ToolName == "Bash" {
 		e.Command, e.Background = p.ToolInput.Command, p.ToolInput.RunInBackground
@@ -195,26 +194,12 @@ func Parse(stdin []byte) (Event, error) {
 	return e, nil
 }
 
-// Answer is what stele tells Claude Code.
-type Answer struct {
-	// Deny stops a PreToolUse call. After a PostToolUse it sends Reason back
-	// as decision "block": the write is not undone. Reason is what Claude
-	// reads.
-	Deny   bool
-	Reason string
-	// Ask, when set, makes Claude Code ask the user before a PreToolUse call,
-	// showing Ask in the permission prompt. Deny wins over it, as in Claude
-	// Code. It is ignored after a write.
-	Ask string
-	// Context is added to Claude's context alongside the tool result.
-	Context string
-	// Warning is shown to the user, not to Claude.
-	Warning string
-}
-
 // Render returns the stdout for an answer to the named event, or nil when
-// there is nothing to say. The exit code is always 0.
-func Render(event string, a Answer) []byte {
+// there is nothing to say. The exit code is always 0. Deny is
+// permissionDecision "deny" before a tool and decision "block" after it;
+// Ask is permissionDecision "ask", ignored after a tool; Context is
+// additionalContext, for Claude; Warning is systemMessage, for the user.
+func Render(event string, a adapter.Answer) []byte {
 	type specific struct {
 		HookEventName            string `json:"hookEventName"`
 		PermissionDecision       string `json:"permissionDecision,omitempty"`

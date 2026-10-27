@@ -3,6 +3,8 @@ package claudecode
 import (
 	"strings"
 	"testing"
+
+	"github.com/lictor-ai/stele/internal/adapter"
 )
 
 func TestOwnedRules(t *testing.T) {
@@ -47,7 +49,7 @@ func TestSameRules(t *testing.T) {
 	}
 	stale := map[string]string{
 		"a block edited": strings.Replace(string(want), "never exit", "exit at will", 1),
-		"order changed":  string(RenderRules([]Rule{twoRules[1], twoRules[0]})),
+		"order changed":  string(RenderRules([]adapter.Rule{twoRules[1], twoRules[0]})),
 		"a rule missing": string(RenderRules(twoRules[:1])),
 		"no header":      strings.SplitN(string(want), "\n", 2)[1],
 		"a duplicate":    string(want) + "\n<!-- stele rule r2 -->\nNever put credentials in code.\nRead them from the environment.\n",
@@ -63,7 +65,7 @@ func TestSameRules(t *testing.T) {
 // in a rule could hide the rest of it from the agent while its hash counts it
 // as read.
 func TestRuleHashCommentMarkers(t *testing.T) {
-	for _, r := range []Rule{
+	for _, r := range []adapter.Rule{
 		{ID: "a", Body: "Before <!-- hidden after"},
 		{ID: "b", Body: "Ends a comment --> here"},
 		{ID: "c", Scope: []string{"src/<!--/**"}, Body: "x"},
@@ -73,7 +75,7 @@ func TestRuleHashCommentMarkers(t *testing.T) {
 			t.Errorf("RuleHash(%+v) = %q, want none", r, h)
 		}
 	}
-	if RuleHash(Rule{ID: "e", Body: "A plain rule <with> angle brackets."}) == "" {
+	if RuleHash(adapter.Rule{ID: "e", Body: "A plain rule <with> angle brackets."}) == "" {
 		t.Error("a plain rule got no hash")
 	}
 }

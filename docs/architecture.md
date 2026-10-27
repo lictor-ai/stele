@@ -50,7 +50,7 @@ internal/status/      stele status: describe the install as JSON
 internal/publish/     stele publish: stele.md to a git repository as a merge request (D64–D66)
 internal/check/       the Checker slot: stele check's runner and report
   regex/              the built-in regex checker
-internal/adapter/     the agent adapter slot: the Adapter interface
+internal/adapter/     the agent adapter slot: the Adapter interface, the agent-neutral types
   claudecode/         the built-in Claude Code adapter
 internal/install/     init, uninstall, markers, version stamp
   assets/             embedded templates — must live here, see §9
@@ -367,7 +367,7 @@ read-only or open rules file never slows or fails a write. `stele compile` and
 `init` wait as before.
 
 `stele compile`, `init` and `stele check` also note a rules file over 40,000
-characters (`claudecode.MaxRulesChars`): every session loads it whole. The note
+characters (the adapter's `MaxRulesChars`): every session loads it whole. The note
 changes no exit code.
 
 The `Plan`/`Apply` split is what makes `stele check` possible: CI runs `Plan`,
@@ -542,7 +542,7 @@ Pure, as in §2.
 ```go
 type Rule struct {
     ID, Text string
-    Hash     string // the rule's block hash in the rules file (claudecode.RuleHash); "" never counts as loaded
+    Hash     string // the rule's block hash in the rules file (Adapter.RuleHash); "" never counts as loaded
 }
 
 type Input struct {
@@ -962,47 +962,116 @@ without a merge request.
 
 ### `internal/adapter` — the agent adapter slot
 
-Everything that knows one agent's shape. Adapters are always compiled in
-(D44): they run on the hot path, so there is nothing to resolve.
+Everything that knows one agent's shape (ADR-0009). Adapters are always
+compiled in (D44): they run on the hot path, so there is nothing to resolve.
 
-`claudecode` is the only one in v1, so there is no `Adapter` interface yet;
-`cmd/` calls it directly. The interface comes with a second agent.
+`internal/adapter` defines the `Adapter` interface and the agent-neutral types,
+and imports no adapter. `internal/adapter/claudecode` is the only adapter in
+v1. Only it, `cmd/stele/agents.go` (the registry) and
+`internal/install/agent_test.go` (the install tests, which check the real
+adapter's output) import it; `isolation_test.go` fails the build otherwise.
+`stele hook` uses the registry's adapter, so the installed command is
+unchanged.
 
 ```go
+type Kind int // Other, PreTool, PostTool, PreShell, SessionStart, SubagentStart
+func (k Kind) Starts() bool
+
 type Event struct {
-    Name, SessionID, PromptID, AgentID, ToolName string
-    File    string   // absolute path of the file written, or ""
-    NewText []string // Write content, Edit new_string, each MultiEdit new_string
-    ReplaceAll []bool // each NewText's replace_all
-    Added   []Lines  // from tool_response.structuredPatch: the lines added
-    Patched bool     // false: no patch that adds up; Added means nothing
+    Kind                         Kind
+    SessionID, PromptID, AgentID string
+    Cwd                          string
+    Writes     bool     // the tool writes File; a read does not
+    Whole      bool     // the tool replaced the whole file
+    File       string   // absolute, or ""
+    Command    string   // PreShell: read, never run (#57)
+    Background bool
+    NewText    []string // what the tool put in the file, one per edit
+    ReplaceAll []bool   // each NewText's replace-all
+    Added      []Lines  // the lines added, from the agent's own patch
+    Patched    bool     // false: no patch to trust; Added means nothing
+    Native     any      // the adapter's own reading, read only by its methods
 }
 
 type Lines struct{ First, Last int }
 
 type Answer struct {
-    Deny    bool   // PreToolUse: deny; PostToolUse: decision "block", the write stays
+    Deny    bool   // before a tool: deny; after it: a block, the write stays
     Reason  string // what the agent reads when denied
-    Context string // additionalContext: alongside the tool result
-    Warning string // systemMessage: to the user
+    Ask     string // before a tool: ask the user, showing this
+    Context string // alongside the tool result, for the agent
+    Warning string // to the user
 }
 
-func Parse(stdin []byte) (Event, error)
-func Render(event string, a Answer) []byte // nil when there is nothing to say
+type Switches struct{ RemindOff, CheckOff bool } // zero: both on (ADR-0006)
+type Rule struct{ ID string; Scope []string; Body string }
+type Words struct{ Agent, Shell, WriteTools, WriteInstead string }
+
+type Adapter interface {
+    // The hook protocol.
+    Parse(stdin []byte) (Event, error)
+    Render(ev Event, a Answer) []byte                     // nil when there is nothing to say
+    HookArgs(args []string) (version string, sw Switches) // stele hook's own --installed= and switches
+
+    // What the agent loaded at a start event, from root's rules file.
+    Loaded(ev Event, root string) (agent string, launch, ok bool)
+
+    // Install.
+    SettingsFile() string
+    Hooks() []string
+    Install(settings []byte, version string, sw Switches) (out []byte, changed bool, notes []string, err error)
+    Uninstall(settings []byte) (out []byte, removed int, empty bool, err error)
+    Installed(settings []byte) (version string, sw Switches, ok bool)
+    OtherSteleHook(settings []byte, version string, sw Switches) bool
+
+    // Files that configure the agent: a write to one asks the user first.
+    Settings() []string     // project files, slash paths, at any depth
+    UserSettings() []string // absolute; nil when unknown
+
+    // The rules file the agent loads at launch (#68).
+    RulesFile() string
+    MaxRulesFile() int64
+    MaxRulesChars() int
+    RenderRules(rules []Rule) []byte
+    RuleHash(r Rule) string
+    ReadRules(data []byte) map[string]string
+    OwnedRules(data []byte) bool
+    SameRules(disk, want []byte) bool
+
+    // Words.
+    Words() Words
+    SessionContext() string
+}
 ```
 
-It owns everything in §4: the payload fields, the `hookSpecificOutput` shape and
-the `.claude/settings.json` hook entries `init` writes (#12):
+The neutral flow in `cmd/stele` decides; the adapter translates. The neutral
+flow is the root, the index, scope, the backstop, session state, checks,
+stele's own files and the policy. The adapter is the hook protocol (§4 is
+Claude Code's, from payload to `hookSpecificOutput`), install (the settings
+file, the hook entries, their stamp and switches), the rules file the agent
+loads at launch, and what the agent loaded at a start event: for Claude Code,
+a startup or a resume launches, a compaction, a clear or a `general-purpose`
+subagent reloads, and only a session whose cwd is the root is primed. It also
+lists the files that configure the agent, which the guard asks about before a
+write, and gives the words messages name the agent and its tools with, and the
+session context.
+
+`claudecode` implements it so. `Parse` makes a `PreToolUse` for Bash a
+`PreShell`, any other `PreToolUse` a `PreTool`, and a `PostToolUse` a
+`PostTool`; `Writes` is Write, Edit and MultiEdit, `Whole` is Write. A start
+event's `source` and `agent_type` are its `Native`. `Render` maps the kind back
+to the event name. It owns everything in §4: the payload fields, the
+`hookSpecificOutput` shape and the `.claude/settings.json` hook entries `init`
+writes (#12), with the package functions the methods call:
 
 ```go
 var SettingsFile = ".claude/settings.json"
-type Switches struct{ RemindOff, CheckOff bool } // zero: both on (ADR-0006)
-func Install(settings []byte, version string, sw Switches) (out []byte, changed bool, notes []string, err error)
+func Install(settings []byte, version string, sw adapter.Switches) (out []byte, changed bool, notes []string, err error)
 func Uninstall(settings []byte) (out []byte, removed int, empty bool, err error)
-func Installed(settings []byte) (version string, sw Switches, ok bool)
-func InstalledVersion(args []string) string                            // stele hook's own --installed=
-func HookSwitches(args []string) Switches                              // stele hook's own --remind=, --check=
-func OtherSteleHook(settings []byte, version string, sw Switches) bool // one init would not write
+func Installed(settings []byte) (version string, sw adapter.Switches, ok bool)
+func InstalledVersion(args []string) string                                    // stele hook's own --installed=
+func HookSwitches(args []string) adapter.Switches                              // stele hook's own --remind=, --check=
+func OtherSteleHook(settings []byte, version string, sw adapter.Switches) bool // one init would not write
 ```
 
 A switch that is off is a flag after the stamp, in this order:
@@ -1024,9 +1093,8 @@ It also owns the rules file Claude Code loads at launch (#68, ADR-0005):
 
 ```go
 const RulesFile = ".claude/rules/stele-rules.md"
-type Rule struct{ ID string; Scope []string; Body string }
-func RenderRules(rules []Rule) []byte          // the whole file, from assets/rules-file.tmpl
-func RuleHash(r Rule) string                   // what ReadRules gives r's block; "" if it cannot read back
+func RenderRules(rules []adapter.Rule) []byte  // the whole file, from assets/rules-file.tmpl
+func RuleHash(r adapter.Rule) string           // what ReadRules gives r's block; "" if it cannot read back
 func ReadRules(data []byte) map[string]string  // rule id → hash of its block, as the agent read it
 func OwnedRules(data []byte) bool              // its first line is stele's generated header
 func SameRules(disk, want []byte) bool         // owned, and the same ordered (id, hash) list
@@ -1043,16 +1111,16 @@ and reads it back, so the two sides agree by construction, and a body holding a
 marker line hashes to nothing. So does a rule whose body or scope holds `<!--`
 or `-->`: Claude Code may hide HTML comments when it loads the file, and an
 unclosed one could hide the rest of the rule while its hash counts it as read.
-The template lives in the adapter, not in
-`internal/install/assets`, because `install` imports the adapter.
+The template lives in the adapter, with `session-context.tmpl`: both are Claude
+Code's.
 
 ### `internal/install`
 
 ```go
 type Set struct{ Remind, Check *bool } // nil keeps the installed switch
-func Init(root, version string, set Set) (changes, notes []string, err error)
-func InstalledSwitches(root string) (claudecode.Switches, bool)
-func Uninstall(root string) (changes, notes []string, err error)
+func Init(a adapter.Adapter, root, version string, set Set) (changes, notes []string, err error)
+func InstalledSwitches(a adapter.Adapter, root string) (adapter.Switches, bool)
+func Uninstall(a adapter.Adapter, root string) (changes, notes []string, err error)
 func Header(version string) []byte // the comment a new stele.md starts with
 func Older(a, b string) bool       // release a comes before b, by semver precedence
 ```
@@ -1286,7 +1354,8 @@ stele's header primes nothing. The race is accepted: if stele rewrites the file
 between Claude Code's read and the hook's, the hook records the newer text,
 for rules that changed in those milliseconds.
 
-It primes only when Claude Code runs in the root itself (`cwd` is the root):
+It primes only when Claude Code runs in the root itself (`cwd` is the root;
+`claudecode.Loaded`, behind `Adapter.Loaded`):
 whether a session in a subdirectory loads the root's file is not measured, and
 priming a rule the agent did not load is the one unsafe mistake.
 
@@ -1565,6 +1634,7 @@ internal/install/assets/
   ask-message.tmpl       → the prompt before a write to stele's own files (#52)
 internal/adapter/claudecode/assets/
   rules-file.tmpl        → .claude/rules/stele-rules.md, the rules Claude Code loads at launch (#68)
+  session-context.tmpl   → the context at a session's or subagent's start (#50)
 ```
 
 `.stele/.gitignore` is one line, `*`, written by `index.EnsureDir`, which both

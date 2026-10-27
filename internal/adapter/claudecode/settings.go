@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/lictor-ai/stele/internal/adapter"
 )
 
 // SettingsFile is where init registers the hooks, relative to the root: the
@@ -109,15 +111,6 @@ func (h handler) runsStele() bool {
 	return name == "stele"
 }
 
-// Switches are the parts of the write hooks a project turned off with stele
-// init (ADR-0006, ADR-0008). The zero value is both on, the default.
-type Switches struct {
-	// RemindOff: before a write, never deny it to show the rules.
-	RemindOff bool
-	// CheckOff: after a write, never check it.
-	CheckOff bool
-}
-
 // The switch flags. A switch that is on is never written.
 const (
 	remindOff = "--remind=off"
@@ -125,7 +118,7 @@ const (
 )
 
 // flags are the words init writes after the stamp, in this order.
-func (s Switches) flags() []string {
+func flags(s adapter.Switches) []string {
 	var f []string
 	if s.RemindOff {
 		f = append(f, remindOff)
@@ -136,36 +129,25 @@ func (s Switches) flags() []string {
 	return f
 }
 
-// String is how init shows the switches: "remind on, check off".
-func (s Switches) String() string {
-	state := func(off bool) string {
-		if off {
-			return "off"
-		}
-		return "on"
-	}
-	return "remind " + state(s.RemindOff) + ", check " + state(s.CheckOff)
-}
-
 // stamp returns the version and switches on a handler init wrote: exactly
 // stele hook --installed=<version>, then the flags of the switches that are
 // off, in init's order, nothing else. ok is false for any other handler,
 // including a stele hook written by hand or one the user added to.
-func (h handler) stamp() (version string, sw Switches, ok bool) {
+func (h handler) stamp() (version string, sw adapter.Switches, ok bool) {
 	w := h.words()
 	if !h.runsStele() || len(w) < 3 || !strings.HasPrefix(w[2], installedFlag) {
-		return "", Switches{}, false
+		return "", adapter.Switches{}, false
 	}
 	sw = HookSwitches(w[3:])
-	if !slices.Equal(w[3:], sw.flags()) {
-		return "", Switches{}, false
+	if !slices.Equal(w[3:], flags(sw)) {
+		return "", adapter.Switches{}, false
 	}
 	return strings.TrimPrefix(w[2], installedFlag), sw, true
 }
 
 // command is the command init writes for version and switches.
-func command(version string, sw Switches) string {
-	return strings.Join(append([]string{"stele", "hook", installedFlag + version}, sw.flags()...), " ")
+func command(version string, sw adapter.Switches) string {
+	return strings.Join(append([]string{"stele", "hook", installedFlag + version}, flags(sw)...), " ")
 }
 
 // Install returns settings with stele's hooks on every event of
@@ -176,7 +158,7 @@ func command(version string, sw Switches) string {
 // handler is removed and one group per event appended. notes name stele
 // hooks written by hand, which are left alone. Malformed settings are an
 // error, never rewritten.
-func Install(settings []byte, version string, sw Switches) (out []byte, changed bool, notes []string, err error) {
+func Install(settings []byte, version string, sw adapter.Switches) (out []byte, changed bool, notes []string, err error) {
 	f, err := parseSettings(settings)
 	if err != nil {
 		return nil, false, nil, err
@@ -240,10 +222,10 @@ func Uninstall(settings []byte) (out []byte, removed int, empty bool, err error)
 }
 
 // Installed returns the version and switches on stele's hooks.
-func Installed(settings []byte) (version string, sw Switches, ok bool) {
+func Installed(settings []byte) (version string, sw adapter.Switches, ok bool) {
 	f, err := parseSettings(settings)
 	if err != nil {
-		return "", Switches{}, false
+		return "", adapter.Switches{}, false
 	}
 	for _, ev := range events {
 		for _, g := range f.groups[ev] {
@@ -254,14 +236,14 @@ func Installed(settings []byte) (version string, sw Switches, ok bool) {
 			}
 		}
 	}
-	return "", Switches{}, false
+	return "", adapter.Switches{}, false
 }
 
 // OtherSteleHook reports whether settings run stele hook, on any event, other
 // than as init writes it for version and sw. Claude Code runs identical
 // handlers once, so only another one makes stele run twice. Unreadable
 // settings run nothing stele can see.
-func OtherSteleHook(settings []byte, version string, sw Switches) bool {
+func OtherSteleHook(settings []byte, version string, sw adapter.Switches) bool {
 	var s struct {
 		Hooks map[string][]struct {
 			Hooks []handler `json:"hooks"`
@@ -296,8 +278,8 @@ func InstalledVersion(args []string) string {
 // HookSwitches reads the switches from stele hook's own arguments. The last
 // of --remind=on|off wins, likewise --check; anything else is ignored, so a
 // newer stele's flags leave an older one with both on.
-func HookSwitches(args []string) Switches {
-	var sw Switches
+func HookSwitches(args []string) adapter.Switches {
+	var sw adapter.Switches
 	for _, a := range args {
 		switch a {
 		case remindOff:

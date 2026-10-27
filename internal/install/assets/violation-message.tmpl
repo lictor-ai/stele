@@ -1,7 +1,7 @@
 {{if .Blocking -}}
-stele checked your write to {{.Path}}: it breaks these project rules. The write was saved; fix these lines now, without changing code outside your task. Write files with Write and Edit only, not through Bash.
+stele checked your write to {{.Path}}: it breaks these project rules. The write was saved; fix these lines now, without changing code outside your task. Write files with {{.Words.WriteTools}} only, not through {{.Words.Shell}}.
 {{- else -}}
-stele checked your write to {{.Path}}: these non-blocking rules flag it; fix them if they are part of your change. Write files with Write and Edit only, not through Bash.
+stele checked your write to {{.Path}}: these non-blocking rules flag it; fix them if they are part of your change. Write files with {{.Words.WriteTools}} only, not through {{.Words.Shell}}.
 {{- end}}
 {{range .Violations}}
 {{$.Path}}:{{.Line}}:{{.Column}}: rule {{.RuleID}} "{{.Excerpt}}"{{if ne .Message .Excerpt}}: {{.Message}}{{end}}

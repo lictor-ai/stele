@@ -1,6 +1,6 @@
 stele paused this write to {{.Path}}: this project has rules for it that you have not seen in this turn.
 
-Read them, make sure your change follows them, then retry the same write. It will go through. Each rule is shown once per turn. Write files with Write and Edit only, not through Bash.
+Read them, make sure your change follows them, then retry the same write. It will go through. Each rule is shown once per turn. Write files with {{.Words.WriteTools}} only, not through {{.Words.Shell}}.
 {{- if .Note}}
 
 Note: {{.Note}}

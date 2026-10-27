@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+
+	"github.com/lictor-ai/stele/internal/adapter"
 )
 
 // RulesFile is where stele writes the project's rules for Claude Code to load
@@ -21,13 +23,6 @@ const RulesFile = ".claude/rules/stele-rules.md"
 // MaxRulesFile caps a read of RulesFile. stele.md is capped at 4 MiB; its
 // rules rendered with their scopes stay well under this.
 const MaxRulesFile = 16 << 20
-
-// Rule is one rule as the file shows it.
-type Rule struct {
-	ID    string
-	Scope []string
-	Body  string
-}
 
 // rulesFile is the file's text. It is a file, not a string in the code: it is
 // what the agent reads before its first prompt.
@@ -45,8 +40,8 @@ var marker = regexp.MustCompile(`^<!-- stele rule ([A-Za-z0-9._:-]{1,128}) -->$`
 
 // RenderRules returns the file for rules, in their order. A rule whose id
 // cannot be a marker is left out, and stays covered by the hook's deny.
-func RenderRules(rules []Rule) []byte {
-	var keep []Rule
+func RenderRules(rules []adapter.Rule) []byte {
+	var keep []adapter.Rule
 	for _, r := range rules {
 		if marker.MatchString("<!-- stele rule " + r.ID + " -->") {
 			keep = append(keep, r)
@@ -65,7 +60,7 @@ func RenderRules(rules []Rule) []byte {
 // Claude Code may hide comments when it loads the file, and an unclosed one
 // could hide the rest of the rule from the agent. Such a rule is never taken
 // as read.
-func RuleHash(r Rule) string {
+func RuleHash(r adapter.Rule) string {
 	for _, s := range append([]string{r.Body}, r.Scope...) {
 		if strings.Contains(s, "<!--") || strings.Contains(s, "-->") {
 			return ""

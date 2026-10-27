@@ -197,7 +197,7 @@ func ownedFiles(root string, files []string) ([]string, []subproject) {
 	bySub := map[string]*subproject{}
 	var subs []subproject
 	for _, f := range files {
-		if check.Own(f) {
+		if own(f) {
 			continue
 		}
 		o := ownerOf(path.Dir(f))

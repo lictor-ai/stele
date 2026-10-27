@@ -378,9 +378,10 @@ func known(cs map[string]Checker) string {
 }
 
 // ownFiles are stele's own files. A rule is never checked against them: a
-// pattern quoted in stele.md would otherwise flag stele.md itself, and the
-// rules file Claude Code loads (#68), which holds every rule's text.
-var ownFiles = []string{"/stele.md", "/stele.json", "/stele.lock", "/" + index.Dir + "/", "/.claude/rules/stele-rules.md"}
+// pattern quoted in stele.md would otherwise flag stele.md itself. The files
+// compile generates for an agent, such as the rules file it loads (#68),
+// which holds every rule's text, are skipped by the caller, which knows them.
+var ownFiles = []string{"/stele.md", "/stele.json", "/stele.lock", "/" + index.Dir + "/"}
 
 // Own reports whether file, relative to the root, is one of stele's own.
 func Own(file string) bool {

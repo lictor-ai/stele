@@ -36,7 +36,7 @@ const RetryAfter = 500 * time.Millisecond
 type Rule struct {
 	ID   string
 	Text string // what the agent is shown
-	// Hash is the hash of the rule's block in the rules file Claude Code
+	// Hash is the hash of the rule's block in the rules file the agent
 	// loads at launch (#68); "" when it can never count as loaded.
 	Hash string
 }

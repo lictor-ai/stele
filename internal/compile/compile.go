@@ -41,7 +41,7 @@ type Result struct {
 }
 
 // Generated is a file compile writes from the index for an agent to load,
-// such as Claude Code's rules file (#68). compile knows its path and its
+// such as the rules file an agent loads (#68). compile knows its path and its
 // bytes, never its format.
 type Generated struct {
 	Path   string // relative to the root, slash-separated

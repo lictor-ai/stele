@@ -5,6 +5,8 @@ import (
 	"strings"
 	"text/template"
 	"unicode/utf8"
+
+	"github.com/lictor-ai/stele/internal/adapter"
 )
 
 // blockMessage is what the agent reads when the hook pauses a write to show
@@ -21,58 +23,61 @@ type BlockRule struct {
 	ID, Text string
 }
 
-// BlockMessage renders the message for a write to path that needs rules. note,
-// when set, says something the agent should know, such as stele.md failing to
-// parse.
-func BlockMessage(path string, rules []BlockRule, note string) string {
-	return BlockMessageMore(path, rules, 0, note)
+// BlockMessage renders the message for a write to path that needs rules, w
+// naming the agent's tools. note, when set, says something the agent should
+// know, such as stele.md failing to parse.
+func BlockMessage(w adapter.Words, path string, rules []BlockRule, note string) string {
+	return BlockMessageMore(w, path, rules, 0, note)
 }
 
 // BlockMessageMore is BlockMessage with more rules left out, counted.
-func BlockMessageMore(path string, rules []BlockRule, more int, note string) string {
+func BlockMessageMore(w adapter.Words, path string, rules []BlockRule, more int, note string) string {
 	var b strings.Builder
 	err := blockTemplate.Execute(&b, struct {
+		Words adapter.Words
 		Path  string
 		Rules []BlockRule
 		More  int
 		Note  string
-	}{path, rules, more, note})
+	}{w, path, rules, more, note})
 	if err != nil {
 		panic(err) // the template is compiled in and tested
 	}
 	return strings.TrimSpace(b.String())
 }
 
-// bashMessage is what the agent reads when the hook stops a Bash command
-// that writes files with rules (#57): use Write or Edit, which stele sees.
+// bashMessage is what the agent reads when the hook stops a shell command
+// that writes files with rules (#57): use the write tools, which stele sees.
 //
 //go:embed assets/bash-message.tmpl
 var bashMessage string
 
 var bashTemplate = template.Must(template.New("bash-message").Parse(bashMessage))
 
-// BashMessage renders the message for a Bash command that writes paths.
-// rules are those the agent has not seen; note is as for BlockMessage.
-func BashMessage(paths []string, rules []BlockRule, note string) string {
-	return BashMessageMore(paths, rules, 0, note)
+// BashMessage renders the message for a shell command that writes paths.
+// rules are those the agent has not seen; w and note are as for
+// BlockMessage.
+func BashMessage(w adapter.Words, paths []string, rules []BlockRule, note string) string {
+	return BashMessageMore(w, paths, rules, 0, note)
 }
 
 // BashMessageMore is BashMessage with more rules left out, counted.
-func BashMessageMore(paths []string, rules []BlockRule, more int, note string) string {
+func BashMessageMore(w adapter.Words, paths []string, rules []BlockRule, more int, note string) string {
 	var b strings.Builder
 	err := bashTemplate.Execute(&b, struct {
+		Words adapter.Words
 		Paths string
 		Rules []BlockRule
 		More  int
 		Note  string
-	}{strings.Join(paths, ", "), rules, more, note})
+	}{w, strings.Join(paths, ", "), rules, more, note})
 	if err != nil {
 		panic(err) // the template is compiled in and tested
 	}
 	return strings.TrimSpace(b.String())
 }
 
-// askMessage is what the user reads in Claude Code's permission prompt when
+// askMessage is what the user reads in the agent's permission prompt when
 // the agent writes one of stele's own files.
 //
 //go:embed assets/ask-message.tmpl
@@ -80,10 +85,14 @@ var askMessage string
 
 var askTemplate = template.Must(template.New("ask-message").Parse(askMessage))
 
-// AskMessage renders the prompt for a write to path, one of stele's own files.
-func AskMessage(path string) string {
+// AskMessage renders the prompt for a write to path, one of stele's own
+// files, w naming the agent.
+func AskMessage(w adapter.Words, path string) string {
 	var b strings.Builder
-	if err := askTemplate.Execute(&b, struct{ Path string }{path}); err != nil {
+	if err := askTemplate.Execute(&b, struct {
+		Words adapter.Words
+		Path  string
+	}{w, path}); err != nil {
 		panic(err) // the template is compiled in and tested
 	}
 	return strings.TrimSpace(b.String())
@@ -104,69 +113,61 @@ type Violation struct {
 	RuleID, Excerpt, Message string
 }
 
-// MaxMessage bounds a violation message, in bytes. Claude Code passes a hook
-// text on in full only up to 10,000 characters; past that Claude sees a
-// preview.
+// MaxMessage bounds a violation message, in bytes, for every agent. The
+// number is Claude Code's: it passes a hook text on in full only up to
+// 10,000 characters; past that Claude sees a preview.
 const MaxMessage = 9000
 
 // maxRuleMessage bounds one rule's message, in characters.
 const maxRuleMessage = 200
 
 // ViolationMessage renders the message for violations found in a write to
-// path. more counts those left out. blocking picks the wording: fix these
-// now, or fix them if they are part of the change. A rule's message is cut
-// to maxRuleMessage characters, and violations are left out, counted in
-// more, until the whole fits in MaxMessage.
-func ViolationMessage(path string, vs []Violation, more int, blocking bool) string {
-	return ViolationMessageWithin(path, vs, more, blocking, MaxMessage)
+// path, w naming the agent's tools. more counts those left out. blocking
+// picks the wording: fix these now, or fix them if they are part of the
+// change. A rule's message is cut to maxRuleMessage characters, and
+// violations are left out, counted in more, until the whole fits in
+// MaxMessage.
+func ViolationMessage(w adapter.Words, path string, vs []Violation, more int, blocking bool) string {
+	return ViolationMessageWithin(w, path, vs, more, blocking, MaxMessage)
 }
 
 // ViolationMessageWithin is ViolationMessage fitting in limit bytes, for a
 // message that shares its text with others. With no violation left it may
 // still be longer.
-func ViolationMessageWithin(path string, vs []Violation, more int, blocking bool, limit int) string {
+func ViolationMessageWithin(w adapter.Words, path string, vs []Violation, more int, blocking bool, limit int) string {
 	cut := make([]Violation, len(vs))
 	for i, v := range vs {
 		v.Message = truncate(v.Message, maxRuleMessage)
 		cut[i] = v
 	}
 	for n := len(cut); ; n-- {
-		s := renderViolations(path, cut[:n], more+len(cut)-n, blocking)
+		s := renderViolations(w, path, cut[:n], more+len(cut)-n, blocking)
 		if len(s) <= limit || n == 0 {
 			return s
 		}
 	}
 }
 
-func renderViolations(path string, vs []Violation, more int, blocking bool) string {
+func renderViolations(w adapter.Words, path string, vs []Violation, more int, blocking bool) string {
 	var b strings.Builder
 	err := violationTemplate.Execute(&b, struct {
+		Words      adapter.Words
 		Path       string
 		Violations []Violation
 		More       int
 		Blocking   bool
-	}{path, vs, more, blocking})
+	}{w, path, vs, more, blocking})
 	if err != nil {
 		panic(err) // the template is compiled in and tested
 	}
 	return strings.TrimSpace(b.String())
 }
 
-// sessionContext is what the agent reads at the start of a session or
-// subagent in a stele project: write files with Write and Edit, which stele
-// sees, not through Bash, which it does not (#50).
-//
-//go:embed assets/session-context.tmpl
-var sessionContext string
-
-// SessionContext returns the text the agent reads when a session or subagent
-// starts.
-func SessionContext() string { return strings.TrimSpace(sessionContext) }
-
 // FitRules returns how many of n rules, kept whole and in order, fit in a
 // message within limit bytes; render renders it with the first k. Rules are
-// not cut: Claude Code passes a hook text on in full only up to 10,000
-// characters, and a rule cut off in a preview would count as shown. It is 0
+// not cut: an agent may pass a hook text on in full only up to a size (Claude
+// Code's is 10,000 characters), and a rule cut off in a preview would count
+// as shown. It is 0
 // when not even one fits.
 func FitRules(n, limit int, render func(k int) string) int {
 	lo, hi := 0, n // the answer is in [lo, hi]

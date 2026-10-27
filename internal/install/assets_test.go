@@ -7,7 +7,7 @@ import (
 )
 
 func TestBlockMessage(t *testing.T) {
-	got := BlockMessage("internal/db/query.go", []BlockRule{
+	got := BlockMessage(ccWords, "internal/db/query.go", []BlockRule{
 		{ID: "a", Text: "Never build SQL by string concatenation."},
 		{ID: "b", Text: "Log through the shared logger."},
 	}, "")
@@ -24,7 +24,7 @@ func TestBlockMessage(t *testing.T) {
 	if strings.Contains(got, "Note:") {
 		t.Errorf("message has a note when none was given:\n%s", got)
 	}
-	if note := BlockMessage("x.go", []BlockRule{{Text: "r"}}, "stele.md:3: rule has no body"); !strings.Contains(note, "Note: stele.md:3: rule has no body") {
+	if note := BlockMessage(ccWords, "x.go", []BlockRule{{Text: "r"}}, "stele.md:3: rule has no body"); !strings.Contains(note, "Note: stele.md:3: rule has no body") {
 		t.Errorf("note missing:\n%s", note)
 	}
 }
@@ -34,9 +34,9 @@ func TestBlockMessage(t *testing.T) {
 func TestMessagesSayWriteAndEdit(t *testing.T) {
 	const want = "Write files with Write and Edit only, not through Bash."
 	for name, s := range map[string]string{
-		"block":               BlockMessage("a.go", []BlockRule{{Text: "r"}}, ""),
-		"violation":           ViolationMessage("a.go", []Violation{{Line: 1, Column: 1, RuleID: "r", Excerpt: "e", Message: "e"}}, 0, true),
-		"violation, no block": ViolationMessage("a.go", []Violation{{Line: 1, Column: 1, RuleID: "r", Excerpt: "e", Message: "e"}}, 0, false),
+		"block":               BlockMessage(ccWords, "a.go", []BlockRule{{Text: "r"}}, ""),
+		"violation":           ViolationMessage(ccWords, "a.go", []Violation{{Line: 1, Column: 1, RuleID: "r", Excerpt: "e", Message: "e"}}, 0, true),
+		"violation, no block": ViolationMessage(ccWords, "a.go", []Violation{{Line: 1, Column: 1, RuleID: "r", Excerpt: "e", Message: "e"}}, 0, false),
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("%s message lacks %q:\n%s", name, want, s)
@@ -58,20 +58,20 @@ func TestFitRules(t *testing.T) {
 // Rules left out of a message are counted, and said to come next.
 func TestMessagesCountRulesLeftOut(t *testing.T) {
 	for name, s := range map[string]string{
-		"block": BlockMessageMore("a.go", []BlockRule{{Text: "r"}}, 2, ""),
-		"bash":  BashMessageMore([]string{"a.go"}, []BlockRule{{Text: "r"}}, 2, ""),
+		"block": BlockMessageMore(ccWords, "a.go", []BlockRule{{Text: "r"}}, 2, ""),
+		"bash":  BashMessageMore(ccWords, []string{"a.go"}, []BlockRule{{Text: "r"}}, 2, ""),
 	} {
 		if !strings.Contains(s, "2 more rules") || !strings.Contains(s, "next write") {
 			t.Errorf("%s message does not count the rules left out:\n%s", name, s)
 		}
 	}
-	if s := BlockMessage("a.go", []BlockRule{{Text: "r"}}, ""); strings.Contains(s, "more rules") {
+	if s := BlockMessage(ccWords, "a.go", []BlockRule{{Text: "r"}}, ""); strings.Contains(s, "more rules") {
 		t.Errorf("nothing left out, yet:\n%s", s)
 	}
 }
 
 func TestBashMessage(t *testing.T) {
-	got := BashMessage([]string{"internal/x.go", "a.go"}, []BlockRule{{ID: "a", Text: "Never build SQL by string concatenation."}}, "")
+	got := BashMessage(ccWords, []string{"internal/x.go", "a.go"}, []BlockRule{{ID: "a", Text: "Never build SQL by string concatenation."}}, "")
 	for _, want := range []string{
 		"internal/x.go, a.go",
 		"Write or Edit",
@@ -86,27 +86,15 @@ func TestBashMessage(t *testing.T) {
 	if strings.Contains(got, "Note:") || strings.Contains(got, "{{") {
 		t.Errorf("message is not rendered clean:\n%s", got)
 	}
-	if note := BashMessage([]string{"a.go"}, nil, "stele.md:3: rule has no body"); !strings.Contains(note, "Note: stele.md:3: rule has no body") || strings.Contains(note, "---") {
+	if note := BashMessage(ccWords, []string{"a.go"}, nil, "stele.md:3: rule has no body"); !strings.Contains(note, "Note: stele.md:3: rule has no body") || strings.Contains(note, "---") {
 		t.Errorf("with a note and no rule:\n%s", note)
-	}
-}
-
-func TestSessionContext(t *testing.T) {
-	got := SessionContext()
-	for _, want := range []string{"stele", "Write", "Edit", "Bash", "cat >", "sed -i"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("session context lacks %q:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "{{") || got != strings.TrimSpace(got) {
-		t.Errorf("session context is not rendered clean:\n%q", got)
 	}
 }
 
 // The templates are embedded as checked out; .gitattributes keeps them LF on
 // every platform, so the agent never reads a stray \r.
 func TestAssetsHaveLFLineEnds(t *testing.T) {
-	for name, s := range map[string]string{"block-message": blockMessage, "violation-message": violationMessage, "stele-header.md": steleHeader, "ask-message": askMessage, "session-context": sessionContext, "bash-message": bashMessage} {
+	for name, s := range map[string]string{"block-message": blockMessage, "violation-message": violationMessage, "stele-header.md": steleHeader, "ask-message": askMessage, "bash-message": bashMessage} {
 		if strings.Contains(s, "\r") {
 			t.Errorf("%s.tmpl has CR line ends", name)
 		}
@@ -114,7 +102,7 @@ func TestAssetsHaveLFLineEnds(t *testing.T) {
 }
 
 func TestAskMessage(t *testing.T) {
-	got := AskMessage("sub/stele.json")
+	got := AskMessage(ccWords, "sub/stele.json")
 	for _, want := range []string{"sub/stele.json", "stele's own files", "settings", "asks every time", "only if you asked"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("ask message lacks %q:\n%s", want, got)
@@ -130,7 +118,7 @@ func TestViolationMessage(t *testing.T) {
 		{Line: 3, Column: 7, RuleID: "r1", Excerpt: "Never put credentials in code.", Message: "Never put credentials in code."},
 		{Line: 9, Column: 1, RuleID: "r2", Excerpt: "No TODO comments.", Message: "track it in an issue"},
 	}
-	got := ViolationMessage("internal/db.go", vs, 4, true)
+	got := ViolationMessage(ccWords, "internal/db.go", vs, 4, true)
 	for _, want := range []string{
 		"internal/db.go:3:7: rule r1 \"Never put credentials in code.\"",
 		"internal/db.go:9:1: rule r2 \"No TODO comments.\": track it in an issue",
@@ -154,7 +142,7 @@ func TestViolationMessage(t *testing.T) {
 	for i := range 30 {
 		many = append(many, Violation{Line: i + 1, Column: 1, RuleID: "7f3a2b1c-0000-4000-8000-000000003b21", Excerpt: strings.Repeat("e", 60), Message: long})
 	}
-	big := ViolationMessage("internal/some/long/path/file.go", many, 2, true)
+	big := ViolationMessage(ccWords, "internal/some/long/path/file.go", many, 2, true)
 	if len(big) > MaxMessage {
 		t.Errorf("message is %d bytes, want at most %d", len(big), MaxMessage)
 	}
@@ -166,7 +154,7 @@ func TestViolationMessage(t *testing.T) {
 		t.Errorf("%d of 30 shown, want some cut and counted:\n%s", shown, big[len(big)-200:])
 	}
 
-	soft := ViolationMessage("a.go", vs[1:], 0, false)
+	soft := ViolationMessage(ccWords, "a.go", vs[1:], 0, false)
 	if !strings.Contains(soft, "non-blocking") || strings.Contains(soft, "more") {
 		t.Errorf("non-blocking message:\n%s", soft)
 	}

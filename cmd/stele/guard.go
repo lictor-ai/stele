@@ -2,10 +2,11 @@ package main
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
-	"github.com/lictor-ai/stele/internal/adapter/claudecode"
+	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/install"
 	"github.com/lictor-ai/stele/internal/scope"
@@ -13,32 +14,34 @@ import (
 
 // ownNames are stele's own files at any depth: the root's, a subproject's, or
 // one a write would create to start a subproject, which would have no rules.
-// Claude Code's project settings count too: they load stele's hooks, and
-// Claude Code reloads them mid-session, so an edit can switch stele off at
-// once (#56). So does the rules file the agent loads at launch (#68): an edit
+// The agent's project settings count too: they load stele's hooks, and the
+// agent may reload them mid-session, so an edit can switch stele off at once
+// (#56). So does the rules file the agent loads at launch (#68): an edit
 // there changes the rules it reads.
-var ownNames = []string{
-	"stele.md", enforce.FileName, "stele.lock", ".stele", "**/.stele/",
-	"**/.claude/settings.json", "**/.claude/settings.local.json",
-	"**/" + claudecode.RulesFile,
-}
+var ownNames = append([]string{"stele.md", enforce.FileName, "stele.lock", ".stele", "**/.stele/"}, agentNames()...)
 
-// settingsNames are the files in .claude that Claude Code loads settings from.
-var settingsNames = []string{"settings.json", "settings.local.json"}
+// agentNames are the agent's settings files and rules file, at any depth.
+func agentNames() []string {
+	var names []string
+	for _, p := range append(agent.Settings(), agent.RulesFile()) {
+		names = append(names, "**/"+p)
+	}
+	return names
+}
 
 // guarded reports whether a write to file, rel to root, changes one of
 // stele's own files. Names count at any depth, a subproject's too, and so do
 // symlinks and junctions on the way, followed everywhere. A hard link or an
 // 8.3 short name, which only a same-file test can tell, is caught for the
-// root's stele.md, stele.json, stele.lock, .stele/, .claude settings files
-// and rules file only. A change there
-// can weaken stele or turn it off, so the user is asked every time (#52).
+// root's stele.md, stele.json, stele.lock, .stele/, and the agent's settings
+// files and rules file only. A change there can weaken stele or turn it off,
+// so the user is asked every time (#52).
 func guarded(root, rel, file string) bool {
 	if ownName(rel) {
 		return true
 	}
 	if r, ok := resolve(file); ok && r != file {
-		if _, rrel, ok := target(claudecode.Event{File: r}); ok && ownName(rrel) {
+		if _, rrel, ok := target(r); ok && ownName(rrel) {
 			return true
 		}
 	}
@@ -53,14 +56,14 @@ func guarded(root, rel, file string) bool {
 			}
 		}
 	}
-	// A new settings file in the root's .claude under another name.
-	if dot, err := os.Stat(filepath.Join(root, ".claude")); err == nil {
-		if info, err := os.Stat(filepath.Dir(file)); err == nil && os.SameFile(info, dot) {
-			base := cleanRel(filepath.Base(file))
-			for _, name := range settingsNames {
-				if strings.EqualFold(base, name) {
-					return true
-				}
+	// A new settings file in the root's settings directory under another
+	// name.
+	if info, err := os.Stat(filepath.Dir(file)); err == nil {
+		base := cleanRel(filepath.Base(file))
+		for _, p := range agent.Settings() {
+			dir, err := os.Stat(filepath.Join(root, filepath.FromSlash(path.Dir(p))))
+			if err == nil && os.SameFile(info, dir) && strings.EqualFold(base, path.Base(p)) {
+				return true
 			}
 		}
 	}
@@ -70,9 +73,11 @@ func guarded(root, rel, file string) bool {
 	if err != nil {
 		return false
 	}
-	for _, name := range []string{"stele.md", enforce.FileName, "stele.lock",
-		claudecode.SettingsFile, filepath.Join(".claude", "settings.local.json"),
-		filepath.FromSlash(claudecode.RulesFile)} {
+	names := []string{"stele.md", enforce.FileName, "stele.lock"}
+	for _, p := range append(agent.Settings(), agent.RulesFile()) {
+		names = append(names, filepath.FromSlash(p))
+	}
+	for _, name := range names {
 		if own, err := os.Stat(filepath.Join(root, name)); err == nil && os.SameFile(info, own) {
 			return true
 		}
@@ -107,16 +112,15 @@ func cleanRel(rel string) string {
 	return strings.Join(segs, "/")
 }
 
-// sessionSettings reports whether file is a settings file Claude Code loads
-// for the session in ev.Cwd, when that session is in a stele project (#56):
-// .claude/settings.json and settings.local.json in each directory from the
-// session's up to the top of its git checkout (settings.local.json sits at
-// the git root), and the user's settings.json, which applies everywhere.
-func sessionSettings(ev claudecode.Event, file string) bool {
-	if ev.Cwd == "" {
+// sessionSettings reports whether file is a settings file the agent loads
+// for the session in cwd, when that session is in a stele project (#56): the
+// agent's project settings in each directory from the session's up to the
+// top of its git checkout, and the user's settings, which apply everywhere.
+func sessionSettings(cwd, file string) bool {
+	if cwd == "" {
 		return false
 	}
-	root, _, ok := target(claudecode.Event{File: filepath.Join(ev.Cwd, "x")})
+	root, _, ok := target(filepath.Join(cwd, "x"))
 	if !ok {
 		return false
 	}
@@ -124,11 +128,11 @@ func sessionSettings(ev claudecode.Event, file string) bool {
 	if git, ok := walkUp(root, ".git"); ok {
 		top = git
 	}
-	for d := filepath.Clean(ev.Cwd); ; d = filepath.Dir(d) {
+	for d := filepath.Clean(cwd); ; d = filepath.Dir(d) {
 		if rel, ok := below(d, file); ok {
 			clean := cleanRel(rel)
-			for _, name := range settingsNames {
-				if scope.Match("/.claude/"+name, clean) {
+			for _, p := range agent.Settings() {
+				if scope.Match("/"+p, clean) {
 					return true
 				}
 			}
@@ -137,30 +141,22 @@ func sessionSettings(ev claudecode.Event, file string) bool {
 			break
 		}
 	}
-	cfg := os.Getenv("CLAUDE_CONFIG_DIR")
-	if cfg == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return false
+	for _, u := range agent.UserSettings() {
+		if rel, ok := below(filepath.Dir(u), file); ok && scope.Match("/"+filepath.Base(u), cleanRel(rel)) {
+			return true
 		}
-		cfg = filepath.Join(home, ".claude")
 	}
-	cfg, err := filepath.Abs(cfg) // a relative CLAUDE_CONFIG_DIR is the process's
-	if err != nil {
-		return false
-	}
-	rel, ok := below(cfg, file)
-	return ok && scope.Match("/settings.json", cleanRel(rel))
+	return false
 }
 
 // loadsSettings reports whether a write to file, or through the links on its
 // way, lands on a settings file the session loads.
-func loadsSettings(ev claudecode.Event, file string) bool {
-	if sessionSettings(ev, file) {
+func loadsSettings(ev adapter.Event, file string) bool {
+	if sessionSettings(ev.Cwd, file) {
 		return true
 	}
 	r, ok := resolve(file)
-	return ok && r != file && sessionSettings(ev, r)
+	return ok && r != file && sessionSettings(ev.Cwd, r)
 }
 
 // below returns file relative to dir, with / separators; ok is false when
@@ -176,21 +172,21 @@ func below(dir, file string) (string, bool) {
 // askOutside answers a write to file outside every stele project: ask when
 // it is a settings file the session loads, or a link leads it to one of a
 // project's own files (#52, #56), else nothing.
-func askOutside(ev claudecode.Event) claudecode.Answer {
-	if !writes[ev.ToolName] {
-		return claudecode.Answer{}
+func askOutside(ev adapter.Event) adapter.Answer {
+	if !ev.Writes {
+		return adapter.Answer{}
 	}
 	if loadsSettings(ev, ev.File) {
-		return claudecode.Answer{Ask: install.AskMessage(showPath(filepath.ToSlash(ev.File)))}
+		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(filepath.ToSlash(ev.File)))}
 	}
 	r, ok := resolve(ev.File)
 	if !ok || r == ev.File {
-		return claudecode.Answer{}
+		return adapter.Answer{}
 	}
-	if root, rel, ok := target(claudecode.Event{File: r}); ok && guarded(root, rel, r) {
-		return claudecode.Answer{Ask: install.AskMessage(showPath(rel))}
+	if root, rel, ok := target(r); ok && guarded(root, rel, r) {
+		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(rel))}
 	}
-	return claudecode.Answer{}
+	return adapter.Answer{}
 }
 
 // maxHops bounds the links resolve follows, against a loop.

@@ -3,9 +3,11 @@ package claudecode
 import (
 	"strings"
 	"testing"
+
+	"github.com/lictor-ai/stele/internal/adapter"
 )
 
-var allSwitches = []Switches{{}, {RemindOff: true}, {CheckOff: true}, {RemindOff: true, CheckOff: true}}
+var allSwitches = []adapter.Switches{{}, {RemindOff: true}, {CheckOff: true}, {RemindOff: true, CheckOff: true}}
 
 func TestCommandStampRoundTrip(t *testing.T) {
 	for _, v := range []string{"v1.2.0", "devel"} {
@@ -16,10 +18,10 @@ func TestCommandStampRoundTrip(t *testing.T) {
 			}
 		}
 	}
-	if got, want := command("v1", Switches{RemindOff: true, CheckOff: true}), "stele hook --installed=v1 --remind=off --check=off"; got != want {
+	if got, want := command("v1", adapter.Switches{RemindOff: true, CheckOff: true}), "stele hook --installed=v1 --remind=off --check=off"; got != want {
 		t.Errorf("command = %q, want %q", got, want)
 	}
-	if got, want := command("v1", Switches{}), "stele hook --installed=v1"; got != want {
+	if got, want := command("v1", adapter.Switches{}), "stele hook --installed=v1"; got != want {
 		t.Errorf("command = %q, want %q", got, want)
 	}
 }
@@ -40,30 +42,30 @@ func TestStampRejects(t *testing.T) {
 }
 
 func TestInstallSwitches(t *testing.T) {
-	plain, changed, _, err := Install(nil, "v1.2.0", Switches{})
+	plain, changed, _, err := Install(nil, "v1.2.0", adapter.Switches{})
 	if err != nil || !changed {
 		t.Fatalf("Install = changed %v, err %v", changed, err)
 	}
-	if out, changed, _, _ := Install(plain, "v1.2.0", Switches{}); changed || string(out) != string(plain) {
+	if out, changed, _, _ := Install(plain, "v1.2.0", adapter.Switches{}); changed || string(out) != string(plain) {
 		t.Errorf("Install with the same switches changed it:\n%s", out)
 	}
-	off, changed, _, err := Install(plain, "v1.2.0", Switches{RemindOff: true})
+	off, changed, _, err := Install(plain, "v1.2.0", adapter.Switches{RemindOff: true})
 	if err != nil || !changed {
 		t.Fatalf("Install remind off = changed %v, err %v", changed, err)
 	}
 	if n := strings.Count(string(off), `"stele hook --installed=v1.2.0 --remind=off"`); n != 4 {
 		t.Errorf("%d handlers carry --remind=off, want 4:\n%s", n, off)
 	}
-	if _, changed, _, _ := Install(off, "v1.2.0", Switches{RemindOff: true}); changed {
+	if _, changed, _, _ := Install(off, "v1.2.0", adapter.Switches{RemindOff: true}); changed {
 		t.Error("Install with the same switches again changed it")
 	}
-	back, changed, _, _ := Install(off, "v1.2.0", Switches{})
+	back, changed, _, _ := Install(off, "v1.2.0", adapter.Switches{})
 	if !changed || string(back) != string(plain) {
 		t.Errorf("Install back to the defaults = changed %v:\n%s", changed, back)
 	}
 	// One handler out of step: rewritten.
 	mixed := strings.Replace(string(off), "--installed=v1.2.0 --remind=off", "--installed=v1.2.0", 1)
-	out, changed, _, _ := Install([]byte(mixed), "v1.2.0", Switches{RemindOff: true})
+	out, changed, _, _ := Install([]byte(mixed), "v1.2.0", adapter.Switches{RemindOff: true})
 	if !changed || string(out) != string(off) {
 		t.Errorf("Install of mixed handlers = changed %v:\n%s", changed, out)
 	}
@@ -83,7 +85,7 @@ func TestInstalledSwitches(t *testing.T) {
 }
 
 func TestUninstallSwitches(t *testing.T) {
-	out, _, _, err := Install(nil, "v1.2.0", Switches{RemindOff: true, CheckOff: true})
+	out, _, _, err := Install(nil, "v1.2.0", adapter.Switches{RemindOff: true, CheckOff: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,14 +96,14 @@ func TestUninstallSwitches(t *testing.T) {
 }
 
 func TestOtherSteleHookSwitches(t *testing.T) {
-	off, _, _, err := Install(nil, "v1.2.0", Switches{RemindOff: true})
+	off, _, _, err := Install(nil, "v1.2.0", adapter.Switches{RemindOff: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if OtherSteleHook(off, "v1.2.0", Switches{RemindOff: true}) {
+	if OtherSteleHook(off, "v1.2.0", adapter.Switches{RemindOff: true}) {
 		t.Error("the same flagged handler counts as another")
 	}
-	if !OtherSteleHook(off, "v1.2.0", Switches{}) {
+	if !OtherSteleHook(off, "v1.2.0", adapter.Switches{}) {
 		t.Error("a handler with other switches does not count as another")
 	}
 }
@@ -109,15 +111,15 @@ func TestOtherSteleHookSwitches(t *testing.T) {
 func TestHookSwitches(t *testing.T) {
 	tests := []struct {
 		args []string
-		want Switches
+		want adapter.Switches
 	}{
-		{nil, Switches{}},
-		{[]string{"--installed=v1"}, Switches{}},
-		{[]string{"--installed=v1", "--remind=off"}, Switches{RemindOff: true}},
-		{[]string{"--check=off", "--remind=off"}, Switches{RemindOff: true, CheckOff: true}},
-		{[]string{"--remind=on"}, Switches{}},
-		{[]string{"--remind=maybe", "--verbose", "x"}, Switches{}},
-		{[]string{"--remind=off", "--remind=on"}, Switches{}},
+		{nil, adapter.Switches{}},
+		{[]string{"--installed=v1"}, adapter.Switches{}},
+		{[]string{"--installed=v1", "--remind=off"}, adapter.Switches{RemindOff: true}},
+		{[]string{"--check=off", "--remind=off"}, adapter.Switches{RemindOff: true, CheckOff: true}},
+		{[]string{"--remind=on"}, adapter.Switches{}},
+		{[]string{"--remind=maybe", "--verbose", "x"}, adapter.Switches{}},
+		{[]string{"--remind=off", "--remind=on"}, adapter.Switches{}},
 	}
 	for _, tt := range tests {
 		if got := HookSwitches(tt.args); got != tt.want {
