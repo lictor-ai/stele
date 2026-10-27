@@ -233,7 +233,28 @@ What it does:
 - **It never asks for a token.** It uses a login you already have, in this order: the `gh` or `glab` login, git's stored credential (Git Credential Manager), then `GITHUB_TOKEN` or `GITLAB_TOKEN`. When none works, it prints the host's page to open the request yourself and tries to open it in the browser.
 - **Nothing changes when the default branch already has this `stele.md`.**
 
-Its working copy of the repository is a bare clone under your user cache directory (`stele/publish/` in it), never in the project. It exits 0 when the branch is pushed, even if the merge request could not be opened, and 1 when nothing was pushed:
+Its working copy of the repository is a bare clone under your user cache directory (`stele/publish/` in it), never in the project.
+
+A first publish, then the same `stele.md` again, then again after the pull request was closed, then after it was merged:
+
+```
+$ stele publish
+pushed branch stele/publish/project-a/stele.md to https://github.com/nacer-noubir/stele-publish-test.git
+merge request opened: https://github.com/nacer-noubir/stele-publish-test/pull/1
+
+$ stele publish
+branch stele/publish/project-a/stele.md in https://github.com/nacer-noubir/stele-publish-test.git already has this stele.md
+merge request found: https://github.com/nacer-noubir/stele-publish-test/pull/1
+
+$ stele publish
+branch stele/publish/project-a/stele.md in https://github.com/nacer-noubir/stele-publish-test.git already has this stele.md
+merge request reopened: https://github.com/nacer-noubir/stele-publish-test/pull/1
+
+$ stele publish
+project-a/stele.md on main in https://github.com/nacer-noubir/stele-publish-test.git is already this stele.md: nothing to publish
+```
+
+It exits 0 in all of these, and also when the branch is pushed but the merge request could not be opened. It exits 1 when it stops on an error, and pushes nothing:
 
 ```
 $ stele publish
@@ -243,6 +264,11 @@ stele publish: stele.md has changes that are not committed; commit it first
 ```
 $ stele publish
 stele publish: bad publish setting in stele.json: repo "file:///srv/rules.git": only https and ssh are allowed; use https://host/path, ssh://host/path or user@host:path
+```
+
+```
+$ stele publish
+stele publish: branch stele/publish/project-a/stele.md in https://github.com/nacer-noubir/stele-publish-test.git holds commits stele publish did not make for this project; it is left alone
 ```
 
 What leaves the machine: the committed `stele.md`, its `path`, the project's commit hash and id, and your git name and email, to `repo`; and, to github.com or gitlab.com only, the login it found.

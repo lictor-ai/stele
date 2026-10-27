@@ -1,7 +1,9 @@
 # stele publish
 
-Status: built (#79); the manual run against real GitHub and GitLab
-repositories is still to do. Date: 2026-10-25. Part of v1, by ADR-0007
+Status: built (#79). Run by hand against a real GitHub repository on
+2026-10-27 (first publish, unchanged, reopened, edited, merged, stale branch,
+a person's commit on the branch); the GitLab run is still to do. Date:
+2026-10-25. Part of v1, by ADR-0007
 (D64–D66).
 
 ## Why
