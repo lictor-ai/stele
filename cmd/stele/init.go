@@ -31,14 +31,14 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return exitCantRun
 	}
-	changes, notes, err := install.Init(root, binaryVersion(), set)
+	changes, notes, err := install.Init(agent, root, binaryVersion(), set)
 	if err == nil {
 		c, n := initCompile(root)
 		changes, notes = append(changes, c...), append(notes, n...)
 	}
 	code := report("init", changes, notes, err, stdout, stderr)
 	if code == exitOK {
-		if sw, ok := install.InstalledSwitches(root); ok {
+		if sw, ok := install.InstalledSwitches(agent, root); ok {
 			fmt.Fprintln(stdout, "hooks: "+sw.String())
 		}
 	}
@@ -102,7 +102,7 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return exitCantRun
 	}
-	changes, notes, err := install.Uninstall(root)
+	changes, notes, err := install.Uninstall(agent, root)
 	return report("uninstall", changes, notes, err, stdout, stderr)
 }
 
