@@ -38,6 +38,8 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+
+	"github.com/lictor-ai/stele/internal/adapter"
 )
 
 // Event is one hook call, as stele needs it.
@@ -72,7 +74,7 @@ type Event struct {
 }
 
 // Lines is lines First to Last of a file, 1-based and inclusive.
-type Lines struct{ First, Last int }
+type Lines = adapter.Lines
 
 // hunk is one hunk of a structuredPatch. Each line starts with ' ' for
 // context, '-' for a line removed or '+' for a line added.
@@ -105,7 +107,7 @@ func added(hunks []hunk) (lines []Lines, ok bool) {
 				if k := len(lines); k > 0 && lines[k-1].Last == n-1 {
 					lines[k-1].Last = n
 				} else {
-					lines = append(lines, Lines{n, n})
+					lines = append(lines, Lines{First: n, Last: n})
 				}
 				news++
 				n++
@@ -196,24 +198,13 @@ func Parse(stdin []byte) (Event, error) {
 }
 
 // Answer is what stele tells Claude Code.
-type Answer struct {
-	// Deny stops a PreToolUse call. After a PostToolUse it sends Reason back
-	// as decision "block": the write is not undone. Reason is what Claude
-	// reads.
-	Deny   bool
-	Reason string
-	// Ask, when set, makes Claude Code ask the user before a PreToolUse call,
-	// showing Ask in the permission prompt. Deny wins over it, as in Claude
-	// Code. It is ignored after a write.
-	Ask string
-	// Context is added to Claude's context alongside the tool result.
-	Context string
-	// Warning is shown to the user, not to Claude.
-	Warning string
-}
+type Answer = adapter.Answer
 
 // Render returns the stdout for an answer to the named event, or nil when
-// there is nothing to say. The exit code is always 0.
+// there is nothing to say. The exit code is always 0. Deny is
+// permissionDecision "deny" before a tool and decision "block" after it;
+// Ask is permissionDecision "ask", ignored after a tool; Context is
+// additionalContext, for Claude; Warning is systemMessage, for the user.
 func Render(event string, a Answer) []byte {
 	type specific struct {
 		HookEventName            string `json:"hookEventName"`

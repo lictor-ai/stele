@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/lictor-ai/stele/internal/adapter"
 )
 
 // SettingsFile is where init registers the hooks, relative to the root: the
@@ -109,14 +111,8 @@ func (h handler) runsStele() bool {
 	return name == "stele"
 }
 
-// Switches are the parts of the write hooks a project turned off with stele
-// init (ADR-0006, ADR-0008). The zero value is both on, the default.
-type Switches struct {
-	// RemindOff: before a write, never deny it to show the rules.
-	RemindOff bool
-	// CheckOff: after a write, never check it.
-	CheckOff bool
-}
+// Switches are the parts of the write hooks a project turned off.
+type Switches = adapter.Switches
 
 // The switch flags. A switch that is on is never written.
 const (
@@ -125,7 +121,7 @@ const (
 )
 
 // flags are the words init writes after the stamp, in this order.
-func (s Switches) flags() []string {
+func flags(s Switches) []string {
 	var f []string
 	if s.RemindOff {
 		f = append(f, remindOff)
@@ -134,17 +130,6 @@ func (s Switches) flags() []string {
 		f = append(f, checkOff)
 	}
 	return f
-}
-
-// String is how init shows the switches: "remind on, check off".
-func (s Switches) String() string {
-	state := func(off bool) string {
-		if off {
-			return "off"
-		}
-		return "on"
-	}
-	return "remind " + state(s.RemindOff) + ", check " + state(s.CheckOff)
 }
 
 // stamp returns the version and switches on a handler init wrote: exactly
@@ -157,7 +142,7 @@ func (h handler) stamp() (version string, sw Switches, ok bool) {
 		return "", Switches{}, false
 	}
 	sw = HookSwitches(w[3:])
-	if !slices.Equal(w[3:], sw.flags()) {
+	if !slices.Equal(w[3:], flags(sw)) {
 		return "", Switches{}, false
 	}
 	return strings.TrimPrefix(w[2], installedFlag), sw, true
@@ -165,7 +150,7 @@ func (h handler) stamp() (version string, sw Switches, ok bool) {
 
 // command is the command init writes for version and switches.
 func command(version string, sw Switches) string {
-	return strings.Join(append([]string{"stele", "hook", installedFlag + version}, sw.flags()...), " ")
+	return strings.Join(append([]string{"stele", "hook", installedFlag + version}, flags(sw)...), " ")
 }
 
 // Install returns settings with stele's hooks on every event of

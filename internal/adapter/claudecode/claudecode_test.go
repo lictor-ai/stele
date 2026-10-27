@@ -78,7 +78,7 @@ func TestParse(t *testing.T) {
 			},
 			want: Event{
 				Name: "PostToolUse", ToolName: "Edit", File: abs, NewText: []string{"C\nD"}, ReplaceAll: []bool{true},
-				Added: []Lines{{5, 6}, {22, 22}}, Patched: true,
+				Added: []Lines{{First: 5, Last: 6}, {First: 22, Last: 22}}, Patched: true,
 			},
 		},
 		{

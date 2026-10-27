@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+
+	"github.com/lictor-ai/stele/internal/adapter"
 )
 
 // RulesFile is where stele writes the project's rules for Claude Code to load
@@ -23,11 +25,7 @@ const RulesFile = ".claude/rules/stele-rules.md"
 const MaxRulesFile = 16 << 20
 
 // Rule is one rule as the file shows it.
-type Rule struct {
-	ID    string
-	Scope []string
-	Body  string
-}
+type Rule = adapter.Rule
 
 // rulesFile is the file's text. It is a file, not a string in the code: it is
 // what the agent reads before its first prompt.
