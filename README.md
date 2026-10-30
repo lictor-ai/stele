@@ -43,7 +43,7 @@ And it stays out of your way:
 ## Quick start
 
 ```sh
-brew install lictor-ai/tap/stele                         # install (or scoop, or go install: see Install)
+go install github.com/lictor-ai/stele/cmd/stele@latest   # install (or brew, scoop: see Install)
 cd your-project && stele init                            # add the hooks and a starter stele.md
 $EDITOR stele.md && stele compile                        # write your rules, compile them
 ```
@@ -93,7 +93,7 @@ Every experiment, with its numbers, is in [test/functional/agent/results/](test/
 
 ## Install
 
-macOS and Linux, with [Homebrew](https://brew.sh):
+From the first stable release on, macOS and Linux, with [Homebrew](https://brew.sh):
 
 ```sh
 brew install lictor-ai/tap/stele
