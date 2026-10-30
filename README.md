@@ -43,7 +43,7 @@ And it stays out of your way:
 ## Quick start
 
 ```sh
-go install github.com/lictor-ai/stele/cmd/stele@latest   # install
+go install github.com/lictor-ai/stele/cmd/stele@latest   # install (or brew, scoop: see Install)
 cd your-project && stele init                            # add the hooks and a starter stele.md
 $EDITOR stele.md && stele compile                        # write your rules, compile them
 ```
@@ -93,15 +93,30 @@ Every experiment, with its numbers, is in [test/functional/agent/results/](test/
 
 ## Install
 
-Needs Go 1.27 or later.
+From the first stable release on, macOS and Linux, with [Homebrew](https://brew.sh):
+
+```sh
+brew install lictor-ai/tap/stele
+```
+
+Windows, with [Scoop](https://scoop.sh):
+
+```sh
+scoop bucket add lictor-ai https://github.com/lictor-ai/scoop-bucket
+scoop install stele
+```
+
+Or download the archive for your system from [Releases](https://github.com/lictor-ai/stele/releases) (`checksums.txt` lists their SHA-256) and put `stele` on your `PATH`. The binaries are not signed.
+
+With Go 1.27 or later:
 
 ```sh
 go install github.com/lictor-ai/stele/cmd/stele@latest
 ```
 
-Or, from a clone: `go install ./cmd/stele`. For a private module, set `GOPRIVATE` and git credentials first.
+Or, from a clone: `go install ./cmd/stele`.
 
-The hook runs the bare command `stele`, so `$(go env GOPATH)/bin` must be on the `PATH` that Claude Code sees.
+The hook runs the bare command `stele`, so it must be on the `PATH` that Claude Code sees: for `go install`, that is `$(go env GOPATH)/bin`.
 
 ## Set up a repository
 

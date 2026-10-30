@@ -1,0 +1,69 @@
+# Release builds: on a v* tag, .github/workflows/release.yml runs goreleaser,
+# which uploads the binaries to GitHub Releases and, for a release that is not
+# a pre-release, updates the Homebrew tap and the Scoop bucket.
+version: 2
+
+project_name: stele
+
+builds:
+  - main: ./cmd/stele
+    binary: stele
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    # The tag, so the hook stamp and the version warning see a release.
+    ldflags:
+      - -s -w -X main.version={{ .Tag }}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+
+release:
+  prerelease: auto
+
+homebrew_casks:
+  - name: stele
+    repository:
+      owner: lictor-ai
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/lictor-ai/stele
+    description: Guideline enforcement for coding agents
+    license: Apache-2.0
+    skip_upload: auto
+    # The binary is not signed: without this, macOS refuses to run it.
+    hooks:
+      post:
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/{{ .ProjectName }}"]
+          end
+
+scoops:
+  - name: stele
+    repository:
+      owner: lictor-ai
+      name: scoop-bucket
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/lictor-ai/stele
+    description: Guideline enforcement for coding agents
+    license: Apache-2.0
+    skip_upload: auto

@@ -1,0 +1,38 @@
+name: Release
+
+# A v* tag builds the binaries with goreleaser (.goreleaser.yaml) and
+# publishes them to GitHub Releases, the Homebrew tap and the Scoop bucket.
+# A pull request that changes the release setup builds a snapshot, publishing
+# nothing.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .goreleaser.yaml
+      - .github/workflows/release.yml
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload the release
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the changelog needs the history
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: ${{ github.event_name == 'pull_request' && 'release --snapshot --clean --skip=publish' || 'release --clean' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pushes to lictor-ai/homebrew-tap and lictor-ai/scoop-bucket,
+          # which GITHUB_TOKEN cannot.
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
