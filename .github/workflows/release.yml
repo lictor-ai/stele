@@ -3,7 +3,10 @@ name: Release
 # A v* tag builds the binaries with goreleaser (.goreleaser.yaml) and
 # publishes them to GitHub Releases, the Homebrew tap and the Scoop bucket.
 # A pull request that changes the release setup builds a snapshot, publishing
-# nothing.
+# nothing, with no write access and no token.
+#
+# The actions and goreleaser are pinned: the release job can write to the
+# repository, the tap and the bucket, so a moved tag must not reach it.
 on:
   push:
     tags: ["v*"]
@@ -16,21 +19,39 @@ permissions:
   contents: read
 
 jobs:
+  snapshot:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0 # the changelog needs the history
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          version: v2.19.0
+          args: release --snapshot --clean --skip=publish
+
   release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write # upload the release
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0 # the changelog needs the history
-      - uses: actions/setup-go@v6
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
-          version: "~> v2"
-          args: ${{ github.event_name == 'pull_request' && 'release --snapshot --clean --skip=publish' || 'release --clean' }}
+          version: v2.19.0
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Pushes to lictor-ai/homebrew-tap and lictor-ai/scoop-bucket,
