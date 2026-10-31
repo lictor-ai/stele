@@ -7,7 +7,12 @@
 // (heredoc bodies skipped), tee, sed -i and perl -i, plus rm, mv, cp, ln and
 // truncate for stele's own files. It follows cd, simple NAME=value variables
 // and globs. Scripts, generators, xargs, find -exec and targets it cannot
-// resolve are not seen: Targets counts the last kind as unknown.
+// resolve are not seen: Targets counts the last kind as unknown. A command it
+// cannot parse is read up to the error: nothing after it runs when bash agrees,
+// and it hides only what follows a form stele does not know when bash does not.
+// (( is always read as arithmetic up to its )): what subshells written that way
+// write is not seen, and with no )) nothing after it is. shopt options are not
+// followed.
 package shell
 
 import (
@@ -75,6 +80,7 @@ type results struct {
 	unknown int
 	globbed int // files matched by globs
 	entries int // directory entries globs read
+	steps   int // directories globs opened and fixed path segments they walked
 }
 
 // add adds one target, merging a duplicate. A content write wins over a
