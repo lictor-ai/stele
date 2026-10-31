@@ -369,6 +369,99 @@ func TestCheckNoGitRepository(t *testing.T) {
 	}
 }
 
+// plantGit puts a program named git in dir, which writes a marker if it runs,
+// and returns the marker's path.
+func plantGit(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "git"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n: > \"$0.ran\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p + ".ran"
+}
+
+// A cloned repository can bring a git; a PATH entry for its bin directory,
+// which direnv can add, would run it.
+func TestCheckRefusesGitInsideProject(t *testing.T) {
+	root := gitProject(t, checkRules)
+	bin := filepath.Join(root, "bin")
+	ran := plantGit(t, bin)
+	writeAt(t, root, "a.go", "package a\n")
+	t.Setenv("PATH", bin)
+
+	for _, args := range [][]string{{"check"}, {"check", "--all"}, {"check", "--base", "HEAD"}} {
+		code, _, errOut := runCmd(args...)
+		if code != exitCantRun || !strings.Contains(errOut, "inside the project") {
+			t.Errorf("%v = %d, stderr %q, want 2 and inside the project", args, code, errOut)
+		}
+	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Error("the planted git ran")
+	}
+	// Paths need no git.
+	if code, _, errOut := runCmd("check", "a.go"); code != exitOK {
+		t.Errorf("check a.go = %d, stderr %q", code, errOut)
+	}
+}
+
+func TestCheckRefusesGitInEnclosingRepository(t *testing.T) {
+	root := gitProject(t, checkRules)
+	sub := filepath.Join(root, "svc")
+	writeAt(t, root, "svc/stele.md", checkRules)
+	t.Chdir(sub)
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile = %d, stderr %q", code, errOut)
+	}
+	bin := filepath.Join(root, "bin")
+	plantGit(t, bin)
+	t.Setenv("PATH", bin)
+	code, _, errOut := runCmd("check")
+	if code != exitCantRun || !strings.Contains(errOut, "inside the project") {
+		t.Errorf("check = %d, stderr %q, want 2 and inside the project", code, errOut)
+	}
+}
+
+func TestCheckNoGitOnPath(t *testing.T) {
+	root := gitProject(t, checkRules)
+	writeAt(t, root, "a.go", "package a\n")
+	t.Setenv("PATH", t.TempDir())
+	code, _, errOut := runCmd("check")
+	if code != exitCantRun || !strings.Contains(errOut, "pass paths instead") {
+		t.Errorf("check = %d, stderr %q, want 2 and the hint", code, errOut)
+	}
+}
+
+// git finds what it starts on PATH, as stele finds git.
+func TestGitCommandDropsPathInsideProject(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	plantGit(t, outside)
+	t.Setenv("PATH", outside+string(os.PathListSeparator)+filepath.Join(root, "bin"))
+	cmd, err := gitCommand(root, "version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.EqualFold(filepath.Dir(cmd.Path), outside) || cmd.Dir != root {
+		t.Errorf("cmd = %s in %s", cmd.Path, cmd.Dir)
+	}
+	var got []string
+	for _, kv := range cmd.Env {
+		if name, value, _ := strings.Cut(kv, "="); strings.EqualFold(name, "PATH") {
+			got = append(got, value)
+		}
+	}
+	if len(got) != 1 || got[0] != outside {
+		t.Errorf("PATH = %q, want %q", got, outside)
+	}
+}
+
 func TestCheckJSON(t *testing.T) {
 	root := gitProject(t, checkRules)
 	writeAt(t, root, "a.go", "password = 1\n")

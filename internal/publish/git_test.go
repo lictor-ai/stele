@@ -3,6 +3,7 @@ package publish
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -71,6 +72,40 @@ func TestGitEnv(t *testing.T) {
 	}
 	if strings.Contains(env, "GIT_DIR=") {
 		t.Error("env keeps GIT_DIR")
+	}
+}
+
+// git finds ssh on PATH: an entry inside the project would run what a cloned
+// repository put there, even with git itself vetted.
+func TestGitDropsPathInsideProject(t *testing.T) {
+	dir, log := fakeTools(t, "git")
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+bin)
+	g := gitCmd{bin: filepath.Join(dir, "git"), root: root}
+	if _, err := g.run(context.Background(), t.TempDir(), nil, nil, "version"); err != nil {
+		t.Fatal(err)
+	}
+	calls := fakeCalls(t, log)
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v", calls)
+	}
+	if got := calls[0].Env["PATH"]; got != dir {
+		t.Errorf("PATH = %q, want %q", got, dir)
+	}
+}
+
+func TestTokenCLIDropsPathInsideProject(t *testing.T) {
+	dir, log := fakeTools(t, "gh")
+	root := t.TempDir()
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+filepath.Join(root, "bin"))
+	cliToken(context.Background(), root, t.TempDir(), []string{"gh", "auth", "token"})
+	calls := fakeCalls(t, log)
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v", calls)
+	}
+	if got := calls[0].Env["PATH"]; got != dir {
+		t.Errorf("PATH = %q, want %q", got, dir)
 	}
 }
 

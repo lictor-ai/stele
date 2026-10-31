@@ -48,6 +48,7 @@ internal/serve/       MCP wiring over the SDK
 internal/plugin/      registry of built-in and external plugins, exec protocol, sinks
 internal/status/      stele status: describe the install as JSON
 internal/publish/     stele publish: stele.md to a git repository as a merge request (D64–D66)
+internal/toolpath/    programs and PATH entries inside the project, refused — pure logic
 internal/check/       the Checker slot: stele check's runner and report
   regex/              the built-in regex checker
 internal/adapter/     the agent adapter slot: the Adapter interface, the agent-neutral types
@@ -947,7 +948,11 @@ asks the GitHub or GitLab API for the merge request.
 It is the only package that imports `net/http`, and with `stele check` the
 only one that starts processes: `git`, `gh`, `glab` and the browser opener,
 each resolved on `PATH` and refused inside the project or the repository
-that holds it (as D43 does for plugins). Every git call allows only the https
+that holds it (as D43 does for plugins). `internal/toolpath` holds that test,
+and takes `PATH` entries inside the project, and empty or relative ones, out
+of what those programs inherit, so git cannot find an `ssh` there. It imports
+no `os/exec`, and `stele check` uses it without linking this package. Every
+git call allows only the https
 and ssh transports, uses a bare repository only when named with
 `--git-dir`, never prompts, and keeps at most 1 MiB of what git prints. A token goes only to the fixed endpoints `api.github.com` and
 `gitlab.com/api/v4`, and only when `repo`'s host is exactly `github.com` or
@@ -1721,7 +1726,8 @@ plugins. `mcp` and `hook` never do (D45).
 
 `check` exits 0 when the rules are valid and nothing blocking was found, 1 for an
 invalid rule or a blocking violation, and 2 when stele or a plugin could not run
-(spec §8). It needs `git` on `PATH` unless explicit paths are given. In v1 it
+(spec §8). It needs `git` on `PATH`, outside the project (`internal/toolpath`),
+unless explicit paths are given. In v1 it
 runs only the built-in `regex` checker and has no `--push`: plugins and sinks are
 in the team milestone (ADR-0004).
 

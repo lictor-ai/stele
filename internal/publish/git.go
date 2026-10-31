@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/lictor-ai/stele/internal/toolpath"
 )
 
 // ErrGit is a git command that failed. The error holds git's own message,
@@ -85,7 +87,8 @@ var dropped = []string{
 
 // gitCmd runs git safely.
 type gitCmd struct {
-	bin string // the absolute path of git
+	bin  string // the absolute path of git
+	root string // the project: no PATH entry inside it reaches git
 }
 
 // args returns the arguments to run git with: safety first.
@@ -161,7 +164,7 @@ func (g gitCmd) runLimit(ctx context.Context, dir string, extraEnv []string, std
 	}
 	cmd := exec.CommandContext(ctx, g.bin, g.args(args)...)
 	cmd.Dir = dir
-	cmd.Env = gitEnv(extraEnv)
+	cmd.Env = toolpath.Env(gitEnv(extraEnv), g.root)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}

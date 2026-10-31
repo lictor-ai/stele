@@ -260,7 +260,7 @@ With `--base`, `stele check` also says when the branch adds, changes or deletes 
 |---|---|
 | 0 | Rules are valid (or there are none) and there is no blocking violation |
 | 1 | A rule is invalid, `stele.lock` or `.claude/rules/stele-rules.md` is out of date, or there is a blocking violation |
-| 2 | stele couldn't run: bad flags, no git, unknown `--base` ref, no merge base |
+| 2 | stele couldn't run: bad flags, no git, a git inside the project, unknown `--base` ref, no merge base |
 
 GitHub Actions:
 
@@ -453,6 +453,8 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 **`stele publish` has not been run against gitlab.com.** It was run against github.com; its GitLab calls are tested only against a fake server.
 
 **`stele publish` needs a repository with at least one commit, and git access to it.** git and Git Credential Manager are never allowed to prompt. ssh still can: a key's passphrase or an unknown host key is asked by ssh itself.
+
+**`stele check` and `stele publish` start no program from inside the project.** A git, gh, glab or browser opener found on `PATH` inside the project, or inside the git repository that holds it, is refused, even when it links to somewhere else, as a nix `result/bin` does. `stele check` then exits 2; `stele check <paths>` needs no git. What they start doesn't get `PATH` entries inside the project, or empty or relative ones, so git can't find an `ssh` there. Variables that name a program, such as `GIT_SSH_COMMAND` and `GIT_EXEC_PATH`, are passed through.
 
 **`stele publish` refuses a `stele/publish/<path>` branch holding commits it did not make for this project.** Two projects that publish to the same `path` of one repository get that error; give each its own `path`.
 

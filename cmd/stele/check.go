@@ -26,6 +26,7 @@ import (
 	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/source"
+	"github.com/lictor-ai/stele/internal/toolpath"
 )
 
 // runCheck validates the rules, then runs the checkers on the selected files,
@@ -270,8 +271,8 @@ func explicitFiles(root string, paths []string) ([]string, error) {
 // left out. Only files under root are listed, so a stele.md in a subdirectory
 // of the repository checks only its own files.
 func gitFiles(root, base string, all bool) ([]string, error) {
-	if _, err := exec.LookPath("git"); err != nil {
-		return nil, errors.New("stele check needs git to find changed files; pass paths instead")
+	if _, err := gitBin(root); err != nil {
+		return nil, err
 	}
 	switch {
 	case all:
@@ -334,10 +335,38 @@ func ruleFileChanges(root, base string) ([]check.RuleFileChange, error) {
 	return cs, nil
 }
 
+// gitBin finds git on PATH, as stele publish does: one inside the project at
+// root, which a cloned repository could have put there, is refused.
+func gitBin(root string) (string, error) {
+	p, err := exec.LookPath("git")
+	if errors.Is(err, exec.ErrDot) {
+		return "", fmt.Errorf("git: found through a relative PATH entry: %w", toolpath.ErrRefused)
+	}
+	if err != nil {
+		return "", errors.New("stele check needs git to find changed files; pass paths instead")
+	}
+	return toolpath.Vet("git", p, root)
+}
+
+// gitCommand is git with args, to run in root. No PATH entry inside root
+// reaches it.
+func gitCommand(root string, args ...string) (*exec.Cmd, error) {
+	bin, err := gitBin(root)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(bin, args...)
+	cmd.Dir = root
+	cmd.Env = toolpath.Env(os.Environ(), root)
+	return cmd, nil
+}
+
 // gitRaw runs git in root and splits its NUL-separated output, in order.
 func gitRaw(root string, args ...string) ([]string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = root
+	cmd, err := gitCommand(root, args...)
+	if err != nil {
+		return nil, err
+	}
 	var errOut bytes.Buffer
 	cmd.Stderr = &errOut
 	out, err := cmd.Output()
