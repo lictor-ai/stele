@@ -271,6 +271,43 @@ func TestHookFailurePolicy(t *testing.T) {
 			t.Errorf("want a deny naming the failure, got %+v", o)
 		}
 	})
+	t.Run("stele.json with a byte order mark: still read", func(t *testing.T) {
+		root := project(t, hookRules)
+		noKey(t)
+		if err := os.WriteFile(filepath.Join(root, "stele.json"), []byte("\xef\xbb\xbf"+`{"block_on_error": true}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		o, _ := hook(t, write(filepath.Join(root, "a.go"), "p1", ""))
+		if o.HookSpecificOutput.PermissionDecision != "deny" {
+			t.Errorf("block_on_error was not honoured, got %+v", o)
+		}
+	})
+	t.Run("stele.json in UTF-16: allow and say how to fix it", func(t *testing.T) {
+		root := project(t, hookRules)
+		if err := os.WriteFile(filepath.Join(root, "stele.json"), []byte("\xff\xfe{\x00}\x00"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		o, _ := hook(t, write(filepath.Join(root, "a.go"), "p1", ""))
+		if o.HookSpecificOutput.PermissionDecision == "deny" {
+			t.Error("denied although block_on_error cannot be read")
+		}
+		if !strings.Contains(o.SystemMessage, "UTF-16") || !strings.Contains(o.SystemMessage, "save it as UTF-8") {
+			t.Errorf("warning %q should name the encoding and the fix", o.SystemMessage)
+		}
+	})
+	t.Run("stele.json too large: allow and warn the user", func(t *testing.T) {
+		root := project(t, hookRules)
+		if err := os.WriteFile(filepath.Join(root, "stele.json"), []byte(strings.Repeat(" ", 2<<20)+"{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		o, _ := hook(t, write(filepath.Join(root, "a.go"), "p1", ""))
+		if o.HookSpecificOutput.PermissionDecision == "deny" {
+			t.Error("denied although block_on_error cannot be read")
+		}
+		if !strings.Contains(o.SystemMessage, "stele.json") {
+			t.Errorf("warning %q should name stele.json", o.SystemMessage)
+		}
+	})
 	t.Run("no session id: the record cannot be saved", func(t *testing.T) {
 		root := project(t, hookRules)
 		payload := write(filepath.Join(root, "a.go"), "p1", "")

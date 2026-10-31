@@ -51,6 +51,10 @@ func LoadConfig(root string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("%s: %w", enforce.FileName, err)
 	}
+	data, err = enforce.Text(data)
+	if err != nil {
+		return Config{}, err
+	}
 	var raw struct {
 		Publish *struct {
 			Repo string `json:"repo"`
