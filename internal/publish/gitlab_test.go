@@ -3,6 +3,7 @@ package publish
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -10,8 +11,20 @@ import (
 
 var glRemote = parseRemote("git@gitlab.com:a/b/c.git")
 
+// glAPI is newAPI with the first call, the project's, answered: its id is 1.
+func glAPI(t *testing.T, handle func(w http.ResponseWriter, r *http.Request, body string)) *apiServer {
+	t.Helper()
+	return newAPI(t, func(w http.ResponseWriter, r *http.Request, body string) {
+		if r.Method == "GET" && !strings.HasSuffix(r.URL.Path, "/merge_requests") {
+			writeJSONTo(w, 200, map[string]any{"id": 1})
+			return
+		}
+		handle(w, r, body)
+	})
+}
+
 func TestGitlabFindsOpen(t *testing.T) {
-	s := newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) {
+	s := glAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) {
 		writeJSONTo(w, 200, []map[string]any{{"iid": 3, "source_project_id": 1, "target_project_id": 1, "web_url": "https://gitlab.com/a/b/c/-/merge_requests/3"}})
 	})
 	got, err := gitlabMR(context.Background(), glRemote, "t", ghReq)
@@ -21,19 +34,23 @@ func TestGitlabFindsOpen(t *testing.T) {
 	if got.Action != "found" || got.Link != "https://gitlab.com/a/b/c/-/merge_requests/3" {
 		t.Errorf("got %+v", got)
 	}
-	uri := s.requests()[0].URI
-	for _, want := range []string{"/api/v4/projects/a%2Fb%2Fc/merge_requests?", "state=opened", "source_branch=stele%2Fpublish%2Fstele.md", "target_branch=main", "per_page=100"} {
+	project := s.requests()[0]
+	if project.Method != "GET" || project.URI != "/api/v4/projects/a%2Fb%2Fc" {
+		t.Errorf("first request = %+v, want the project", project)
+	}
+	uri := s.requests()[1].URI
+	for _, want := range []string{"/api/v4/projects/a%2Fb%2Fc/merge_requests?", "state=opened", "source_branch=stele%2Fpublish%2Fstele.md", "source_project_id=1", "target_branch=main"} {
 		if !strings.Contains(uri, want) {
 			t.Errorf("uri %s lacks %s", uri, want)
 		}
 	}
-	if s.requests()[0].Auth != "Bearer t" {
-		t.Errorf("auth = %q", s.requests()[0].Auth)
+	if project.Auth != "Bearer t" || s.requests()[1].Auth != "Bearer t" {
+		t.Errorf("auth = %q, %q", project.Auth, s.requests()[1].Auth)
 	}
 }
 
 func TestGitlabOpens(t *testing.T) {
-	s := newAPI(t, func(w http.ResponseWriter, r *http.Request, body string) {
+	s := glAPI(t, func(w http.ResponseWriter, r *http.Request, body string) {
 		if r.Method == "GET" {
 			writeJSONTo(w, 200, []any{})
 			return
@@ -44,7 +61,7 @@ func TestGitlabOpens(t *testing.T) {
 	if err != nil || got.Action != "opened" {
 		t.Fatalf("got %+v, %v", got, err)
 	}
-	post := s.requests()[1]
+	post := s.requests()[2]
 	if post.Method != "POST" || !strings.Contains(post.Body, `"source_branch":"stele/publish/stele.md"`) || !strings.Contains(post.Body, `"target_branch":"main"`) {
 		t.Errorf("post = %+v", post)
 	}
@@ -52,7 +69,7 @@ func TestGitlabOpens(t *testing.T) {
 
 func TestGitlabConflictFindsOpen(t *testing.T) {
 	gets := 0
-	newAPI(t, func(w http.ResponseWriter, r *http.Request, body string) {
+	glAPI(t, func(w http.ResponseWriter, r *http.Request, body string) {
 		switch r.Method {
 		case "GET":
 			gets++
@@ -74,7 +91,7 @@ func TestGitlabConflictFindsOpen(t *testing.T) {
 // A 409 when one is already open from the branch, into an old base say: that
 // one is the answer, found by its source branch alone.
 func TestGitlabConflictIntoAnotherBase(t *testing.T) {
-	s := newAPI(t, func(w http.ResponseWriter, r *http.Request, body string) {
+	s := glAPI(t, func(w http.ResponseWriter, r *http.Request, body string) {
 		switch {
 		case r.Method == "POST":
 			writeJSONTo(w, 409, map[string]any{"message": "already exists"})
@@ -95,7 +112,7 @@ func TestGitlabConflictIntoAnotherBase(t *testing.T) {
 }
 
 func TestGitlabReopens(t *testing.T) {
-	s := newAPI(t, func(w http.ResponseWriter, r *http.Request, body string) {
+	s := glAPI(t, func(w http.ResponseWriter, r *http.Request, body string) {
 		switch {
 		case r.Method == "GET" && strings.Contains(r.URL.RawQuery, "state=opened"):
 			writeJSONTo(w, 200, []any{})
@@ -118,15 +135,36 @@ func TestGitlabReopens(t *testing.T) {
 }
 
 func TestGitlabNotFoundIsRejected(t *testing.T) {
-	newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) { writeJSONTo(w, 404, map[string]any{}) })
+	s := newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) { writeJSONTo(w, 404, map[string]any{}) })
+	if _, err := gitlabMR(context.Background(), glRemote, "t", ghReq); !errors.Is(err, errRejected) {
+		t.Errorf("err = %v, want errRejected", err)
+	}
+	if n := len(s.requests()); n != 1 {
+		t.Errorf("%d requests, want it to stop at the project", n)
+	}
+}
+
+func TestGitlabListNotFoundIsRejected(t *testing.T) {
+	glAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) { writeJSONTo(w, 404, map[string]any{}) })
 	if _, err := gitlabMR(context.Background(), glRemote, "t", ghReq); !errors.Is(err, errRejected) {
 		t.Errorf("err = %v, want errRejected", err)
 	}
 }
 
+// No id to filter by: nothing may be listed, or forks come back.
+func TestGitlabProjectWithoutID(t *testing.T) {
+	s := newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) { writeJSONTo(w, 200, map[string]any{}) })
+	if _, err := gitlabMR(context.Background(), glRemote, "t", ghReq); err == nil || errors.Is(err, errRejected) {
+		t.Errorf("err = %v, want an error about the project", err)
+	}
+	if n := len(s.requests()); n != 1 {
+		t.Errorf("%d requests, want it to stop at the project", n)
+	}
+}
+
 func TestGitlabReopenFailureOpensNew(t *testing.T) {
 	createStatus := 201
-	newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) {
+	glAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) {
 		switch {
 		case r.Method == "GET" && r.URL.Query().Get("state") == "opened":
 			writeJSONTo(w, 200, []any{})
@@ -161,9 +199,42 @@ func TestGitlabErrors(t *testing.T) {
 	}
 }
 
+// GitLab answers newest first, one page at a time, so a hundred newer forks
+// under the publish branch's name would hide ours from a filter on our side:
+// the create then gets a 409 and no link. The stub filters and pages as
+// gitlab.com does.
+func TestGitlabFindsOursBehindAPageOfForks(t *testing.T) {
+	const ownLink = "https://gitlab.com/a/b/c/-/merge_requests/2"
+	var all []map[string]any
+	for i := range 100 {
+		all = append(all, map[string]any{"iid": 100 + i, "web_url": "https://gitlab.com/a/b/c/-/merge_requests/fork", "source_project_id": 99, "target_project_id": 1})
+	}
+	all = append(all, map[string]any{"iid": 2, "web_url": ownLink, "source_project_id": 1, "target_project_id": 1})
+
+	glAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) {
+		if r.Method == "POST" {
+			writeJSONTo(w, 409, map[string]any{"message": "already exists"})
+			return
+		}
+		page := []map[string]any{}
+		want := r.URL.Query().Get("source_project_id")
+		for _, m := range all {
+			if len(page) < 20 && (want == "" || want == fmt.Sprint(m["source_project_id"])) {
+				page = append(page, m)
+			}
+		}
+		writeJSONTo(w, 200, page)
+	})
+	got, err := gitlabMR(context.Background(), glRemote, "t", ghReq)
+	if err != nil || got.Action != "found" || got.Link != ownLink {
+		t.Fatalf("got %+v, %v; want ours found", got, err)
+	}
+}
+
 // The source_branch filter also matches merge requests from forks, which
 // anyone can open under the publish branch's name: they are never ours to
-// report or reopen.
+// report or reopen. The stub here leaves them in, as a server that ignored
+// source_project_id would.
 func TestGitlabIgnoresForks(t *testing.T) {
 	const ownLink, forkLink = "https://gitlab.com/a/b/c/-/merge_requests/2", "https://gitlab.com/a/b/c/-/merge_requests/9"
 	fork := map[string]any{"iid": 9, "web_url": forkLink, "source_project_id": 99, "target_project_id": 1}
@@ -190,7 +261,7 @@ func TestGitlabIgnoresForks(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) {
+			s := glAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) {
 				q := r.URL.Query()
 				switch {
 				case r.Method == "GET" && q.Get("target_branch") == "":

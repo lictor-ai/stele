@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 )
 
 type gitlabMergeRequest struct {
@@ -22,18 +23,28 @@ func ownMR(m gitlabMergeRequest) bool {
 }
 
 // gitlabMR finds the open merge request from the publish branch, or reopens
-// a closed one when nothing new was pushed, or opens one. A 404 on the first
-// call is a login that cannot see the project: errRejected.
+// a closed one when nothing new was pushed, or opens one. A 404 on the project
+// or on the first list is a login that cannot see the project: errRejected.
 func gitlabMR(ctx context.Context, r remote, token string, req mrRequest) (mrResult, error) {
 	if !r.gitlabProject() {
 		return mrResult{}, fmt.Errorf("gitlab.com/%s is not a group/name project", r.Project)
 	}
 	// The project id is its path with every '/' encoded as %2F.
-	mrs := gitlabAPI + "/projects/" + url.PathEscape(r.Project) + "/merge_requests"
+	project := gitlabAPI + "/projects/" + url.PathEscape(r.Project)
+	var p struct {
+		ID int `json:"id"`
+	}
+	if _, err := call(ctx, "GitLab", http.MethodGet, project, token, nil, nil, &p); err != nil {
+		return mrResult{}, notFoundRejects(err)
+	}
+	if p.ID == 0 {
+		return mrResult{}, fmt.Errorf("GitLab gave no id for %s", r.Project)
+	}
+	mrs := project + "/merge_requests"
 	list := func(state, target string) ([]gitlabMergeRequest, error) {
-		// Forks are dropped here, not by the API: a full page keeps ours in
-		// sight among them.
-		q := url.Values{"state": {state}, "source_branch": {req.Branch}, "per_page": {"100"}}
+		// The API drops forks here, so ours is on the first page however many
+		// there are; ownMR then holds even if it did not.
+		q := url.Values{"state": {state}, "source_branch": {req.Branch}, "source_project_id": {strconv.Itoa(p.ID)}}
 		if target != "" {
 			q.Set("target_branch", target)
 		}
