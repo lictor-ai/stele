@@ -77,25 +77,19 @@ Then, in the pull request, `stele check --base origin/main` checks every changed
 
 ## Does it work?
 
-[test/functional/](test/functional/) holds two kinds of tests:
+We gave Claude Code the same coding work with no rules, with the rules pasted into `CLAUDE.md`, and with stele. Then we counted how often the rules were respected.
 
-- **Black-box tests** of the binary: 52 tests of init, compile, check and the hook, built and run with `go test ./test/functional/`.
-- **An agent eval** that gives headless Claude Code the same coding tasks in three setups by default and grades every run the same way:
-  - no rules;
-  - the rules pasted into `CLAUDE.md`;
-  - stele.
+| No rules | Rules in `CLAUDE.md` | stele |
+|---|---|---|
+| 33% | 63% | 100% |
 
-Every experiment, with its numbers, is in [test/functional/agent/results/](test/functional/agent/results/README.md). The main results, with Claude Sonnet 5.5:
+### Speed
 
-| | No rules | Rules in `CLAUDE.md` | stele v1.0.0-dev.2 |
-|---|---|---|---|
-| 9 tasks, 18 runs per setup: runs that broke no blocking rule | 33% | 100% | 100% |
-| tokens per run | 143k | 163k | 163k |
-| A task that pulls against a rule, 8 runs: runs that broke no blocking rule | | 5 of 8 | 8 of 8 |
+The hook adds about 0.1 s per write on Windows. With 500 rules, it adds up to 0.17 s.
 
-- **The 9 tasks** range from adding one function to building a small HTTP service. The large ones run under a 74-rule `stele.md`.
-- **The task that pulls against a rule** asks for a test of an HTTP client. The rules forbid a real test server. With the rules in `CLAUDE.md`, the agent used one anyway in 3 of 8 runs. stele flagged each use right after the write, and the agent fixed it.
-- **The hook adds about 0.1 s per write** on Windows: Claude Code runs it before and after every write. With 500 rules it adds up to 0.17 s. The measured times are in [test/functional/results/](test/functional/results/), one file per stele measured.
+### See for yourself
+
+Every experiment is in [test/functional/agent/results/](test/functional/agent/results/README.md), including the runs where stele lost.
 
 ## Install
 
