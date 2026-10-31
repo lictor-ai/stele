@@ -10,6 +10,8 @@
 // resolve are not seen: Targets counts the last kind as unknown. A command it
 // cannot parse is read up to the error: nothing after it runs when bash agrees,
 // and it hides only what follows a form stele does not know when bash does not.
+// (( is always read as arithmetic, so nested subshells written that way are not
+// seen.
 package shell
 
 import (

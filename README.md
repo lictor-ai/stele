@@ -398,7 +398,7 @@ stele makes the rules hard to miss. It doesn't make them impossible to break. Kn
 
 A Bash command that writes, by redirection, `tee`, `sed -i` or `perl -i`, into a file a scoped rule covers is stopped once per file each turn: the agent gets the rules and is told to use Write or Edit; run again, the command goes through unchecked. With `--remind=off` it is not stopped at all.
 
-stele reads the command, it does not run it, so scripts, generators, `xargs`, `find -exec`, `$VAR` targets, brace expansion and writes into files only unscoped rules cover are not seen. A command stele can't parse is read up to the error, and what follows isn't seen: a real syntax error stops bash there too, so this only hides what follows a form stele doesn't know. A command over 256 KiB isn't read at all, and past 64 targets the rest aren't seen. NotebookEdit and PowerShell are not hooked.
+stele reads the command, it does not run it, so scripts, generators, `xargs`, `find -exec`, `$VAR` targets, brace expansion and writes into files only unscoped rules cover are not seen. A command stele can't parse is read up to the error, and what follows isn't seen: a real syntax error stops bash there too, so this only hides what follows a form stele doesn't know. Nested subshells written `((`, as in `((echo > a.go) && (echo > b.go))`, are read as arithmetic, so what they write isn't seen. A glob that reads past 2,000 directory entries in a command isn't expanded, and what it would match isn't seen. A command over 256 KiB isn't read at all, and past 64 targets the rest aren't seen. NotebookEdit and PowerShell are not hooked.
 
 </details>
 

@@ -178,12 +178,26 @@ func TestTargets(t *testing.T) {
 		{command: "function f ( ) ( echo > d.go )", want: []Target{at("d.go", R)}},
 		{command: "f()\n( echo > d.go )", want: []Target{at("d.go", R)}},
 		{command: "f() ((1)); { cd sub; }; echo > a", want: []Target{at("sub/a", R)}},
+		{command: "f() ( cd a ); { cd sub; }; echo > c.go", want: []Target{at("sub/c.go", R)}},
+		{command: "f() ( > x ); { cd sub; }; echo > c.go", want: []Target{at("x", R), at("sub/c.go", R)}},
+
+		// Any other compound body: the braces after it are not a function's.
+		{command: "f() [[ x ]]; { cd sub; }; echo > c.go", want: []Target{at("sub/c.go", R)}},
+		{command: "f() case x in esac; { cd sub; }; echo > c.go", want: []Target{at("sub/c.go", R)}},
+		{command: "f() if true; then :; fi; { cd sub; }; echo > c.go", want: []Target{at("sub/c.go", R)}},
+		{command: "f() while false; do :; done; { cd sub; }; echo > c.go", want: []Target{at("sub/c.go", R)}},
+		{command: "f() until true; do :; done; { cd sub; }; echo > c.go", want: []Target{at("sub/c.go", R)}},
+		{command: "f() for x in y; do :; done; { cd sub; }; echo > c.go", want: []Target{at("sub/c.go", R)}},
+		{command: "f() select x in y; do :; done; { cd sub; }; echo > c.go", want: []Target{at("sub/c.go", R)}},
+		{command: "f() if { cd a; }; then :; fi; echo > c.go", want: []Target{at("c.go", R)}},
 
 		// An array assignment: what follows it is read, and its value is not
 		// known.
 		{command: "arr=(1 2); echo x > b.go", want: []Target{at("b.go", R)}},
 		{command: "declare -a v=(1); rm stele.md", want: []Target{at("stele.md", Remove)}},
 		{command: "x+=(1); echo > b.go", want: []Target{at("b.go", R)}},
+		// bash stops these two when it runs them, "cannot assign list to array
+		// member", so echo never runs: seeing b.go only denies once too often.
 		{command: "a[0]=(1); echo > b.go", want: []Target{at("b.go", R)}},
 		{command: "a[b[1]]+=(1); echo > b.go", want: []Target{at("b.go", R)}},
 		{command: "a=(1 2) tee b.go", want: []Target{at("b.go", T)}},
@@ -197,9 +211,11 @@ func TestTargets(t *testing.T) {
 		{command: "a=(\n  1 # c > x\n  2\n)\necho > b.go", want: []Target{at("b.go", R)}},
 		{command: "a=([k]=v)", want: nil},
 		{command: "a=(1); echo > $a", unknown: 1},
-		{command: "declare a=(1); echo > ${a}", unknown: 1},
+		{command: `a=(1); echo > "c$a"`, unknown: 1},
+		{command: "declare a=(1); echo > c${a}", unknown: 1},
 		{command: "a=1; a+=2; echo > $a", unknown: 1},
-		{command: "a=b; a[0]=c; echo > $a", unknown: 1},
+		{command: "a=1; a+=2; echo > c$a", unknown: 1},
+		{command: "a=b; a[0]=c; echo > c$a", unknown: 1},
 		{command: "x+=1 tee f", want: []Target{at("f", T)}},
 		{command: "a[1]=x tee f", want: []Target{at("f", T)}},
 		{command: "tee a+=b", want: []Target{at("a+=b", T)}},
@@ -208,7 +224,9 @@ func TestTargets(t *testing.T) {
 		// Syntax errors in bash too: nothing after one runs.
 		{command: "echo a ( b > c", want: nil},
 		{command: "arr= (1); echo > b.go", want: nil},
+		{command: "a=b=(1); echo > b.go", want: nil},
 		{command: "echo a=(1); echo > b.go", want: nil},
+		{command: "a=1; echo c=(1); echo > b.go", want: nil},
 		{command: "sudo a=(1); echo > b.go", want: nil},
 		{command: "command declare v=(1); echo > b.go", want: nil},
 		{command: `"declare" v=(1); echo > b.go`, want: nil},
@@ -232,6 +250,8 @@ func TestTargets(t *testing.T) {
 		{command: "time -p -p tee f", want: nil},
 		{command: "time -- -p tee f", want: nil},
 		{command: "time -pp tee f", want: nil},
+		{command: "time -ptee f", want: nil},
+		{command: "time --tee f", want: nil},
 		{command: "time -v tee f", want: nil},
 		{command: "/usr/bin/time -o log -f %e tee f", want: []Target{at("f", T)}},
 
@@ -265,6 +285,12 @@ func TestTargets(t *testing.T) {
 		{command: `python -c "open('x','w')"`, want: nil},
 		{command: `echo "abc > f`, want: nil},
 		{command: "echo `unterminated > f", want: nil},
+		// Valid bash that stele cannot parse: it reads up to there.
+		{command: "a=\\\n(1); echo > b.go", want: nil},
+		{command: "a[ 1 ]=(1); echo > b.go", want: nil},
+		{command: "a[(1)]=x; echo > b.go", want: nil},
+		// (( is read as arithmetic, though bash falls back to nested subshells.
+		{command: "((echo > d.go) && (echo > e.go))", want: nil},
 
 		// Paths.
 		{os: "unix", command: "echo > /tmp/x", want: []Target{{Path: "/tmp/x", Kind: R}}},
@@ -274,6 +300,18 @@ func TestTargets(t *testing.T) {
 		{os: "windows", command: "cd /c/o && echo > a", want: []Target{{Path: `C:\o\a`, Kind: R}}},
 		{os: "windows", command: "echo > /tmp/x", unknown: 1},
 		{os: "windows", command: `echo > C:\Users\x`, unknown: 1},
+
+		// A name joined to a directory given with -t.
+		{command: "cp -t sub/ x", want: []Target{at("sub/x", Copy)}},
+		{command: "cp -t '' x", want: []Target{at("x", Copy)}},
+		{os: "unix", command: "cp -t / x", want: []Target{{Path: "/x", Kind: Copy}}},
+		{os: "unix", command: `cp -t 'a\' x`, want: []Target{at(`a\/x`, Copy)}},
+		{os: "unix", command: "cp -t a: x", want: []Target{at("a:/x", Copy)}},
+		{os: "windows", command: `cp -t 'a\' x`, want: []Target{at("a/x", Copy)}},
+		{os: "windows", command: `cp -t 'C:\' x`, want: []Target{{Path: `C:\x`, Kind: Copy}}},
+		{os: "windows", command: "cp -t C:/ x", want: []Target{{Path: `C:\x`, Kind: Copy}}},
+		{os: "windows", command: "cp -t C: x", unknown: 1},
+		{os: "windows", command: "cp -t /c x", want: []Target{{Path: `C:\x`, Kind: Copy}}},
 	}
 	for _, tt := range tests {
 		if tt.os == "windows" && runtime.GOOS != "windows" || tt.os == "unix" && runtime.GOOS == "windows" {
@@ -337,6 +375,78 @@ func TestTargetsGlob(t *testing.T) {
 	want = []Target{{Path: filepath.Join(dir, "src", "*.go"), Kind: Redirect}}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("quoted (-want +got):\n%s", diff)
+	}
+}
+
+// A backslash in a directory separates on Windows only, so a .. after it goes
+// up one level there: joining a name must leave that to Abs.
+func TestTargetsCopyBackslashDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "a", "c"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "c"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		command       string
+		windows, unix string
+	}{
+		{`cp x 'a\b/../c'`, "a/c/x", "c/x"},
+		{`cp -t 'a\b/../c' x`, "a/c/x", "c/x"},
+		{`cp x 'a\b/..'`, "a/x", "x"},
+	}
+	for _, tt := range tests {
+		rel := tt.unix
+		if runtime.GOOS == "windows" {
+			rel = tt.windows
+		}
+		want := []Target{{Path: filepath.Join(dir, filepath.FromSlash(rel)), Kind: Copy}}
+		got, _ := Targets(tt.command, dir)
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("Targets(%q) (-want +got):\n%s", tt.command, diff)
+		}
+	}
+}
+
+// A glob's * and ? skip a name starting with a dot, unless the pattern starts
+// with one, and a pattern ending in / matches directories, as in bash.
+func TestTargetsGlobNames(t *testing.T) {
+	dir := t.TempDir()
+	for _, d := range []string{"dst", "bak/sub"} {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(d)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"bak/.hidden", "bak/plain"} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(f)), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file := func(rel string, k Kind) Target {
+		return Target{Path: filepath.Join(dir, filepath.FromSlash(rel)), Kind: k}
+	}
+	tests := []struct {
+		command string
+		want    []Target
+	}{
+		{"rm bak/*", []Target{file("bak/plain", Remove), file("bak/sub", Remove)}},
+		{"rm bak/.*", []Target{file("bak/.hidden", Remove)}},
+		{"rm bak/?hidden", []Target{file("bak/?hidden", Remove)}},
+		{"rm bak/[.]hidden", []Target{file("bak/[.]hidden", Remove)}},
+		{"cp bak/* dst/", []Target{file("dst/plain", Copy), file("dst/sub", Copy)}},
+		{"cp -r bak/*/ dst/", []Target{file("dst/sub", Copy)}},
+		{"rm -r bak/*/", []Target{file("bak/sub", Remove)}},
+		{"rm -r bak/p*/", []Target{file("bak/p*", Remove)}},
+	}
+	for _, tt := range tests {
+		got, unknown := Targets(tt.command, dir)
+		if diff := cmp.Diff(tt.want, got); diff != "" {
+			t.Errorf("Targets(%q) (-want +got):\n%s", tt.command, diff)
+		}
+		if unknown != 0 {
+			t.Errorf("Targets(%q): unknown = %d", tt.command, unknown)
+		}
 	}
 }
 
@@ -461,6 +571,57 @@ func TestTargetsGlobBudget(t *testing.T) {
 	}
 }
 
+// The budget spans a command: once it is spent no glob reads anything, however
+// many follow, and a directory with nothing in it spends it too.
+func TestTargetsGlobBudgetHolds(t *testing.T) {
+	old := maxGlobEntries
+	maxGlobEntries = 10
+	t.Cleanup(func() { maxGlobEntries = old })
+	dir := t.TempDir()
+	for i := range 50 {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprint("f", i)), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	empty := t.TempDir()
+	for _, tt := range []struct{ name, dir, command string }{
+		{"rm", dir, "rm" + strings.Repeat(" *", 20)},
+		{"cp", dir, "cp" + strings.Repeat(" *", 20) + " ."},
+		{"mv", dir, "mv" + strings.Repeat(" *", 20) + " ."},
+		{"redirect", dir, strings.Repeat("echo > *; ", 20)},
+		{"an empty directory", empty, "rm" + strings.Repeat(" *", 20)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &results{seen: map[string]int{}}
+			p := &parser{src: tt.command, res: r, vars: map[string]string{}, dyn: map[string]bool{}, dir: tt.dir, dirOK: true}
+			p.list("")
+			// One more than the budget: that is how a read finds it spent.
+			if r.entries > maxGlobEntries+1 {
+				t.Errorf("read %d entries, budget %d", r.entries, maxGlobEntries)
+			}
+			if r.unknown == 0 {
+				t.Error("no glob reported over the budget")
+			}
+		})
+	}
+}
+
+// Linear in the command: quadratic, this takes seconds at the size cap.
+func TestTargetsArraysLinear(t *testing.T) {
+	for _, command := range []string{
+		strings.Repeat("a=() ", maxCommand/5),
+		"declare " + strings.Repeat("a=() ", (maxCommand-8)/5),
+	} {
+		start := time.Now()
+		if got, _ := Targets(command, cwd); len(got) != 0 {
+			t.Errorf("%d targets", len(got))
+		}
+		if d := time.Since(start); d > 2*time.Second {
+			t.Errorf("%d bytes of arrays took %v", len(command), d)
+		}
+	}
+}
+
 // The caps bound what one command costs.
 func TestTargetsCaps(t *testing.T) {
 	if got, unknown := Targets(strings.Repeat("x", maxCommand+1), cwd); got != nil || unknown != 1 {
@@ -520,6 +681,11 @@ func FuzzTargets(f *testing.F) {
 	} {
 		f.Add(s)
 	}
+	// A glob reads the real disk, from ~ or /, and that is not the time this
+	// measures: TestTargetsGlobBudgetHolds holds the budget.
+	old := maxGlobEntries
+	maxGlobEntries = 16
+	f.Cleanup(func() { maxGlobEntries = old })
 	f.Fuzz(func(t *testing.T, s string) {
 		start := time.Now()
 		Targets(s, cwd)

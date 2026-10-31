@@ -2,8 +2,8 @@ package shell
 
 import (
 	"os"
-	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -89,13 +89,22 @@ type token struct {
 
 // command is one simple command being read.
 type command struct {
-	words  []word
-	redirs []token
+	words   []word
+	redirs  []token
+	assigns int // how many words start it that are assignments
 }
 
 // reset empties c, keeping its arrays for the next command.
 func (c *command) reset() {
-	c.words, c.redirs = c.words[:0], c.redirs[:0]
+	c.words, c.redirs, c.assigns = c.words[:0], c.redirs[:0], 0
+}
+
+// add appends a word.
+func (c *command) add(w word) {
+	if w.assign != "" && c.assigns == len(c.words) {
+		c.assigns++
+	}
+	c.words = append(c.words, w)
 }
 
 // keywords may stand before a command; they are not its name.
@@ -144,6 +153,7 @@ func (p *parser) list(term string) {
 			if len(c.words) == 0 && t.w.plain() {
 				switch t.w.text {
 				case "case":
+					p.funcNext = false
 					cases = append(cases, caseHead)
 					continue
 				case "esac":
@@ -169,6 +179,7 @@ func (p *parser) list(term string) {
 					}
 					continue
 				case "[[":
+					p.funcNext = false
 					p.skipWords("]]")
 					continue
 				}
@@ -180,7 +191,7 @@ func (p *parser) list(term string) {
 				}
 			}
 			p.funcNext = false
-			c.words = append(c.words, t.w)
+			c.add(t.w)
 		case tRedir:
 			c.redirs = append(c.redirs, t)
 		case tOp:
@@ -204,7 +215,7 @@ func (p *parser) list(term string) {
 			switch t.op {
 			case "(":
 				switch {
-				case p.arrayStart(c.words):
+				case p.arrayStart(&c):
 					p.array()
 					c.words[len(c.words)-1].dynamic = true
 					continue
@@ -253,23 +264,22 @@ var declarations = map[string]bool{
 	"let": true, "local": true, "readonly": true, "typeset": true,
 }
 
-// arrayStart reports whether the ( just read opens an array: it touches the
-// last of words, which is NAME= or the like, and that word stands where an
+// arrayStart reports whether the ( just read opens an array: it touches c's
+// last word, which is NAME= or the like, and that word stands where an
 // assignment can. Anywhere else bash calls it a syntax error.
-func (p *parser) arrayStart(words []word) bool {
-	last := len(words) - 1
+func (p *parser) arrayStart(c *command) bool {
+	last := len(c.words) - 1
 	if last < 0 || p.src[p.i-2] != '=' {
 		return false
 	}
-	if end, _ := assignEnd(words[last].raw); end == 0 || end != len(words[last].raw)-1 {
+	if end, _ := assignEnd(c.words[last].raw); end == 0 || end != len(c.words[last].raw)-1 {
 		return false
 	}
-	for _, w := range words[:last] {
-		if w.assign == "" {
-			return w.plain() && declarations[w.text]
-		}
+	if c.assigns >= last {
+		return true
 	}
-	return true
+	first := c.words[c.assigns]
+	return first.plain() && declarations[first.text]
 }
 
 // array reads the elements of NAME=(…), after the opening paren, up to its
@@ -1097,14 +1107,23 @@ func (p *parser) copyTo(cmd string, args []word) {
 			if cmd == "mv" {
 				p.add(word{text: n}, Remove)
 			}
-			// path.Join: the directory stays as written, /c/… in Git Bash,
-			// which filepath.Join would turn into \c\… on Windows.
 			t := *dirWord
-			t.text = path.Join(t.text, filepath.Base(n))
+			t.text = inDir(t.text, filepath.Base(n))
 			t.glob = false
 			p.add(t, Copy)
 		}
 	}
+}
+
+// inDir is name in dir, with dir left as written for Abs to resolve:
+// filepath.Join would make Git Bash's /c/… into \c\… on Windows, and path.Join
+// would clean a .. after a backslash, which separates there. A doubled
+// separator is Abs's to clean. C: is the drive's current directory, not its root.
+func inDir(dir, name string) string {
+	if dir == "" || windows && strings.HasSuffix(dir, ":") {
+		return dir + name
+	}
+	return dir + "/" + name
 }
 
 func isDir(path string) bool {
@@ -1151,15 +1170,21 @@ func (p *parser) resolve(w word) (string, bool) {
 	return Abs(dir, w.text)
 }
 
-// maxGlobEntries caps the directory entries a command's globs read, in all:
-// a glob over a whole drive must not cost seconds on every Bash call. Tests
-// lower it.
+// maxGlobEntries caps the directory entries a command's globs read, in all,
+// and each directory opened counts as one: a glob over a whole drive, or
+// thousands of globs over an empty directory, must not cost seconds on every
+// Bash call. Tests lower it.
 var maxGlobEntries = 2000
 
 // glob expands a pattern, segment by segment, reading at most the budget of
-// directory entries. ok is false past the budget. No match returns none, and
-// the caller takes the word as written, as bash does.
+// directory entries. ok is false past the budget, and for every glob after
+// it. No match returns none, and the caller takes the word as written, as bash
+// does. As in bash, a name starting with a dot needs a pattern starting with
+// one, and a pattern ending in / matches directories only.
 func (p *parser) glob(pattern string) (matches []string, ok bool) {
+	if p.res.entries > maxGlobEntries {
+		return nil, false
+	}
 	abs, ok := p.resolve(word{text: pattern})
 	if !ok || p.res.globbed >= maxGlob {
 		return nil, true
@@ -1185,6 +1210,9 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 				next = append(next, c)
 				continue
 			}
+			if p.res.entries++; p.res.entries > maxGlobEntries {
+				return nil, false
+			}
 			f, err := os.Open(b)
 			if err != nil {
 				continue
@@ -1195,7 +1223,7 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 				return nil, false
 			}
 			for _, e := range es {
-				if m, _ := filepath.Match(seg, e.Name()); m {
+				if m, _ := filepath.Match(seg, e.Name()); m && (seg[0] == '.' || e.Name()[0] != '.') {
 					next = append(next, filepath.Join(b, e.Name()))
 				}
 			}
@@ -1203,6 +1231,9 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 		if bases = next; len(bases) == 0 {
 			return nil, true
 		}
+	}
+	if strings.HasSuffix(pattern, "/") {
+		bases = slices.DeleteFunc(bases, func(b string) bool { return !isDir(b) })
 	}
 	sort.Strings(bases)
 	if room := maxGlob - p.res.globbed; len(bases) > room {

@@ -1292,10 +1292,12 @@ subshell keeps to itself, `case` patterns, function bodies in braces or in a
 subshell, simple `NAME=value`, array assignments, whose value is not known,
 `$PWD` from the directory tracked, wrappers such as `sudo`, `env` and
 `timeout`, the `time` keyword, globs reading at most 2,000 directory entries a
-command) and returns the files it writes by redirection, `tee`, `sed -i` and
-`perl -i`, and those `rm`, `mv`, `cp`, `ln` and `truncate` touch. A command it
-cannot parse is read up to the error, as bash stops at a real syntax error, and
-what it found so far stands.
+command, each directory opened counting as one, and left unexpanded past that)
+and returns the files it writes by redirection, `tee`, `sed -i` and `perl -i`,
+and those `rm`, `mv`, `cp`, `ln` and `truncate` touch. A command it cannot parse
+is read up to the error, as bash stops at a real syntax error, and what it found
+so far stands. `((` is always arithmetic, so nested subshells written that way
+are not read.
 A command that writes nothing costs a parse: no key, no index, no file. A
 target that is one of stele's own files asks, as a Write does (#52). A target
 a scoped rule covers is denied, once per file, per agent and per turn
