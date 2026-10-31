@@ -2,56 +2,45 @@ package safefile
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 )
 
-// dirLink makes link a junction to target on Windows, a symlink elsewhere.
-func dirLink(t *testing.T, target, link string) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
-			t.Skipf("mklink /J: %v: %s", err, out)
-		}
-		return
-	}
-	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("symlink: %v", err)
-	}
-}
+// The junction cases need a process to make the junction, and nothing on the
+// hook's path starts one: they are in internal/toolpath's tests.
 
-func TestResolve(t *testing.T) {
-	dir, out := t.TempDir(), t.TempDir()
-	plain := filepath.Join(dir, "a", "b.txt")
+func TestResolvePlainPath(t *testing.T) {
+	plain := filepath.Join(t.TempDir(), "a", "b.txt")
 	if got, ok := Resolve(plain); !ok || got != plain {
 		t.Errorf("Resolve(%s) = %q, %v", plain, got, ok)
 	}
+}
+
+func TestResolveSymlink(t *testing.T) {
+	dir, out := t.TempDir(), t.TempDir()
 	link := filepath.Join(dir, "link")
-	dirLink(t, out, link)
+	if err := os.Symlink(out, link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	real, err := filepath.EvalSymlinks(out)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, ok := Resolve(filepath.Join(link, "new", "c.txt"))
-	if want := filepath.Join(out, "new", "c.txt"); !ok || !strings.EqualFold(got, want) {
+	if want := filepath.Join(real, "new", "c.txt"); !ok || got != want {
 		t.Errorf("through a link = %q, %v, want %q", got, ok, want)
 	}
 }
 
-func TestResolveDanglingLink(t *testing.T) {
-	dir := t.TempDir()
-	gone := filepath.Join(t.TempDir(), "gone")
-	link := filepath.Join(dir, "link")
-	dirLink(t, gone, link)
-	if got, ok := Resolve(link); !ok || !strings.EqualFold(got, gone) {
-		t.Errorf("Resolve = %q, %v, want %q", got, ok, gone)
-	}
-}
-
-func TestResolveLoop(t *testing.T) {
+func TestResolveSymlinkLoop(t *testing.T) {
 	dir := t.TempDir()
 	a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")
-	dirLink(t, b, a)
-	dirLink(t, a, b)
+	if err := os.Symlink(b, a); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	if err := os.Symlink(a, b); err != nil {
+		t.Fatal(err)
+	}
 	if got, ok := Resolve(a); ok {
 		t.Errorf("Resolve = %q, want it to give up", got)
 	}

@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/lictor-ai/stele/internal/safefile"
 )
 
 const sep = string(os.PathListSeparator)
@@ -159,6 +161,37 @@ func dirLink(t *testing.T, target, link string) {
 	}
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlink: %v", err)
+	}
+}
+
+// safefile.Resolve lives on the hook's path, where nothing starts a process,
+// so its tests with a junction are here.
+func TestResolveThroughALink(t *testing.T) {
+	dir, out := t.TempDir(), t.TempDir()
+	link := filepath.Join(dir, "link")
+	dirLink(t, out, link)
+	got, ok := safefile.Resolve(filepath.Join(link, "new", "c.txt"))
+	if want := filepath.Join(out, "new", "c.txt"); !ok || !strings.EqualFold(got, want) {
+		t.Errorf("through a link = %q, %v, want %q", got, ok, want)
+	}
+}
+
+func TestResolveDanglingLink(t *testing.T) {
+	gone := filepath.Join(t.TempDir(), "gone")
+	link := filepath.Join(t.TempDir(), "link")
+	dirLink(t, gone, link)
+	if got, ok := safefile.Resolve(link); !ok || !strings.EqualFold(got, gone) {
+		t.Errorf("Resolve = %q, %v, want %q", got, ok, gone)
+	}
+}
+
+func TestResolveLinkLoop(t *testing.T) {
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+	dirLink(t, b, a)
+	dirLink(t, a, b)
+	if got, ok := safefile.Resolve(a); ok {
+		t.Errorf("Resolve = %q, want it to give up", got)
 	}
 }
 
