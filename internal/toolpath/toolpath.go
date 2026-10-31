@@ -1,7 +1,8 @@
 // Package toolpath keeps the programs stele starts outside the project. A
 // cloned repository can bring its own git, or an ssh for git to find, and a
 // PATH entry such as ./bin, or one a tool like direnv adds, would otherwise
-// run it. It decides from paths alone, and starts nothing.
+// run it. GitFlags stops a repository's config doing the same. This package
+// looks at paths and flags, and starts nothing.
 package toolpath
 
 import (
@@ -11,11 +12,35 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/lictor-ai/stele/internal/safefile"
 )
 
 // ErrRefused is a program found inside the project: a cloned repository could
 // have put it there.
 var ErrRefused = errors.New("refused: it is inside the project")
+
+// GitFlags returns the flags that go before every git command stele runs, a
+// new slice each time. Only https and ssh may be used, so a remote can never
+// run a transport command (ext::) or reach a local path; credential helpers
+// never prompt; submodules are never fetched or pushed; no fsmonitor program
+// runs.
+func GitFlags() []string {
+	return []string{
+		"-c", "protocol.allow=never",
+		"-c", "protocol.https.allow=always",
+		"-c", "protocol.ssh.allow=always",
+		"-c", "credential.interactive=never",
+		"-c", "submodule.recurse=false",
+		"-c", "fetch.recurseSubmodules=false",
+		"-c", "push.recurseSubmodules=no",
+		"-c", "core.fsmonitor=false",
+		// A bare repository is used only when named with --git-dir: a cloned
+		// project laid out as one could otherwise bring its own config, with
+		// filters and hooks that run commands.
+		"-c", "safe.bareRepository=explicit",
+	}
+}
 
 // Vet returns the absolute path of found, the program name was found at on
 // PATH. A program inside the project root, or inside the git repository that
@@ -61,12 +86,17 @@ func isPath(name string) bool {
 // outside returns the PATH value list without the entries that are empty,
 // relative or inside the project at root, in order. Windows quotes an entry
 // that holds the separator; SplitList takes the quotes off, so they go back.
+// git ignores the quotes and splits on every separator, so each part of an
+// entry must pass, or the whole entry goes.
 func outside(list, root string) string {
 	sep := string(os.PathListSeparator)
 	var kept []string
+next:
 	for _, e := range filepath.SplitList(list) {
-		if !filepath.IsAbs(e) || inside(e, root) {
-			continue
+		for _, part := range strings.Split(e, sep) {
+			if !filepath.IsAbs(part) || inside(part, root) {
+				continue next
+			}
 		}
 		if strings.Contains(e, sep) {
 			e = `"` + e + `"`
@@ -77,11 +107,58 @@ func outside(list, root string) string {
 }
 
 // inside reports whether p is inside root or the git repository that holds
-// it.
+// it, by name or by being the same directory: a path has many spellings, and
+// a junction or a link leads out of the text of its path.
 func inside(p, root string) bool {
-	for _, r := range []string{root, repoTop(root)} {
-		if r != "" && insideAny(p, r) {
+	for _, d := range projectDirs(root) {
+		if insideAny(p, d) || under(p, d) {
 			return true
+		}
+	}
+	return false
+}
+
+// projectDirs are root and the repository that holds it, which is the nearest
+// one to root or to where root leads: a root reached through a link has the
+// repository only at its target. Only the nearest counts: a dotfiles
+// repository in the home directory must not take ~/bin into every project.
+func projectDirs(root string) []string {
+	var dirs []string
+	add := func(d string) {
+		if d != "" {
+			dirs = append(dirs, d)
+		}
+	}
+	add(root)
+	add(repoTop(root))
+	if abs, err := filepath.Abs(root); err == nil {
+		if r, ok := safefile.Resolve(abs); ok && r != abs {
+			add(repoTop(r))
+		}
+	}
+	return dirs
+}
+
+// under reports whether dir, by file identity, is p or a parent of p, as p
+// stands or where it leads. An entry that does not exist yet is judged by its
+// parents. A path whose links cannot be followed counts as under dir.
+func under(p, dir string) bool {
+	want, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	target, ok := safefile.Resolve(p)
+	if !ok {
+		return true
+	}
+	for _, x := range []string{p, target} {
+		for d := x; ; d = filepath.Dir(d) {
+			if info, err := os.Stat(d); err == nil && os.SameFile(info, want) {
+				return true
+			}
+			if filepath.Dir(d) == d {
+				break
+			}
 		}
 	}
 	return false

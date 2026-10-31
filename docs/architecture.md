@@ -48,7 +48,7 @@ internal/serve/       MCP wiring over the SDK
 internal/plugin/      registry of built-in and external plugins, exec protocol, sinks
 internal/status/      stele status: describe the install as JSON
 internal/publish/     stele publish: stele.md to a git repository as a merge request (D64–D66)
-internal/toolpath/    programs and PATH entries inside the project, refused — pure logic
+internal/toolpath/    programs and PATH entries inside the project, refused; the flags on every git command
 internal/check/       the Checker slot: stele check's runner and report
   regex/              the built-in regex checker
 internal/adapter/     the agent adapter slot: the Adapter interface, the agent-neutral types
@@ -950,8 +950,13 @@ only one that starts processes: `git`, `gh`, `glab` and the browser opener,
 each resolved on `PATH` and refused inside the project or the repository
 that holds it (as D43 does for plugins). `internal/toolpath` holds that test,
 and takes `PATH` entries inside the project, and empty or relative ones, out
-of what those programs inherit, so git cannot find an `ssh` there. It imports
-no `os/exec`, and `stele check` uses it without linking this package. Every
+of what those programs inherit, so git cannot find an `ssh` there. "Inside"
+is by name and by file identity: `safefile.Resolve` follows links and
+junctions, then `os.SameFile` walks the parents, so other spellings of a path
+count. Only the nearest repository counts, of the root and of where it leads:
+`~/.git` must not take `~/bin` into every project. The package imports no
+`os/exec`, and `stele check` uses it without linking this package; it also
+holds `GitFlags`, passed to every git command of both. Every
 git call allows only the https
 and ssh transports, uses a bare repository only when named with
 `--git-dir`, never prompts, and keeps at most 1 MiB of what git prints. A token goes only to the fixed endpoints `api.github.com` and

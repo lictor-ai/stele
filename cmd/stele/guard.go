@@ -9,6 +9,7 @@ import (
 	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/install"
+	"github.com/lictor-ai/stele/internal/safefile"
 	"github.com/lictor-ai/stele/internal/scope"
 )
 
@@ -40,7 +41,7 @@ func guarded(root, rel, file string) bool {
 	if ownName(rel) {
 		return true
 	}
-	if r, ok := resolve(file); ok && r != file {
+	if r, ok := safefile.Resolve(file); ok && r != file {
 		if _, rrel, ok := target(r); ok && ownName(rrel) {
 			return true
 		}
@@ -155,7 +156,7 @@ func loadsSettings(ev adapter.Event, file string) bool {
 	if sessionSettings(ev.Cwd, file) {
 		return true
 	}
-	r, ok := resolve(file)
+	r, ok := safefile.Resolve(file)
 	return ok && r != file && sessionSettings(ev.Cwd, r)
 }
 
@@ -179,7 +180,7 @@ func askOutside(ev adapter.Event) adapter.Answer {
 	if loadsSettings(ev, ev.File) {
 		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(filepath.ToSlash(ev.File)))}
 	}
-	r, ok := resolve(ev.File)
+	r, ok := safefile.Resolve(ev.File)
 	if !ok || r == ev.File {
 		return adapter.Answer{}
 	}
@@ -187,46 +188,4 @@ func askOutside(ev adapter.Event) adapter.Answer {
 		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(rel))}
 	}
 	return adapter.Answer{}
-}
-
-// maxHops bounds the links resolve follows, against a loop.
-const maxHops = 32
-
-// resolve returns where a write to file lands, following each link on the
-// way, a dangling final one included, which a write would create. It follows
-// Windows junctions too, which filepath.EvalSymlinks does not. ok is false
-// when it cannot tell.
-func resolve(file string) (string, bool) {
-	p := filepath.Clean(file)
-	for hops := 0; ; {
-		vol := filepath.VolumeName(p)
-		parts := strings.Split(strings.TrimPrefix(p[len(vol):], string(filepath.Separator)), string(filepath.Separator))
-		cur := vol + string(filepath.Separator)
-		next := ""
-		for i, part := range parts {
-			step := filepath.Join(cur, part)
-			info, err := os.Lstat(step)
-			if err != nil || info.Mode()&(os.ModeSymlink|os.ModeIrregular) == 0 {
-				cur = step // a plain directory, or one the write would create
-				continue
-			}
-			to, err := os.Readlink(step)
-			if err != nil {
-				cur = step // a reparse point that is not a link
-				continue
-			}
-			if !filepath.IsAbs(to) {
-				to = filepath.Join(cur, to)
-			}
-			next = filepath.Join(append([]string{to}, parts[i+1:]...)...)
-			break
-		}
-		if next == "" {
-			return cur, true
-		}
-		if hops++; hops > maxHops {
-			return "", false
-		}
-		p = filepath.Clean(next)
-	}
 }

@@ -47,24 +47,6 @@ func timeoutFor(args []string) time.Duration {
 	return gitTimeout
 }
 
-// safety is passed to every git command. Only https and ssh may be used, so
-// "repo" can never run a transport command (ext::) or reach a local path;
-// credential helpers never prompt; submodules are never fetched or pushed.
-var safety = []string{
-	"-c", "protocol.allow=never",
-	"-c", "protocol.https.allow=always",
-	"-c", "protocol.ssh.allow=always",
-	"-c", "credential.interactive=never",
-	"-c", "submodule.recurse=false",
-	"-c", "fetch.recurseSubmodules=false",
-	"-c", "push.recurseSubmodules=no",
-	"-c", "core.fsmonitor=false",
-	// A bare repository is used only when named with --git-dir: a cloned
-	// project laid out as one could otherwise bring its own config, with
-	// filters and hooks that run commands.
-	"-c", "safe.bareRepository=explicit",
-}
-
 // quiet is added to git's environment: no prompt on the terminal, from Git
 // Credential Manager or from an askpass program. An empty GIT_ASKPASS makes
 // git skip core.askPass and SSH_ASKPASS too. ssh's own prompts (a key's
@@ -91,9 +73,9 @@ type gitCmd struct {
 	root string // the project: no PATH entry inside it reaches git
 }
 
-// args returns the arguments to run git with: safety first.
+// args returns the arguments to run git with: toolpath.GitFlags first.
 func (g gitCmd) args(args []string) []string {
-	out := append([]string{}, safety...)
+	out := toolpath.GitFlags()
 	if localRemote != "" {
 		out = append(out, "-c", "protocol.file.allow=always")
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/backstop"
 	"github.com/lictor-ai/stele/internal/install"
+	"github.com/lictor-ai/stele/internal/safefile"
 	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/session"
 	"github.com/lictor-ai/stele/internal/shell"
@@ -31,7 +32,7 @@ func beforeBash(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 		}
 		if !ok {
 			// Outside every project, but a link may lead into one.
-			if r, ok := resolve(t.Path); ok && r != t.Path {
+			if r, ok := safefile.Resolve(t.Path); ok && r != t.Path {
 				if rroot, rrel, ok := target(r); ok && guarded(rroot, rrel, r) {
 					asks = append(asks, rrel)
 				}

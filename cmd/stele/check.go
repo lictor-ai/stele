@@ -348,14 +348,14 @@ func gitBin(root string) (string, error) {
 	return toolpath.Vet("git", p, root)
 }
 
-// gitCommand is git with args, to run in root. No PATH entry inside root
-// reaches it.
+// gitCommand is git with args, to run in root, under toolpath.GitFlags as
+// stele publish runs it. No PATH entry inside root reaches it.
 func gitCommand(root string, args ...string) (*exec.Cmd, error) {
 	bin, err := gitBin(root)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(bin, args...)
+	cmd := exec.Command(bin, append(toolpath.GitFlags(), args...)...)
 	cmd.Dir = root
 	cmd.Env = toolpath.Env(os.Environ(), root)
 	return cmd, nil

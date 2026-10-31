@@ -454,7 +454,13 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **`stele publish` needs a repository with at least one commit, and git access to it.** git and Git Credential Manager are never allowed to prompt. ssh still can: a key's passphrase or an unknown host key is asked by ssh itself.
 
-**`stele check` and `stele publish` start no program from inside the project.** A git, gh, glab or browser opener found on `PATH` inside the project, or inside the git repository that holds it, is refused, even when it links to somewhere else, as a nix `result/bin` does. `stele check` then exits 2; `stele check <paths>` needs no git. What they start doesn't get `PATH` entries inside the project, or empty or relative ones, so git can't find an `ssh` there. Variables that name a program, such as `GIT_SSH_COMMAND` and `GIT_EXEC_PATH`, are passed through.
+**`stele check` and `stele publish` guard against programs a project brings with it, and only in these ways.**
+
+- **Programs refused.** `stele check` refuses a git, and `stele publish` a git, gh, glab or browser opener, found on `PATH` inside the project or inside the nearest git repository that holds it, or through a relative `PATH` entry. That counts one that links to somewhere else, as a nix `result/bin` does. Links and junctions are followed, and directories compared by identity, so another spelling of the path counts too. `stele check` then exits 2; `stele check <paths>` needs no git.
+- **`PATH` entries removed.** What they start doesn't get `PATH` entries that are empty, relative or inside those same directories. On Windows, a quoted entry goes whole if any `;`-separated part of it would.
+- **git config overridden.** Every git command they run is given `core.fsmonitor=false`, `safe.bareRepository=explicit`, `credential.interactive=never`, the `protocol` settings that allow only https and ssh, and `submodule.recurse=false`, `fetch.recurseSubmodules=false` and `push.recurseSubmodules=no`. So git won't use a folder laid out as a bare repository unless told to: `stele check` in one exits 2.
+
+Not covered: only the nearest repository counts, so a superproject's folder or a linked worktree's main checkout is not inside the project. A program named by an environment variable, such as `GIT_SSH_COMMAND` or `GIT_EXEC_PATH`, still runs, as does one named by any git config not listed above, such as `core.sshCommand`.
 
 **`stele publish` refuses a `stele/publish/<path>` branch holding commits it did not make for this project.** Two projects that publish to the same `path` of one repository get that error; give each its own `path`.
 

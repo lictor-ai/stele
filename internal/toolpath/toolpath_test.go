@@ -3,6 +3,7 @@ package toolpath
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -114,34 +115,161 @@ func TestEnvPathNameOnWindows(t *testing.T) {
 	}
 }
 
-// A Windows PATH quotes an entry that holds the separator; the entry must
-// stay one entry.
-func TestEnvKeepsAQuotedEntry(t *testing.T) {
+// A Windows PATH quotes an entry that holds the separator, and SplitList reads
+// it as one entry. git ignores the quotes and splits on every ;, so each part
+// counts on its own.
+func TestEnvQuotedEntry(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("only Windows quotes PATH entries")
 	}
-	root, out := t.TempDir(), t.TempDir()
-	semi := filepath.Join(out, "a;b")
-	inside := filepath.Join(root, "b;in")
-	got, ok := pathOf(Env([]string{`PATH="` + semi + `";"` + inside + `";` + out}, root))
-	if want := `"` + semi + `";` + out; !ok || got != want {
-		t.Errorf("PATH = %q, want %q", got, want)
+	root, a, b := t.TempDir(), t.TempDir(), t.TempDir()
+	bin := filepath.Join(root, "bin")
+	tests := []struct {
+		name, entry string
+		kept        bool
+	}{
+		{"every part outside", a + ";" + b, true},
+		{"a part inside the project", a + ";" + bin + ";" + b, false},
+		{"a relative part", a + ";bin", false},
+		{"an empty part", a + ";;" + b, false},
+		{"a part of a name inside", filepath.Join(root, "b;in"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := pathOf(Env([]string{`PATH="` + tt.entry + `";` + a}, root))
+			want := a
+			if tt.kept {
+				want = `"` + tt.entry + `";` + a
+			}
+			if !ok || got != want {
+				t.Errorf("PATH = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
-func TestEnvDropsALinkIntoTheProject(t *testing.T) {
-	root, out := t.TempDir(), t.TempDir()
-	bin := filepath.Join(root, "bin")
+// dirLink makes link a junction to target on Windows, a symlink elsewhere.
+func dirLink(t *testing.T, target, link string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+			t.Skipf("mklink /J: %v: %s", err, out)
+		}
+		return
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+}
+
+// refused says that both Vet and Env treat dir, as spelled, as inside the
+// project at root.
+func refused(t *testing.T, dir, root string) {
+	t.Helper()
+	if _, err := Vet("git", filepath.Join(dir, "git"), root); !errors.Is(err, ErrRefused) {
+		t.Errorf("Vet in %s = %v, want ErrRefused", dir, err)
+	}
+	out := t.TempDir()
+	if got, ok := pathOf(Env([]string{"PATH=" + out + sep + dir}, root)); !ok || got != out {
+		t.Errorf("PATH with %s = %q, want %q", dir, got, out)
+	}
+}
+
+// binDir makes a project with a bin directory, and returns both.
+func binDir(t *testing.T) (root, bin string) {
+	t.Helper()
+	root = t.TempDir()
+	bin = filepath.Join(root, "bin")
 	if err := os.Mkdir(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(out, "link")
-	if err := os.Symlink(bin, link); err != nil {
-		t.Skipf("no symlinks here: %v", err)
+	return root, bin
+}
+
+func TestLinkIntoTheProject(t *testing.T) {
+	root, bin := binDir(t)
+	link := filepath.Join(t.TempDir(), "link")
+	dirLink(t, bin, link)
+	refused(t, link, root)
+	refused(t, filepath.Join(link, "deeper", "still"), root)
+}
+
+func TestProjectOpenedThroughALink(t *testing.T) {
+	root, bin := binDir(t)
+	link := filepath.Join(t.TempDir(), "link")
+	dirLink(t, root, link)
+	refused(t, bin, link)
+	refused(t, filepath.Join(link, "bin"), root)
+}
+
+func TestLinkOutOfTheProjectStaysInside(t *testing.T) {
+	root := t.TempDir()
+	link := filepath.Join(root, "result")
+	dirLink(t, t.TempDir(), link)
+	refused(t, link, root)
+}
+
+func TestLinkElsewhereIsOutside(t *testing.T) {
+	root := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	dirLink(t, t.TempDir(), link)
+	if _, err := Vet("git", filepath.Join(link, "git"), root); err != nil {
+		t.Errorf("Vet = %v", err)
 	}
-	got, ok := pathOf(Env([]string{"PATH=" + out + sep + link}, root))
-	if !ok || got != out {
-		t.Errorf("PATH = %q, want %q", got, out)
+	if got, ok := pathOf(Env([]string{"PATH=" + link}, root)); !ok || got != link {
+		t.Errorf("PATH = %q, want %q", got, link)
+	}
+}
+
+// Windows has more spellings of a path than text can compare.
+func TestOtherSpellingsOfAProject(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path spellings")
+	}
+	root, bin := binDir(t)
+	refused(t, `\\?\`+bin, root)
+	refused(t, `\\.\`+bin, root)
+	refused(t, bin, `\\?\`+root)
+
+	vol := filepath.VolumeName(bin)
+	share := `\\localhost\` + vol[:1] + `$`
+	if _, err := os.Stat(share + `\`); err != nil {
+		t.Skipf("no admin share: %v", err)
+	}
+	refused(t, share+bin[len(vol):], root)
+	refused(t, bin, share+root[len(vol):])
+}
+
+func TestEnclosingRepositoryThroughALink(t *testing.T) {
+	top := t.TempDir()
+	if err := os.Mkdir(filepath.Join(top, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc := filepath.Join(top, "svc")
+	if err := os.Mkdir(svc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	dirLink(t, svc, link)
+	refused(t, filepath.Join(top, "bin"), link)
+}
+
+// A dotfiles repository in the home directory must not take ~/bin for part
+// of a project below it: only the nearest repository counts.
+func TestOnlyTheNearestRepositoryCounts(t *testing.T) {
+	outer := t.TempDir()
+	root := filepath.Join(outer, "work", "proj")
+	for _, dir := range []string{filepath.Join(outer, ".git"), filepath.Join(root, ".git")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := filepath.Join(outer, "bin")
+	if _, err := Vet("git", filepath.Join(bin, "git"), root); err != nil {
+		t.Errorf("Vet = %v", err)
+	}
+	if got, ok := pathOf(Env([]string{"PATH=" + bin}, root)); !ok || got != bin {
+		t.Errorf("PATH = %q, want %q", got, bin)
 	}
 }
 

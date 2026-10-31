@@ -428,6 +428,38 @@ func TestCheckRefusesGitInEnclosingRepository(t *testing.T) {
 	}
 }
 
+// A clone can hold a folder laid out as a repository, whose config names a
+// program: git never checks out a .git, but it does check out HEAD, config,
+// objects/ and refs/. stele check run there must not start the program.
+func TestCheckRunsNoProgramFromRepositoryConfig(t *testing.T) {
+	root := gitProject(t, checkRules)
+	writeAt(t, root, "sub/stele.md", checkRules)
+	writeAt(t, root, "sub/HEAD", "ref: refs/heads/main\n")
+	writeAt(t, root, "sub/objects/keep", "")
+	writeAt(t, root, "sub/refs/keep", "")
+	// What core.fsmonitor names goes through a shell, on Windows too: the
+	// marker needs no program built for this test. The # drops git's arguments.
+	writeAt(t, root, "sub/config", "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n\tfsmonitor = echo ran > fsmonitor-ran #\n")
+	t.Chdir(filepath.Join(root, "sub"))
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile = %d, stderr %q", code, errOut)
+	}
+	t.Chdir(root)
+	commitAll(t, root, "a folder laid out as a repository")
+
+	clone := filepath.Join(t.TempDir(), "clone")
+	gitT(t, root, "clone", "-q", root, clone)
+	sub := filepath.Join(clone, "sub")
+	t.Chdir(sub)
+	code, out, errOut := runCmd("check")
+	if _, err := os.Stat(filepath.Join(sub, "fsmonitor-ran")); err == nil {
+		t.Errorf("the program in the repository's config ran: check = %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if code != exitCantRun || !strings.Contains(errOut, "bare repository") {
+		t.Errorf("check = %d, stdout %q, stderr %q, want 2 and bare repository", code, out, errOut)
+	}
+}
+
 func TestCheckNoGitOnPath(t *testing.T) {
 	root := gitProject(t, checkRules)
 	writeAt(t, root, "a.go", "package a\n")
