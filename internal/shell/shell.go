@@ -10,8 +10,9 @@
 // resolve are not seen: Targets counts the last kind as unknown. A command it
 // cannot parse is read up to the error: nothing after it runs when bash agrees,
 // and it hides only what follows a form stele does not know when bash does not.
-// (( is always read as arithmetic, so nested subshells written that way are not
-// seen.
+// (( is always read as arithmetic up to its )): what subshells written that way
+// write is not seen, and with no )) nothing after it is. shopt options are not
+// followed.
 package shell
 
 import (
@@ -79,6 +80,7 @@ type results struct {
 	unknown int
 	globbed int // files matched by globs
 	entries int // directory entries globs read
+	steps   int // directories globs opened and fixed path segments they walked
 }
 
 // add adds one target, merging a duplicate. A content write wins over a

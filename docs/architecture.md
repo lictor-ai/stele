@@ -1291,13 +1291,17 @@ backticks, `[[ ]]`, `(( ))` and `$[ ]`, `cd`, which a function body or a
 subshell keeps to itself, `case` patterns, function bodies in braces or in a
 subshell, simple `NAME=value`, array assignments, whose value is not known,
 `$PWD` from the directory tracked, wrappers such as `sudo`, `env` and
-`timeout`, the `time` keyword, globs reading at most 2,000 directory entries a
-command, each directory opened counting as one, and left unexpanded past that)
-and returns the files it writes by redirection, `tee`, `sed -i` and `perl -i`,
-and those `rm`, `mv`, `cp`, `ln` and `truncate` touch. A command it cannot parse
-is read up to the error, as bash stops at a real syntax error, and what it found
-so far stands. `((` is always arithmetic, so nested subshells written that way
-are not read.
+`timeout`, the `time` keyword, globs reading at most 2,000 directory entries
+and taking at most 5,000 steps a command, a step being a directory opened or a
+fixed path segment walked, those of the current directory included, and left
+unexpanded past either budget) and returns the files it writes by redirection,
+`tee`, `sed -i` and `perl -i`, and those `rm`, `mv`, `cp`, `ln` and `truncate`
+touch. A command it cannot parse is read up to the error, as bash stops at a
+real syntax error, and what it found so far stands. `((` is always arithmetic
+up to its `))`: what subshells written that way write is not read, and with no
+`))` nothing after it is. `shopt` options are not followed. A `cd` in a function
+body written with `if`, `case`, `for` or `while` moves the tracked directory for
+what follows.
 A command that writes nothing costs a parse: no key, no index, no file. A
 target that is one of stele's own files asks, as a Write does (#52). A target
 a scoped rule covers is denied, once per file, per agent and per turn

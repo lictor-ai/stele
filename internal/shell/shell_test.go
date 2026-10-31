@@ -291,6 +291,15 @@ func TestTargets(t *testing.T) {
 		{command: "a[(1)]=x; echo > b.go", want: nil},
 		// (( is read as arithmetic, though bash falls back to nested subshells.
 		{command: "((echo > d.go) && (echo > e.go))", want: nil},
+		{command: "((echo > d.go) && (echo > e.go)); echo > f.go", want: []Target{at("f.go", R)}},
+		// With no )) it reads to the end, so what follows it is lost too.
+		{command: "((echo x > a.go) || true) && echo z > c.go", want: nil},
+		// A cd in a body that is not in braces or a subshell moves the directory,
+		// though bash only defines the function: it writes c.go here.
+		{command: "f() if true; then cd a; fi; echo > c.go", want: []Target{at("a/c.go", R)}},
+		{command: "f() case x in x) cd a;; esac; echo > c.go", want: []Target{at("a/c.go", R)}},
+		{command: "f() for x in y; do cd a; done; echo > c.go", want: []Target{at("a/c.go", R)}},
+		{command: "f() while cd a; do break; done; echo > c.go", want: []Target{at("a/c.go", R)}},
 
 		// Paths.
 		{os: "unix", command: "echo > /tmp/x", want: []Target{{Path: "/tmp/x", Kind: R}}},
@@ -438,6 +447,9 @@ func TestTargetsGlobNames(t *testing.T) {
 		{"cp -r bak/*/ dst/", []Target{file("dst/sub", Copy)}},
 		{"rm -r bak/*/", []Target{file("bak/sub", Remove)}},
 		{"rm -r bak/p*/", []Target{file("bak/p*", Remove)}},
+		// A fixed last segment must exist.
+		{"rm b*/plain", []Target{file("bak/plain", Remove)}},
+		{"rm b*/none", []Target{file("b*/none", Remove)}},
 	}
 	for _, tt := range tests {
 		got, unknown := Targets(tt.command, dir)
@@ -446,6 +458,96 @@ func TestTargetsGlobNames(t *testing.T) {
 		}
 		if unknown != 0 {
 			t.Errorf("Targets(%q): unknown = %d", tt.command, unknown)
+		}
+	}
+}
+
+// A bracket set takes ! as bash does, and a ] first in it is a member.
+func TestTargetsGlobSets(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"_x.go", "a.go", ".h.go", "!x", "]x"} {
+		if err := os.WriteFile(filepath.Join(dir, f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tests := []struct {
+		os      string // "" for every system, else "windows" or "unix"
+		command string
+		want    []string
+	}{
+		{command: "rm [!_]*.go", want: []string{"a.go"}},
+		{command: "rm [^_]*.go", want: []string{"a.go"}},
+		{command: "rm [!a-z]*.go", want: []string{"_x.go"}},
+		{command: "rm [_a]*.go", want: []string{"_x.go", "a.go"}},
+		{command: "rm x[!]", want: []string{"x[!]"}},
+		{command: "rm [a!]x", want: []string{"!x"}},
+		{command: "rm [!x", want: []string{"[!x"}},
+		{os: "unix", command: "rm []]x", want: []string{"]x"}},
+		{os: "unix", command: "rm [!]]x", want: []string{"!x"}},
+		{os: "unix", command: "rm []!]x", want: []string{"!x", "]x"}},
+		// filepath.Match has no escape on Windows, so no ] in a set: such a
+		// pattern matches nothing there and stays as written.
+		{os: "windows", command: "rm []]x", want: []string{"[]]x"}},
+	}
+	for _, tt := range tests {
+		if tt.os == "windows" && runtime.GOOS != "windows" || tt.os == "unix" && runtime.GOOS == "windows" {
+			continue
+		}
+		var want []Target
+		for _, f := range tt.want {
+			want = append(want, Target{Path: filepath.Join(dir, f), Kind: Remove})
+		}
+		got, unknown := Targets(tt.command, dir)
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("Targets(%q) (-want +got):\n%s", tt.command, diff)
+		}
+		if unknown != 0 {
+			t.Errorf("Targets(%q): unknown = %d", tt.command, unknown)
+		}
+	}
+	if got, _ := Targets("sed -i s/a/b/ [!_]*.go", dir); len(got) != 1 || got[0].Kind != SedInPlace {
+		t.Errorf("sed: %v", got)
+	}
+}
+
+func TestChild(t *testing.T) {
+	sep := string(filepath.Separator)
+	for dir, want := range map[string]string{sep: sep + "a", sep + "b": sep + "b" + sep + "a"} {
+		if got := child(dir, "a"); got != want {
+			t.Errorf("child(%q, a) = %q, want %q", dir, got, want)
+		}
+	}
+}
+
+func TestMatchPattern(t *testing.T) {
+	old := windows
+	t.Cleanup(func() { windows = old })
+	for _, tt := range []struct{ seg, unix, windows string }{
+		{"*.go", "*.go", "*.go"},
+		{"[!_]*.go", "[^_]*.go", "[^_]*.go"},
+		{"[^_]x", "[^_]x", "[^_]x"},
+		{"[a!]", "[a!]", "[a!]"},
+		{"a[!b]c[!d]", "a[^b]c[^d]", "a[^b]c[^d]"},
+		{"[]]x", `[\]]x`, "[]]x"},
+		{"[!]]x", `[^\]]x`, "[^]]x"},
+		{"[]!]x", `[\]!]x`, "[]!]x"},
+		{"[!x", "[!x", "[!x"},
+		{"[!]", "[!]", "[!]"},
+		{"[]", "[]", "[]"},
+		{"[![!x]", "[^[!x]", "[^[!x]"},
+		{`\[!x]`, `\[!x]`, `\[^x]`},
+		{`[!\]]x`, `[^\]]x`, `[^\]]x`},
+		{`[a\]!]`, `[a\]!]`, `[a\]!]`},
+		{`[\][!a]`, `[\][!a]`, `[\][^a]`},
+		{`a\`, `a\`, `a\`},
+	} {
+		windows = false
+		if got := matchPattern(tt.seg); got != tt.unix {
+			t.Errorf("matchPattern(%q) = %q, want %q", tt.seg, got, tt.unix)
+		}
+		windows = true
+		if got := matchPattern(tt.seg); got != tt.windows {
+			t.Errorf("on Windows, matchPattern(%q) = %q, want %q", tt.seg, got, tt.windows)
 		}
 	}
 }
@@ -571,12 +673,47 @@ func TestTargetsGlobBudget(t *testing.T) {
 	}
 }
 
-// The budget spans a command: once it is spent no glob reads anything, however
-// many follow, and a directory with nothing in it spends it too.
+// The budget is in entries, not directories: everything up to it expands.
+func TestTargetsGlobBudgetBound(t *testing.T) {
+	flat := t.TempDir()
+	for i := range maxGlobEntries {
+		if err := os.WriteFile(filepath.Join(flat, fmt.Sprint("f", i)), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, unknown := Targets("rm *", flat); len(got) != maxTargets || unknown != 0 {
+		t.Errorf("%d files: %d targets, unknown %d", maxGlobEntries, len(got), unknown)
+	}
+	if err := os.WriteFile(filepath.Join(flat, "one more"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, unknown := Targets("rm *", flat); len(got) != 0 || unknown != 1 {
+		t.Errorf("%d files: %d targets, unknown %d", maxGlobEntries+1, len(got), unknown)
+	}
+
+	dir := t.TempDir()
+	for i := range 300 {
+		d := filepath.Join(dir, fmt.Sprint("d", i))
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for j := range 5 {
+			if err := os.WriteFile(filepath.Join(d, fmt.Sprint("f", j, ".go")), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if got, unknown := Targets("sed -i s/a/b/ */*.go", dir); len(got) != maxTargets || unknown != 0 {
+		t.Errorf("300 directories of 5 files: %d targets, unknown %d", len(got), unknown)
+	}
+}
+
+// The budgets span a command: once one is spent no glob reads anything, however
+// many follow. A directory with nothing in it spends steps, as does a path.
 func TestTargetsGlobBudgetHolds(t *testing.T) {
-	old := maxGlobEntries
+	old, oldSteps := maxGlobEntries, maxGlobSteps
 	maxGlobEntries = 10
-	t.Cleanup(func() { maxGlobEntries = old })
+	t.Cleanup(func() { maxGlobEntries, maxGlobSteps = old, oldSteps })
 	dir := t.TempDir()
 	for i := range 50 {
 		if err := os.WriteFile(filepath.Join(dir, fmt.Sprint("f", i)), nil, 0o644); err != nil {
@@ -589,12 +726,9 @@ func TestTargetsGlobBudgetHolds(t *testing.T) {
 		{"cp", dir, "cp" + strings.Repeat(" *", 20) + " ."},
 		{"mv", dir, "mv" + strings.Repeat(" *", 20) + " ."},
 		{"redirect", dir, strings.Repeat("echo > *; ", 20)},
-		{"an empty directory", empty, "rm" + strings.Repeat(" *", 20)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			r := &results{seen: map[string]int{}}
-			p := &parser{src: tt.command, res: r, vars: map[string]string{}, dyn: map[string]bool{}, dir: tt.dir, dirOK: true}
-			p.list("")
+			r := globRun(tt.command, tt.dir)
 			// One more than the budget: that is how a read finds it spent.
 			if r.entries > maxGlobEntries+1 {
 				t.Errorf("read %d entries, budget %d", r.entries, maxGlobEntries)
@@ -603,6 +737,90 @@ func TestTargetsGlobBudgetHolds(t *testing.T) {
 				t.Error("no glob reported over the budget")
 			}
 		})
+	}
+
+	maxGlobEntries = old
+	nested := t.TempDir()
+	for _, d := range []string{"d1", "d2"} {
+		if err := os.Mkdir(filepath.Join(nested, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The path of the directory itself is walked too, a step a segment.
+	depth := func(dir string) int {
+		return strings.Count(dir[len(filepath.VolumeName(dir)):], string(filepath.Separator))
+	}
+	for _, tt := range []struct {
+		name, dir, command string
+		steps              int // beyond the directory's own path
+	}{
+		{"an empty directory", empty, "rm *", 1},
+		{"no such directory", empty, "rm no/*", 2},
+		{"fixed segments first", empty, "rm a/b/c/*", 4},
+		{"each match its own", nested, "rm */a/*", 5},
+		{"a fixed last segment", nested, "rm */a", 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, want := globRun(tt.command, tt.dir).steps, depth(tt.dir)+tt.steps; got != want {
+				t.Errorf("took %d steps, want %d", got, want)
+			}
+		})
+	}
+
+	for _, tt := range []struct{ name, dir, command string }{
+		{"empty directories", empty, "rm" + strings.Repeat(" *", 20)},
+		{"no such directories", empty, "rm" + strings.Repeat(" no/*", 20)},
+		{"a long path", empty, "rm " + strings.Repeat("a/", 20) + "*"},
+		{"a long path after a glob", nested, "rm */" + strings.Repeat("a/", 20) + "*"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			maxGlobSteps = depth(tt.dir) + 8
+			t.Cleanup(func() { maxGlobSteps = oldSteps })
+			r := globRun(tt.command, tt.dir)
+			if r.unknown == 0 {
+				t.Errorf("no glob reported over a budget of %d steps", maxGlobSteps)
+			}
+			if r.steps > maxGlobSteps+depth(tt.dir)+21 {
+				t.Errorf("took %d steps, budget %d", r.steps, maxGlobSteps)
+			}
+		})
+	}
+}
+
+// globRun returns what command's globs spent.
+func globRun(command, dir string) *results {
+	r := &results{seen: map[string]int{}}
+	p := &parser{src: command, res: r, vars: map[string]string{}, dyn: map[string]bool{}, dir: dir, dirOK: true}
+	p.list("")
+	return r
+}
+
+// A path as long as a command can be costs no more than its length: quadratic,
+// the first of these takes over a minute.
+func TestTargetsLongPathsLinear(t *testing.T) {
+	long := strings.Repeat(strings.Repeat("a", 50)+"/", maxCommand/51-1)
+	for _, command := range []string{
+		"rm " + strings.Repeat("a/", maxCommand/2-3) + "*",
+		"rm " + long + "*",
+		"rm */" + strings.Repeat("a/", maxCommand/2-4) + "*",
+		"rm */" + long + "x",
+	} {
+		start := time.Now()
+		Targets(command, t.TempDir())
+		if d := time.Since(start); d > 2*time.Second {
+			t.Errorf("a path of %d bytes took %v", len(command), d)
+		}
+	}
+
+	// Copying the path at each of its segments would stay under that bound, on
+	// the step budget, but not this one.
+	dir := t.TempDir()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	Targets("rm "+long+"*", dir)
+	runtime.ReadMemStats(&after)
+	if got := after.TotalAlloc - before.TotalAlloc; got > 32<<20 {
+		t.Errorf("a path of %d bytes allocated %d MiB", len(long), got>>20)
 	}
 }
 
@@ -678,14 +896,15 @@ func FuzzTargets(f *testing.F) {
 		"cat > a.go <<'EOF'\nx > y\nEOF", "echo $(echo `a > b` > c) > d", "[[ a > b ]] && (( 1 > 2 ))",
 		"sed -i -e s/a/b/ f", "perl -0777 -pi -e x f", "cd a; (cd b && tee c) | tee d", "${", "$((", "<(", "'",
 		"a=(", "a[", "a[b]+=(1) x", "f() (", "function f (", "time -p", "time -p --", "cp a/* b/",
+		"rm [!", "rm [!]", "rm [!]]x", "rm []", "rm []]*", "rm a/b/[!c]/d",
 	} {
 		f.Add(s)
 	}
 	// A glob reads the real disk, from ~ or /, and that is not the time this
-	// measures: TestTargetsGlobBudgetHolds holds the budget.
-	old := maxGlobEntries
-	maxGlobEntries = 16
-	f.Cleanup(func() { maxGlobEntries = old })
+	// measures: TestTargetsGlobBudgetHolds holds the budgets.
+	old, oldSteps := maxGlobEntries, maxGlobSteps
+	maxGlobEntries, maxGlobSteps = 16, 64
+	f.Cleanup(func() { maxGlobEntries, maxGlobSteps = old, oldSteps })
 	f.Fuzz(func(t *testing.T, s string) {
 		start := time.Now()
 		Targets(s, cwd)

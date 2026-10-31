@@ -1170,19 +1170,24 @@ func (p *parser) resolve(w word) (string, bool) {
 	return Abs(dir, w.text)
 }
 
-// maxGlobEntries caps the directory entries a command's globs read, in all,
-// and each directory opened counts as one: a glob over a whole drive, or
-// thousands of globs over an empty directory, must not cost seconds on every
-// Bash call. Tests lower it.
-var maxGlobEntries = 2000
+// maxGlobEntries caps the directory entries a command's globs read, in all, and
+// maxGlobSteps the directories they open and the fixed path segments they walk:
+// a glob over a whole drive, thousands of globs over an empty directory or a
+// path as long as a command must not cost seconds on every Bash call. The steps
+// allow a directory opened and a fixed segment for each of the 2,000 entries,
+// as in */src/*.go, and 1,000 for the paths of the words. Tests lower both.
+var (
+	maxGlobEntries = 2000
+	maxGlobSteps   = 5000
+)
 
-// glob expands a pattern, segment by segment, reading at most the budget of
-// directory entries. ok is false past the budget, and for every glob after
-// it. No match returns none, and the caller takes the word as written, as bash
-// does. As in bash, a name starting with a dot needs a pattern starting with
-// one, and a pattern ending in / matches directories only.
+// glob expands a pattern, segment by segment, within the budgets of directory
+// entries and steps. ok is false past either, and for every glob after it. No
+// match returns none, and the caller takes the word as written, as bash does.
+// As in bash, a name starting with a dot needs a pattern starting with one, and
+// a pattern ending in / matches directories only.
 func (p *parser) glob(pattern string) (matches []string, ok bool) {
-	if p.res.entries > maxGlobEntries {
+	if p.res.entries > maxGlobEntries || p.res.steps > maxGlobSteps {
 		return nil, false
 	}
 	abs, ok := p.resolve(word{text: pattern})
@@ -1191,27 +1196,42 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 	}
 	vol := filepath.VolumeName(abs)
 	sep := string(filepath.Separator)
-	bases := []string{vol + sep}
-	segs := strings.Split(strings.TrimPrefix(abs[len(vol):], sep), sep)
-	for i, seg := range segs {
+	rest := strings.TrimPrefix(abs[len(vol):], sep)
+	segs := strings.Split(rest, sep)
+	// The fixed segments before the first glob are a prefix of a clean path:
+	// taking it whole keeps a long path linear.
+	first, end := 0, 0
+	for first < len(segs)-1 && !strings.ContainsAny(segs[first], "*?[") {
+		end += len(segs[first]) + 1
+		first++
+	}
+	base := vol + sep
+	if first > 0 {
+		base += rest[:end-1]
+	}
+	if p.res.steps += first; p.res.steps > maxGlobSteps {
+		return nil, false
+	}
+	bases := []string{base}
+	for i := first; i < len(segs); i++ {
+		seg := segs[i]
+		fixed := !strings.ContainsAny(seg, "*?[")
+		match := matchPattern(seg)
 		var next []string
 		for _, b := range bases {
-			if !strings.ContainsAny(seg, "*?[") {
-				c := filepath.Join(b, seg)
+			if p.res.steps++; p.res.steps > maxGlobSteps {
+				return nil, false
+			}
+			if fixed {
+				c := child(b, seg)
 				// A fixed last part must exist, as filepath.Glob has it.
 				if i == len(segs)-1 {
-					if p.res.entries++; p.res.entries > maxGlobEntries {
-						return nil, false
-					}
 					if _, err := os.Lstat(c); err != nil {
 						continue
 					}
 				}
 				next = append(next, c)
 				continue
-			}
-			if p.res.entries++; p.res.entries > maxGlobEntries {
-				return nil, false
 			}
 			f, err := os.Open(b)
 			if err != nil {
@@ -1223,8 +1243,8 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 				return nil, false
 			}
 			for _, e := range es {
-				if m, _ := filepath.Match(seg, e.Name()); m && (seg[0] == '.' || e.Name()[0] != '.') {
-					next = append(next, filepath.Join(b, e.Name()))
+				if m, _ := filepath.Match(match, e.Name()); m && (seg[0] == '.' || e.Name()[0] != '.') {
+					next = append(next, child(b, e.Name()))
 				}
 			}
 		}
@@ -1241,6 +1261,69 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 	}
 	p.res.globbed += len(bases)
 	return bases, true
+}
+
+// child is name in dir, a clean path: unlike filepath.Join it does not clean
+// dir again.
+func child(dir, name string) string {
+	if os.IsPathSeparator(dir[len(dir)-1]) {
+		return dir + name
+	}
+	return dir + string(filepath.Separator) + name
+}
+
+// matchPattern writes one segment of a bash glob as filepath.Match reads it:
+// [!x] is its [^x], and a ] first in a set is a member, which it must be told
+// by an escape. Windows has no escape, so there such a set matches nothing. A [
+// with no closing ] stays as it is.
+func matchPattern(seg string) string {
+	if !strings.Contains(seg, "[") {
+		return seg
+	}
+	var b strings.Builder
+	for i := 0; i < len(seg); {
+		switch {
+		case seg[i] == '\\' && !windows && i+1 < len(seg):
+			b.WriteString(seg[i : i+2])
+			i += 2
+			continue
+		case seg[i] != '[':
+			b.WriteByte(seg[i])
+			i++
+			continue
+		}
+		set := i + 1
+		negate := set < len(seg) && (seg[set] == '!' || seg[set] == '^')
+		if negate {
+			set++
+		}
+		member := set < len(seg) && seg[set] == ']' // a ] first in the set
+		end := set
+		if member {
+			end++
+		}
+		for end < len(seg) && seg[end] != ']' {
+			if seg[end] == '\\' && !windows {
+				end++
+			}
+			end++
+		}
+		if end >= len(seg) {
+			b.WriteByte('[')
+			i++
+			continue
+		}
+		b.WriteByte('[')
+		if negate {
+			b.WriteByte('^')
+		}
+		if member && !windows {
+			b.WriteByte('\\')
+		}
+		b.WriteString(seg[set : end+1])
+		i = end + 1
+	}
+	return b.String()
 }
 
 // home is the home directory ~ stands for.
