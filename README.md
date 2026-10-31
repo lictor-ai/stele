@@ -450,6 +450,8 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **`stele publish` opens merge requests on github.com and gitlab.com only.** Any other host, a self-hosted GitHub or GitLab included, gets the branch pushed and is told to open the request by hand, with no link.
 
+**`stele publish` has not been run against gitlab.com.** It was run against github.com; its GitLab calls are tested only against a fake server.
+
 **`stele publish` needs a repository with at least one commit, and git access to it.** git and Git Credential Manager are never allowed to prompt. ssh still can: a key's passphrase or an unknown host key is asked by ssh itself.
 
 **`stele publish` refuses a `stele/publish/<path>` branch holding commits it did not make for this project.** Two projects that publish to the same `path` of one repository get that error; give each its own `path`.
