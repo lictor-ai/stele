@@ -3,6 +3,7 @@ package shell
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -60,8 +61,9 @@ type word struct {
 	dynamic bool   // holds an expansion stele cannot resolve
 	glob    bool   // holds an unquoted * ? or [
 	procsub bool   // <(…) or >(…): a file descriptor, not a file
-	assign  string // NAME, when the word is NAME=value
-	value   string // the value, when assign is set
+	assign  string // NAME, when the word is NAME=value, NAME+=value or NAME[i]=value
+	value   string // the value, when assign is set and partial is not
+	partial bool   // NAME+= or NAME[i]=: NAME keeps part of what it held
 }
 
 // plain reports whether the word is written as its text: no quote, no
@@ -87,13 +89,22 @@ type token struct {
 
 // command is one simple command being read.
 type command struct {
-	words  []word
-	redirs []token
+	words   []word
+	redirs  []token
+	assigns int // how many words start it that are assignments
 }
 
 // reset empties c, keeping its arrays for the next command.
 func (c *command) reset() {
-	c.words, c.redirs = c.words[:0], c.redirs[:0]
+	c.words, c.redirs, c.assigns = c.words[:0], c.redirs[:0], 0
+}
+
+// add appends a word.
+func (c *command) add(w word) {
+	if w.assign != "" && c.assigns == len(c.words) {
+		c.assigns++
+	}
+	c.words = append(c.words, w)
 }
 
 // keywords may stand before a command; they are not its name.
@@ -142,6 +153,7 @@ func (p *parser) list(term string) {
 			if len(c.words) == 0 && t.w.plain() {
 				switch t.w.text {
 				case "case":
+					p.funcNext = false
 					cases = append(cases, caseHead)
 					continue
 				case "esac":
@@ -167,15 +179,19 @@ func (p *parser) list(term string) {
 					}
 					continue
 				case "[[":
+					p.funcNext = false
 					p.skipWords("]]")
 					continue
 				}
 				if keywords[t.w.text] {
+					if t.w.text == "time" {
+						p.skipTimeOptions()
+					}
 					continue
 				}
 			}
 			p.funcNext = false
-			c.words = append(c.words, t.w)
+			c.add(t.w)
 		case tRedir:
 			c.redirs = append(c.redirs, t)
 		case tOp:
@@ -198,8 +214,13 @@ func (p *parser) list(term string) {
 			}
 			switch t.op {
 			case "(":
-				if len(c.words) > 0 || p.funcNext {
-					// NAME() or function NAME(): a function definition.
+				switch {
+				case p.arrayStart(&c):
+					p.array()
+					c.words[len(c.words)-1].dynamic = true
+					continue
+				case len(c.words) > 0:
+					// NAME(): a function definition.
 					if q := p.next(); q.kind != tOp || q.op != ")" {
 						p.err = true
 						return
@@ -207,11 +228,20 @@ func (p *parser) list(term string) {
 					c.reset()
 					p.funcNext = true
 					continue
+				case p.funcNext:
+					// function NAME(), or a function's body in a subshell.
+					p.skipBlanks()
+					if p.has(")") {
+						p.i++
+						continue
+					}
+					p.funcNext = false
 				}
 				dir, ok := p.dir, p.dirOK
 				p.list(")")
 				p.dir, p.dirOK = dir, ok // a subshell's cd stays in it
 			case "((":
+				p.funcNext = false
 				p.skipArith()
 			case ")":
 				if term == ")" {
@@ -224,6 +254,57 @@ func (p *parser) list(term string) {
 				p.finish(&c, prevPipe || pipe || t.op == "&")
 				prevPipe = pipe
 			}
+		}
+	}
+}
+
+// declarations are the builtins whose arguments may be arrays.
+var declarations = map[string]bool{
+	"alias": true, "declare": true, "eval": true, "export": true,
+	"let": true, "local": true, "readonly": true, "typeset": true,
+}
+
+// arrayStart reports whether the ( just read opens an array: it touches c's
+// last word, which is NAME= or the like, and that word stands where an
+// assignment can. Anywhere else bash calls it a syntax error.
+func (p *parser) arrayStart(c *command) bool {
+	last := len(c.words) - 1
+	if last < 0 || p.src[p.i-2] != '=' {
+		return false
+	}
+	if end, _ := assignEnd(c.words[last].raw); end == 0 || end != len(c.words[last].raw)-1 {
+		return false
+	}
+	if c.assigns >= last {
+		return true
+	}
+	first := c.words[c.assigns]
+	return first.plain() && declarations[first.text]
+}
+
+// array reads the elements of NAME=(…), after the opening paren, up to its
+// closing one. Reading a word runs its substitutions; only words may stand
+// there.
+func (p *parser) array() {
+	for !p.err {
+		switch t := p.next(); {
+		case t.kind == tWord, t.kind == tOp && t.op == "\n":
+		case t.kind == tOp && t.op == ")":
+			return
+		default:
+			p.err = true
+		}
+	}
+}
+
+// skipTimeOptions skips what the time keyword takes: one -p, then one --.
+// Anything else after it is the command, even a word starting with -.
+func (p *parser) skipTimeOptions() {
+	for _, opt := range []string{"-p", "--"} {
+		p.skipBlanks()
+		end := p.i + len(opt)
+		if p.has(opt) && (end == len(p.src) || strings.IndexByte(" \t\r\n;&|()<>", p.src[end]) >= 0) {
+			p.i = end
 		}
 	}
 }
@@ -464,8 +545,11 @@ func (p *parser) readWord() word {
 		}
 	}
 	w.raw, w.text = p.src[start:p.i], b.String()
-	if n := nameLen(w.raw); n > 0 && n < len(w.raw) && w.raw[n] == '=' {
-		w.assign, w.value = w.raw[:n], w.text[n+1:]
+	if end, partial := assignEnd(w.raw); end > 0 {
+		w.assign, w.partial = w.raw[:nameLen(w.raw)], partial
+		if !partial {
+			w.value = w.text[end+1:]
+		}
 	}
 	// ~ or ~/… is the home directory; ~user/… is not known.
 	if strings.HasPrefix(w.raw, "~") {
@@ -763,7 +847,7 @@ var wrappers = map[string]map[string]bool{
 	"exec":    {"-a": true},
 	"nohup":   {},
 	"nice":    {"-n": true},
-	"time":    {},
+	"time":    {"-o": true, "-f": true},
 	"timeout": {"-s": true, "-k": true},
 	"stdbuf":  {"-i": true, "-o": true, "-e": true},
 	"ionice":  {"-c": true, "-n": true, "-t": false},
@@ -787,7 +871,7 @@ func name(w word) string {
 
 // assign records NAME=value for the expansions after it.
 func (p *parser) assign(w word) {
-	if w.dynamic {
+	if w.dynamic || w.partial {
 		delete(p.vars, w.assign)
 		p.dyn[w.assign] = true
 		return
@@ -1001,18 +1085,45 @@ func (p *parser) copyTo(cmd string, args []word) {
 		return
 	}
 	for _, s := range srcs {
-		if cmd == "mv" {
-			p.add(s, Remove)
-		}
 		if s.dynamic || dirWord.dynamic {
+			if cmd == "mv" {
+				p.add(s, Remove)
+			}
 			p.res.unknown++
 			continue
 		}
-		t := *dirWord
-		t.text = filepath.Join(t.text, filepath.Base(s.text))
-		t.glob = false
-		p.add(t, Copy)
+		names := []string{s.text}
+		if s.glob {
+			matches, ok := p.glob(s.text)
+			if !ok {
+				p.res.unknown++ // over the budget: what it matches is not known
+				continue
+			}
+			if len(matches) > 0 {
+				names = matches
+			}
+		}
+		for _, n := range names {
+			if cmd == "mv" {
+				p.add(word{text: n}, Remove)
+			}
+			t := *dirWord
+			t.text = inDir(t.text, filepath.Base(n))
+			t.glob = false
+			p.add(t, Copy)
+		}
 	}
+}
+
+// inDir is name in dir, with dir left as written for Abs to resolve:
+// filepath.Join would make Git Bash's /c/… into \c\… on Windows, and path.Join
+// would clean a .. after a backslash, which separates there. A doubled
+// separator is Abs's to clean. C: is the drive's current directory, not its root.
+func inDir(dir, name string) string {
+	if dir == "" || windows && strings.HasSuffix(dir, ":") {
+		return dir + name
+	}
+	return dir + "/" + name
 }
 
 func isDir(path string) bool {
@@ -1059,33 +1170,62 @@ func (p *parser) resolve(w word) (string, bool) {
 	return Abs(dir, w.text)
 }
 
-// maxGlobEntries caps the directory entries a command's globs read, in all:
-// a glob over a whole drive must not cost seconds on every Bash call. Tests
-// lower it.
-var maxGlobEntries = 2000
+// maxGlobEntries caps the directory entries a command's globs read, in all, and
+// maxGlobSteps the directories they open and the fixed path segments they walk:
+// a glob over a whole drive, thousands of globs over an empty directory or a
+// path as long as a command must not cost seconds on every Bash call. The steps
+// allow a directory opened and a fixed segment for each of the 2,000 entries,
+// as in */src/*.go, and 1,000 for the paths of the words. Tests lower both.
+var (
+	maxGlobEntries = 2000
+	maxGlobSteps   = 5000
+)
 
-// glob expands a pattern, segment by segment, reading at most the budget of
-// directory entries. ok is false past the budget. No match returns none, and
-// the caller takes the word as written, as bash does.
+// glob expands a pattern, segment by segment, within the budgets of directory
+// entries and steps. ok is false past either, and for every glob after it. No
+// match returns none, and the caller takes the word as written, as bash does.
+// As in bash, a name starting with a dot needs a pattern starting with one, and
+// a pattern ending in / matches directories only.
 func (p *parser) glob(pattern string) (matches []string, ok bool) {
+	if p.res.entries > maxGlobEntries || p.res.steps > maxGlobSteps {
+		return nil, false
+	}
 	abs, ok := p.resolve(word{text: pattern})
 	if !ok || p.res.globbed >= maxGlob {
 		return nil, true
 	}
 	vol := filepath.VolumeName(abs)
 	sep := string(filepath.Separator)
-	bases := []string{vol + sep}
-	segs := strings.Split(strings.TrimPrefix(abs[len(vol):], sep), sep)
-	for i, seg := range segs {
+	rest := strings.TrimPrefix(abs[len(vol):], sep)
+	segs := strings.Split(rest, sep)
+	// The fixed segments before the first glob are a prefix of a clean path:
+	// taking it whole keeps a long path linear.
+	first, end := 0, 0
+	for first < len(segs)-1 && !strings.ContainsAny(segs[first], "*?[") {
+		end += len(segs[first]) + 1
+		first++
+	}
+	base := vol + sep
+	if first > 0 {
+		base += rest[:end-1]
+	}
+	if p.res.steps += first; p.res.steps > maxGlobSteps {
+		return nil, false
+	}
+	bases := []string{base}
+	for i := first; i < len(segs); i++ {
+		seg := segs[i]
+		fixed := !strings.ContainsAny(seg, "*?[")
+		match := matchPattern(seg)
 		var next []string
 		for _, b := range bases {
-			if !strings.ContainsAny(seg, "*?[") {
-				c := filepath.Join(b, seg)
+			if p.res.steps++; p.res.steps > maxGlobSteps {
+				return nil, false
+			}
+			if fixed {
+				c := child(b, seg)
 				// A fixed last part must exist, as filepath.Glob has it.
 				if i == len(segs)-1 {
-					if p.res.entries++; p.res.entries > maxGlobEntries {
-						return nil, false
-					}
 					if _, err := os.Lstat(c); err != nil {
 						continue
 					}
@@ -1103,8 +1243,8 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 				return nil, false
 			}
 			for _, e := range es {
-				if m, _ := filepath.Match(seg, e.Name()); m {
-					next = append(next, filepath.Join(b, e.Name()))
+				if m, _ := filepath.Match(match, e.Name()); m && (seg[0] == '.' || e.Name()[0] != '.') {
+					next = append(next, child(b, e.Name()))
 				}
 			}
 		}
@@ -1112,12 +1252,78 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 			return nil, true
 		}
 	}
+	if strings.HasSuffix(pattern, "/") {
+		bases = slices.DeleteFunc(bases, func(b string) bool { return !isDir(b) })
+	}
 	sort.Strings(bases)
 	if room := maxGlob - p.res.globbed; len(bases) > room {
 		bases = bases[:room]
 	}
 	p.res.globbed += len(bases)
 	return bases, true
+}
+
+// child is name in dir, a clean path: unlike filepath.Join it does not clean
+// dir again.
+func child(dir, name string) string {
+	if os.IsPathSeparator(dir[len(dir)-1]) {
+		return dir + name
+	}
+	return dir + string(filepath.Separator) + name
+}
+
+// matchPattern writes one segment of a bash glob as filepath.Match reads it:
+// [!x] is its [^x], and a ] first in a set is a member, which it must be told
+// by an escape. Windows has no escape, so there such a set matches nothing. A [
+// with no closing ] stays as it is.
+func matchPattern(seg string) string {
+	if !strings.Contains(seg, "[") {
+		return seg
+	}
+	var b strings.Builder
+	for i := 0; i < len(seg); {
+		switch {
+		case seg[i] == '\\' && !windows && i+1 < len(seg):
+			b.WriteString(seg[i : i+2])
+			i += 2
+			continue
+		case seg[i] != '[':
+			b.WriteByte(seg[i])
+			i++
+			continue
+		}
+		set := i + 1
+		negate := set < len(seg) && (seg[set] == '!' || seg[set] == '^')
+		if negate {
+			set++
+		}
+		member := set < len(seg) && seg[set] == ']' // a ] first in the set
+		end := set
+		if member {
+			end++
+		}
+		for end < len(seg) && seg[end] != ']' {
+			if seg[end] == '\\' && !windows {
+				end++
+			}
+			end++
+		}
+		if end >= len(seg) {
+			b.WriteByte('[')
+			i++
+			continue
+		}
+		b.WriteByte('[')
+		if negate {
+			b.WriteByte('^')
+		}
+		if member && !windows {
+			b.WriteByte('\\')
+		}
+		b.WriteString(seg[set : end+1])
+		i = end + 1
+	}
+	return b.String()
 }
 
 // home is the home directory ~ stands for.
@@ -1139,6 +1345,41 @@ func digits(s string) bool {
 }
 
 func nameStart(c byte) bool { return c == '_' || letter(c) }
+
+// assignEnd returns the index of the = when s starts with NAME=, NAME+=,
+// NAME[…]= or NAME[…]+=, or 0. partial is set for all but the first.
+func assignEnd(s string) (end int, partial bool) {
+	n := nameLen(s)
+	if n == 0 {
+		return 0, false
+	}
+	if n < len(s) && s[n] == '[' {
+		depth := 0
+		for ; n < len(s); n++ {
+			if s[n] == '[' {
+				depth++
+			} else if s[n] == ']' {
+				depth--
+			}
+			if depth == 0 {
+				break
+			}
+		}
+		if depth != 0 {
+			return 0, false
+		}
+		n++
+		partial = true
+	}
+	if n < len(s) && s[n] == '+' {
+		n++
+		partial = true
+	}
+	if n < len(s) && s[n] == '=' {
+		return n, partial
+	}
+	return 0, false
+}
 
 // nameLen is the length of the variable name s starts with.
 func nameLen(s string) int {
