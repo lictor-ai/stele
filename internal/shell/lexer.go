@@ -2,6 +2,7 @@ package shell
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -60,8 +61,9 @@ type word struct {
 	dynamic bool   // holds an expansion stele cannot resolve
 	glob    bool   // holds an unquoted * ? or [
 	procsub bool   // <(…) or >(…): a file descriptor, not a file
-	assign  string // NAME, when the word is NAME=value
-	value   string // the value, when assign is set
+	assign  string // NAME, when the word is NAME=value, NAME+=value or NAME[i]=value
+	value   string // the value, when assign is set and partial is not
+	partial bool   // NAME+= or NAME[i]=: NAME keeps part of what it held
 }
 
 // plain reports whether the word is written as its text: no quote, no
@@ -171,6 +173,9 @@ func (p *parser) list(term string) {
 					continue
 				}
 				if keywords[t.w.text] {
+					if t.w.text == "time" {
+						p.skipTimeOptions()
+					}
 					continue
 				}
 			}
@@ -198,8 +203,13 @@ func (p *parser) list(term string) {
 			}
 			switch t.op {
 			case "(":
-				if len(c.words) > 0 || p.funcNext {
-					// NAME() or function NAME(): a function definition.
+				switch {
+				case p.arrayStart(c.words):
+					p.array()
+					c.words[len(c.words)-1].dynamic = true
+					continue
+				case len(c.words) > 0:
+					// NAME(): a function definition.
 					if q := p.next(); q.kind != tOp || q.op != ")" {
 						p.err = true
 						return
@@ -207,11 +217,20 @@ func (p *parser) list(term string) {
 					c.reset()
 					p.funcNext = true
 					continue
+				case p.funcNext:
+					// function NAME(), or a function's body in a subshell.
+					p.skipBlanks()
+					if p.has(")") {
+						p.i++
+						continue
+					}
+					p.funcNext = false
 				}
 				dir, ok := p.dir, p.dirOK
 				p.list(")")
 				p.dir, p.dirOK = dir, ok // a subshell's cd stays in it
 			case "((":
+				p.funcNext = false
 				p.skipArith()
 			case ")":
 				if term == ")" {
@@ -224,6 +243,58 @@ func (p *parser) list(term string) {
 				p.finish(&c, prevPipe || pipe || t.op == "&")
 				prevPipe = pipe
 			}
+		}
+	}
+}
+
+// declarations are the builtins whose arguments may be arrays.
+var declarations = map[string]bool{
+	"alias": true, "declare": true, "eval": true, "export": true,
+	"let": true, "local": true, "readonly": true, "typeset": true,
+}
+
+// arrayStart reports whether the ( just read opens an array: it touches the
+// last of words, which is NAME= or the like, and that word stands where an
+// assignment can. Anywhere else bash calls it a syntax error.
+func (p *parser) arrayStart(words []word) bool {
+	last := len(words) - 1
+	if last < 0 || p.src[p.i-2] != '=' {
+		return false
+	}
+	if end, _ := assignEnd(words[last].raw); end == 0 || end != len(words[last].raw)-1 {
+		return false
+	}
+	for _, w := range words[:last] {
+		if w.assign == "" {
+			return w.plain() && declarations[w.text]
+		}
+	}
+	return true
+}
+
+// array reads the elements of NAME=(…), after the opening paren, up to its
+// closing one. Reading a word runs its substitutions; only words may stand
+// there.
+func (p *parser) array() {
+	for !p.err {
+		switch t := p.next(); {
+		case t.kind == tWord, t.kind == tOp && t.op == "\n":
+		case t.kind == tOp && t.op == ")":
+			return
+		default:
+			p.err = true
+		}
+	}
+}
+
+// skipTimeOptions skips what the time keyword takes: one -p, then one --.
+// Anything else after it is the command, even a word starting with -.
+func (p *parser) skipTimeOptions() {
+	for _, opt := range []string{"-p", "--"} {
+		p.skipBlanks()
+		end := p.i + len(opt)
+		if p.has(opt) && (end == len(p.src) || strings.IndexByte(" \t\r\n;&|()<>", p.src[end]) >= 0) {
+			p.i = end
 		}
 	}
 }
@@ -464,8 +535,11 @@ func (p *parser) readWord() word {
 		}
 	}
 	w.raw, w.text = p.src[start:p.i], b.String()
-	if n := nameLen(w.raw); n > 0 && n < len(w.raw) && w.raw[n] == '=' {
-		w.assign, w.value = w.raw[:n], w.text[n+1:]
+	if end, partial := assignEnd(w.raw); end > 0 {
+		w.assign, w.partial = w.raw[:nameLen(w.raw)], partial
+		if !partial {
+			w.value = w.text[end+1:]
+		}
 	}
 	// ~ or ~/… is the home directory; ~user/… is not known.
 	if strings.HasPrefix(w.raw, "~") {
@@ -763,7 +837,7 @@ var wrappers = map[string]map[string]bool{
 	"exec":    {"-a": true},
 	"nohup":   {},
 	"nice":    {"-n": true},
-	"time":    {},
+	"time":    {"-o": true, "-f": true},
 	"timeout": {"-s": true, "-k": true},
 	"stdbuf":  {"-i": true, "-o": true, "-e": true},
 	"ionice":  {"-c": true, "-n": true, "-t": false},
@@ -787,7 +861,7 @@ func name(w word) string {
 
 // assign records NAME=value for the expansions after it.
 func (p *parser) assign(w word) {
-	if w.dynamic {
+	if w.dynamic || w.partial {
 		delete(p.vars, w.assign)
 		p.dyn[w.assign] = true
 		return
@@ -1001,17 +1075,35 @@ func (p *parser) copyTo(cmd string, args []word) {
 		return
 	}
 	for _, s := range srcs {
-		if cmd == "mv" {
-			p.add(s, Remove)
-		}
 		if s.dynamic || dirWord.dynamic {
+			if cmd == "mv" {
+				p.add(s, Remove)
+			}
 			p.res.unknown++
 			continue
 		}
-		t := *dirWord
-		t.text = filepath.Join(t.text, filepath.Base(s.text))
-		t.glob = false
-		p.add(t, Copy)
+		names := []string{s.text}
+		if s.glob {
+			matches, ok := p.glob(s.text)
+			if !ok {
+				p.res.unknown++ // over the budget: what it matches is not known
+				continue
+			}
+			if len(matches) > 0 {
+				names = matches
+			}
+		}
+		for _, n := range names {
+			if cmd == "mv" {
+				p.add(word{text: n}, Remove)
+			}
+			// path.Join: the directory stays as written, /c/… in Git Bash,
+			// which filepath.Join would turn into \c\… on Windows.
+			t := *dirWord
+			t.text = path.Join(t.text, filepath.Base(n))
+			t.glob = false
+			p.add(t, Copy)
+		}
 	}
 }
 
@@ -1139,6 +1231,41 @@ func digits(s string) bool {
 }
 
 func nameStart(c byte) bool { return c == '_' || letter(c) }
+
+// assignEnd returns the index of the = when s starts with NAME=, NAME+=,
+// NAME[…]= or NAME[…]+=, or 0. partial is set for all but the first.
+func assignEnd(s string) (end int, partial bool) {
+	n := nameLen(s)
+	if n == 0 {
+		return 0, false
+	}
+	if n < len(s) && s[n] == '[' {
+		depth := 0
+		for ; n < len(s); n++ {
+			if s[n] == '[' {
+				depth++
+			} else if s[n] == ']' {
+				depth--
+			}
+			if depth == 0 {
+				break
+			}
+		}
+		if depth != 0 {
+			return 0, false
+		}
+		n++
+		partial = true
+	}
+	if n < len(s) && s[n] == '+' {
+		n++
+		partial = true
+	}
+	if n < len(s) && s[n] == '=' {
+		return n, partial
+	}
+	return 0, false
+}
 
 // nameLen is the length of the variable name s starts with.
 func nameLen(s string) int {

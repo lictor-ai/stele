@@ -398,7 +398,7 @@ stele makes the rules hard to miss. It doesn't make them impossible to break. Kn
 
 A Bash command that writes, by redirection, `tee`, `sed -i` or `perl -i`, into a file a scoped rule covers is stopped once per file each turn: the agent gets the rules and is told to use Write or Edit; run again, the command goes through unchecked. With `--remind=off` it is not stopped at all.
 
-stele reads the command, it does not run it, so scripts, generators, `xargs`, `find -exec`, `$VAR` targets, brace expansion and writes into files only unscoped rules cover are not seen. NotebookEdit and PowerShell are not hooked.
+stele reads the command, it does not run it, so scripts, generators, `xargs`, `find -exec`, `$VAR` targets, brace expansion and writes into files only unscoped rules cover are not seen. A command stele can't parse is read up to the error, and what follows isn't seen: a real syntax error stops bash there too, so this only hides what follows a form stele doesn't know. A command over 256 KiB isn't read at all, and past 64 targets the rest aren't seen. NotebookEdit and PowerShell are not hooked.
 
 </details>
 
@@ -409,7 +409,7 @@ stele reads the command, it does not run it, so scripts, generators, `xargs`, `f
 
 A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock`, `.stele/` and `.claude` settings files. A Bash command that visibly writes, removes, moves or copies onto one of them is asked about too.
 
-Not asked about: other Bash forms, a NotebookEdit, managed settings, settings passed with `--settings` or the environment, and a session started above the stele project with hooks registered there by hand.
+Not asked about: other Bash forms, removing or moving a directory that holds them, such as `rm -rf .claude` or `mv .claude x` (only `.stele/` is asked about by its own name), a NotebookEdit, managed settings, settings passed with `--settings` or the environment, and a session started above the stele project with hooks registered there by hand.
 
 With no one to answer, as in `claude -p`, Claude Code refuses these writes, even ones you asked for.
 

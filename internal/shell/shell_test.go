@@ -169,6 +169,72 @@ func TestTargets(t *testing.T) {
 		{command: "function f { cd sub; }; echo > out.go", want: []Target{at("out.go", R)}},
 		{command: "function f() { cd sub; }\necho > out.go", want: []Target{at("out.go", R)}},
 
+		// A function body may be a subshell.
+		{command: "f() ( echo x > d.go ); echo > e.go", want: []Target{at("d.go", R), at("e.go", R)}},
+		{command: "f() ( cd sub; echo > in.go ); echo > out.go", want: []Target{at("sub/in.go", R), at("out.go", R)}},
+		{command: "f ( ) ( echo > d.go )", want: []Target{at("d.go", R)}},
+		{command: "function f ( echo > d.go )", want: []Target{at("d.go", R)}},
+		{command: "function f() ( echo > d.go )", want: []Target{at("d.go", R)}},
+		{command: "function f ( ) ( echo > d.go )", want: []Target{at("d.go", R)}},
+		{command: "f()\n( echo > d.go )", want: []Target{at("d.go", R)}},
+		{command: "f() ((1)); { cd sub; }; echo > a", want: []Target{at("sub/a", R)}},
+
+		// An array assignment: what follows it is read, and its value is not
+		// known.
+		{command: "arr=(1 2); echo x > b.go", want: []Target{at("b.go", R)}},
+		{command: "declare -a v=(1); rm stele.md", want: []Target{at("stele.md", Remove)}},
+		{command: "x+=(1); echo > b.go", want: []Target{at("b.go", R)}},
+		{command: "a[0]=(1); echo > b.go", want: []Target{at("b.go", R)}},
+		{command: "a[b[1]]+=(1); echo > b.go", want: []Target{at("b.go", R)}},
+		{command: "a=(1 2) tee b.go", want: []Target{at("b.go", T)}},
+		{command: "a[0]=(1) tee b.go", want: []Target{at("b.go", T)}},
+		{command: "a=1 b=(2) tee f", want: []Target{at("f", T)}},
+		{command: "a=() > f", want: []Target{at("f", R)}},
+		{command: "FOO=1 declare v=(1); echo > b.go", want: []Target{at("b.go", R)}},
+		{command: "export -n v=(1) w=(2); echo > b.go", want: []Target{at("b.go", R)}},
+		{command: "a=($(echo y > in.go) `echo z > t.go`); echo > b.go", want: []Target{at("in.go", R), at("t.go", R), at("b.go", R)}},
+		{command: "a=(<(echo y > p.go))", want: []Target{at("p.go", R)}},
+		{command: "a=(\n  1 # c > x\n  2\n)\necho > b.go", want: []Target{at("b.go", R)}},
+		{command: "a=([k]=v)", want: nil},
+		{command: "a=(1); echo > $a", unknown: 1},
+		{command: "declare a=(1); echo > ${a}", unknown: 1},
+		{command: "a=1; a+=2; echo > $a", unknown: 1},
+		{command: "a=b; a[0]=c; echo > $a", unknown: 1},
+		{command: "x+=1 tee f", want: []Target{at("f", T)}},
+		{command: "a[1]=x tee f", want: []Target{at("f", T)}},
+		{command: "tee a+=b", want: []Target{at("a+=b", T)}},
+		{command: "[[ $x =~ a=(b|c) ]] && echo > c.go", want: []Target{at("c.go", R)}},
+
+		// Syntax errors in bash too: nothing after one runs.
+		{command: "echo a ( b > c", want: nil},
+		{command: "arr= (1); echo > b.go", want: nil},
+		{command: "echo a=(1); echo > b.go", want: nil},
+		{command: "sudo a=(1); echo > b.go", want: nil},
+		{command: "command declare v=(1); echo > b.go", want: nil},
+		{command: `"declare" v=(1); echo > b.go`, want: nil},
+		{command: `"a"=(1); echo > b.go`, want: nil},
+		{command: "a=(x > y); echo > b.go", want: nil},
+		{command: "a=(1; echo > b.go)", want: nil},
+		{command: "a=( (1) ); echo > b.go", want: nil},
+		{command: "a=(1", want: nil},
+
+		// The time keyword takes one -p, then one --; what follows it is the
+		// command.
+		{command: "time tee f", want: []Target{at("f", T)}},
+		{command: "time -p tee a.go", want: []Target{at("a.go", T)}},
+		{command: "time -- tee f", want: []Target{at("f", T)}},
+		{command: "time -p -- tee f", want: []Target{at("f", T)}},
+		{command: "time -p { tee f; }", want: []Target{at("f", T)}},
+		{command: "time (tee f)", want: []Target{at("f", T)}},
+		{command: "time -p (tee f)", want: []Target{at("f", T)}},
+		{command: "! time -p tee f", want: []Target{at("f", T)}},
+		{command: "time -p; tee f", want: []Target{at("f", T)}},
+		{command: "time -p -p tee f", want: nil},
+		{command: "time -- -p tee f", want: nil},
+		{command: "time -pp tee f", want: nil},
+		{command: "time -v tee f", want: nil},
+		{command: "/usr/bin/time -o log -f %e tee f", want: []Target{at("f", T)}},
+
 		// A case pattern's ) closes nothing.
 		{command: "(case x in a) cd sub;; (b) true;; esac; echo > in.go); echo > out.go", want: []Target{at("sub/in.go", R), at("out.go", R)}},
 		{command: "case $x in *.go) echo > g;; *) echo > h;; esac", want: []Target{at("g", R), at("h", R)}},
@@ -274,6 +340,99 @@ func TestTargetsGlob(t *testing.T) {
 	}
 }
 
+// A glob source copied into a directory lands under the names it matches.
+func TestTargetsCopyGlob(t *testing.T) {
+	dir := t.TempDir()
+	for _, d := range []string{"a", ".claude"} {
+		if err := os.Mkdir(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"settings.json", "x.go"} {
+		if err := os.WriteFile(filepath.Join(dir, "a", f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := func(d, f string) string { return filepath.Join(dir, d, f) }
+	tests := []struct {
+		command string
+		want    []Target
+	}{
+		{"cp a/* .claude/", []Target{
+			{Path: in(".claude", "settings.json"), Kind: Copy},
+			{Path: in(".claude", "x.go"), Kind: Copy},
+		}},
+		{"mv a/* .claude/", []Target{
+			{Path: in("a", "settings.json"), Kind: Remove},
+			{Path: in(".claude", "settings.json"), Kind: Copy},
+			{Path: in("a", "x.go"), Kind: Remove},
+			{Path: in(".claude", "x.go"), Kind: Copy},
+		}},
+		{"cp -t .claude a/*.json", []Target{{Path: in(".claude", "settings.json"), Kind: Copy}}},
+		// Quoted, or matching nothing, the word stays as written, as in bash.
+		{"cp 'a/*' .claude/", []Target{{Path: in(".claude", "*"), Kind: Copy}}},
+		{"cp a/*.zz .claude/", []Target{{Path: in(".claude", "*.zz"), Kind: Copy}}},
+		{"mv a/*.zz .claude/", []Target{
+			{Path: in("a", "*.zz"), Kind: Remove},
+			{Path: in(".claude", "*.zz"), Kind: Copy},
+		}},
+	}
+	for _, tt := range tests {
+		got, unknown := Targets(tt.command, dir)
+		if diff := cmp.Diff(tt.want, got); diff != "" {
+			t.Errorf("Targets(%q) (-want +got):\n%s", tt.command, diff)
+		}
+		if unknown != 0 {
+			t.Errorf("Targets(%q): unknown = %d", tt.command, unknown)
+		}
+	}
+
+	t.Run("over the budget", func(t *testing.T) {
+		old := maxGlobEntries
+		maxGlobEntries = 1
+		t.Cleanup(func() { maxGlobEntries = old })
+		if got, unknown := Targets("mv a/* .claude/", dir); len(got) != 0 || unknown != 1 {
+			t.Errorf("%v, unknown %d; want none, 1 unknown", got, unknown)
+		}
+	})
+	t.Run("past the target cap", func(t *testing.T) {
+		for i := range maxTargets + 10 {
+			if err := os.WriteFile(filepath.Join(dir, "a", fmt.Sprint("f", i)), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got, _ := Targets("cp a/* .claude/", dir); len(got) != maxTargets {
+			t.Errorf("%d targets, want the cap %d", len(got), maxTargets)
+		}
+	})
+}
+
+// A directory given as Git Bash writes it keeps that form when a file's name
+// is joined to it, or Windows reads it as a path with no drive.
+func TestTargetsCopyIntoGitBashPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	word := filepath.ToSlash(dir)
+	if runtime.GOOS == "windows" {
+		word = "/" + strings.ToLower(word[:1]) + word[2:]
+	}
+	file := filepath.Join(dir, ".claude", "settings.json")
+	for _, c := range []string{
+		"cp settings.json '" + word + "/.claude/'",
+		"cp -t '" + word + "/.claude' settings.json",
+	} {
+		got, unknown := Targets(c, dir)
+		if diff := cmp.Diff([]Target{{Path: file, Kind: Copy}}, got); diff != "" {
+			t.Errorf("Targets(%q) (-want +got):\n%s", c, diff)
+		}
+		if unknown != 0 {
+			t.Errorf("Targets(%q): unknown = %d", c, unknown)
+		}
+	}
+}
+
 // A glob reads at most a budget of directory entries: past it, its target is
 // unknown, so a glob over a whole drive costs no more than a small one.
 func TestTargetsGlobBudget(t *testing.T) {
@@ -357,6 +516,7 @@ func FuzzTargets(f *testing.F) {
 	for _, s := range []string{
 		"cat > a.go <<'EOF'\nx > y\nEOF", "echo $(echo `a > b` > c) > d", "[[ a > b ]] && (( 1 > 2 ))",
 		"sed -i -e s/a/b/ f", "perl -0777 -pi -e x f", "cd a; (cd b && tee c) | tee d", "${", "$((", "<(", "'",
+		"a=(", "a[", "a[b]+=(1) x", "f() (", "function f (", "time -p", "time -p --", "cp a/* b/",
 	} {
 		f.Add(s)
 	}
