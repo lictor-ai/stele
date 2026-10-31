@@ -271,7 +271,7 @@ rule claim two entries or mint a second project id.
 ```go
 type Index struct {
     Version int
-    Project string            // copied from stele.lock, so the hot path never opens the lock
+    Project string            // copied from stele.lock
     Sources map[string]string // source name → fingerprint at compile
     Rules   []Entry
 }
@@ -340,7 +340,9 @@ func Plan(ctx context.Context, root string, srcs []source.Source, gens []Generat
 func Compile(ctx context.Context, root string, srcs []source.Source, gens []Generated, newID func() string, key sign.Key) (Result, error)
 // Apply writes the lock, the index and the generated files, each only when it changed, in that order.
 func Apply(root string, r Result, key sign.Key) error
-// EnsureFresh re-reads only builtins, and only those whose fingerprint changed.
+// EnsureFresh re-reads only builtins, and only those whose fingerprint changed,
+// or all of them when stele.lock no longer agrees with the index, which then
+// applies only if the rebuild leaves stele.lock as it is.
 // Rules from every other source are carried over from the current index.
 // A generated file stale while the index is fresh is rewritten alone, best effort.
 func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gens []Generated, newID func() string, key sign.Key) (index.Index, bool, error)
@@ -377,6 +379,37 @@ inspects the `Report`, and never writes. `EnsureFresh` is the one `request` call
 does it re-read that source, reconcile and `Apply`. The returned bool says
 whether it recompiled, so the caller can log it.
 
+**A pulled `stele.lock` is followed, never rewritten.** A pull can bring new ids
+with `stele.md` untouched, so the fingerprints match while the index holds old
+ids, and refreshing the rules file from it would overwrite the committed file.
+So `EnsureFresh` also opens `stele.lock` on each write. When every fingerprint
+matches and the lock gives the project or a rule of the index another identity,
+it plans a rebuild of every built-in source. If that plan leaves the lock as it
+is, it is applied: the index takes the ids and the project from the lock. If the
+plan would change the lock, nothing is written, not the lock, the index or a
+generated file, and the index goes on serving the rules. That is a pull still
+writing `stele.md` (git writes files one at a time), or a lock that holds
+external rules the hook cannot read. `stele check` reads every source, so it
+reports the lock only when all of them disagree with it: `stele.md` left behind
+the lock, say. A teammate's external rules with `stele.md` unchanged leave it
+clean, while the hook goes on planning until `stele compile` brings the index up
+to date. This path takes the compile lock without waiting: a busy compile lock
+or a failed plan leaves the index as it is. It does not make a write wait, but
+it does cost one: `stele.md` is re-read and the rebuild planned on every write
+until the disagreement ends, which takes longer with more rules (74 ms at 1,000
+rules, about 0.5 s at 5,000, seconds beyond that). A real change to `stele.md`
+takes the path above, lock write included. Lock entries the index does not hold
+don't count as a disagreement, and neither does a missing or invalid lock.
+
+**A hook never empties the lock.** Git replaces `stele.lock`, then unlinks
+`stele.md` and creates it empty before filling it, so a hook can find a `stele.md`
+that is missing or empty, its fingerprint changed, with the lock already pulled.
+So when `EnsureFresh` would leave no rule from a built-in source while the lock
+holds some, it writes nothing, whatever set it off, and the index goes on serving
+the rules. Otherwise every rule would get a new id when `stele.md` landed. To
+remove every rule, a user runs `stele compile`, which has no such guard; until
+then `stele check` reports the lock as out of date.
+
 **`EnsureFresh` takes built-in sources only** (D45). An external source may be a
 network call to Confluence; it runs at `stele compile` and `stele check`, never
 while the agent waits. Its rules stay in the index as they were last compiled. If there is no usable
@@ -385,14 +418,14 @@ built-ins alone, and external rules come back at the next `stele compile`. That
 rebuild keeps the lock entries of the sources it did not read, so the external
 rules come back with their ids. The same holds when the index exists but no
 longer lists an external source: `EnsureFresh` never reads one, so it never drops
-one's lock entries.
+its lock entries. When a built-in source changed, a lock entry the index does
+not hold, from a source it does list, is dropped.
 
 **Compiles are serialised** by `.stele/compile.lock`, held across "load the lock →
 reconcile → write the lock → write the index" in `Compile` and `EnsureFresh`.
 Without it two `stele mcp` processes, or one and `stele compile`, can each mint an
-id for the same new rule and leave the lock and the index disagreeing, with
-fingerprints that match so nothing repairs it. Source reads stay outside the lock,
-so a slow external source never holds it. `Plan` takes no lock: it writes nothing,
+id for the same new rule and leave the lock and the index disagreeing. External
+source reads stay outside the lock, so a slow one never holds it. `Plan` takes no lock: it writes nothing,
 and every file it reads is replaced whole.
 
 `compile` never resolves plugins itself. `cmd/` asks `internal/plugin` for the
