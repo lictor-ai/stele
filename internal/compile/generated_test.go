@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -167,14 +168,20 @@ func rewrite(t *testing.T, root string, change func(*lock.File)) {
 	}
 }
 
-// lockBytes is stele.lock as it is on disk; nil when it is missing.
-func lockBytes(t *testing.T, root string) []byte {
+// fileBytes is a file as it is on disk; nil when it is missing.
+func fileBytes(t *testing.T, path string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, lock.FileName))
+	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// lockBytes is stele.lock as it is on disk; nil when it is missing.
+func lockBytes(t *testing.T, root string) []byte {
+	t.Helper()
+	return fileBytes(t, filepath.Join(root, lock.FileName))
 }
 
 func writeGen(t *testing.T, root string, ids []string) {
@@ -398,6 +405,194 @@ func TestEnsureFreshWaitsOutAPull(t *testing.T) {
 	}
 	if got := readGen(t, root); got != want {
 		t.Errorf("generated file = %q, want %q", got, want)
+	}
+}
+
+// git replaces stele.lock, then unlinks stele.md and creates it empty before
+// filling it, so a hook can find no rules at all. A write never empties the
+// lock: stele compile does that, for a user who means it. Until stele.md lands
+// nothing is written, and when it does no rule gets a new id.
+func TestEnsureFreshNeverEmptiesTheLock(t *testing.T) {
+	ctx := context.Background()
+	gens := []Generated{idListing}
+	srcs := []source.Source{stelemd.New()}
+	stateOf := map[string]func(t *testing.T, root string){
+		"missing": func(t *testing.T, root string) {
+			if err := os.Remove(filepath.Join(root, "stele.md")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"empty": func(t *testing.T, root string) { writeRules(t, root, "") },
+	}
+	for name, empty := range stateOf {
+		for _, noIndex := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, no index %v", name, noIndex), func(t *testing.T) {
+				root := t.TempDir()
+				writeRules(t, root, twoRules)
+				if _, err := Compile(ctx, root, srcs, gens, ids(), testKey); err != nil {
+					t.Fatal(err)
+				}
+				// The pull has replaced stele.lock and the rules file.
+				rewrite(t, root, func(f *lock.File) { f.Rules[0].ID, f.Rules[1].ID = "pulled-1", "pulled-2" })
+				wantIDs := []string{"pulled-1", "pulled-2"}
+				writeGen(t, root, wantIDs)
+				pulled := lockBytes(t, root)
+				want := readGen(t, root)
+				if noIndex {
+					if err := os.Remove(index.Path(root)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				before := fileBytes(t, index.Path(root))
+				empty(t, root)
+
+				for hook := 1; hook <= 2; hook++ {
+					idx, rebuilt, err := EnsureFresh(ctx, root, srcs, gens, noMint(t), testKey)
+					if err != nil || rebuilt {
+						t.Fatalf("hook %d: rebuilt %v, %v", hook, rebuilt, err)
+					}
+					if !noIndex && len(idx.Rules) != 2 {
+						t.Errorf("hook %d: index = %+v, want the one it had", hook, idx)
+					}
+					if got := lockBytes(t, root); !bytes.Equal(got, pulled) {
+						t.Errorf("hook %d: stele.lock rewritten:\n%s", hook, got)
+					}
+					if got := fileBytes(t, index.Path(root)); !bytes.Equal(got, before) {
+						t.Errorf("hook %d: index rewritten", hook)
+					}
+					if got := readGen(t, root); got != want {
+						t.Errorf("hook %d: generated file = %q, want %q", hook, got, want)
+					}
+				}
+
+				writeRules(t, root, twoRules)
+				idx, _, err := EnsureFresh(ctx, root, srcs, gens, noMint(t), testKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if diff := cmp.Diff(wantIDs, entryIDs(idx)); diff != "" {
+					t.Errorf("after stele.md: index ids (-want +got):\n%s", diff)
+				}
+				if got := readGen(t, root); got != want {
+					t.Errorf("after stele.md: generated file = %q, want %q", got, want)
+				}
+				if got := lockBytes(t, root); !bytes.Equal(got, pulled) {
+					t.Errorf("after stele.md: stele.lock rewritten:\n%s", got)
+				}
+			})
+		}
+	}
+
+	// Only the builtin's rules are gone: an external rule left in the index
+	// does not make it a rebuild to apply.
+	t.Run("an external rule remains", func(t *testing.T) {
+		root := t.TempDir()
+		writeRules(t, root, twoRules)
+		org := newFake()
+		org.rules[0].ID = ""
+		if _, err := Compile(ctx, root, []source.Source{stelemd.New(), org}, gens, ids(), testKey); err != nil {
+			t.Fatal(err)
+		}
+		pulled := lockBytes(t, root)
+		writeRules(t, root, "")
+		if _, rebuilt, err := EnsureFresh(ctx, root, srcs, gens, noMint(t), testKey); err != nil || rebuilt {
+			t.Fatalf("rebuilt %v, %v", rebuilt, err)
+		}
+		if got := lockBytes(t, root); !bytes.Equal(got, pulled) {
+			t.Errorf("stele.lock rewritten:\n%s", got)
+		}
+	})
+}
+
+// The guard is for a lock with rules to lose, and for losing all of them.
+func TestEnsureFreshStillFollowsStelemd(t *testing.T) {
+	ctx := context.Background()
+	gens := []Generated{idListing}
+	srcs := []source.Source{stelemd.New()}
+
+	t.Run("one rule left", func(t *testing.T) {
+		root := t.TempDir()
+		writeRules(t, root, twoRules)
+		if _, err := Compile(ctx, root, srcs, gens, ids(), testKey); err != nil {
+			t.Fatal(err)
+		}
+		writeRules(t, root, "Every handler goes through the middleware chain.\n")
+		idx, rebuilt, err := EnsureFresh(ctx, root, srcs, gens, noMint(t), testKey)
+		if err != nil || !rebuilt {
+			t.Fatalf("rebuilt %v, %v", rebuilt, err)
+		}
+		if diff := cmp.Diff([]string{"id-2"}, entryIDs(idx)); diff != "" {
+			t.Errorf("index ids (-want +got):\n%s", diff)
+		}
+		f, err := lock.Load(root)
+		if err != nil || len(f.Rules) != 1 {
+			t.Errorf("lock = %+v, %v, want the one rule", f, err)
+		}
+	})
+
+	// The lock holds only an external source's rules: stele.md has none to lose.
+	t.Run("no rules and only external ones in the lock", func(t *testing.T) {
+		root := t.TempDir()
+		writeRules(t, root, "")
+		org := newFake()
+		org.rules[0].ID = ""
+		if _, err := Compile(ctx, root, []source.Source{stelemd.New(), org}, gens, ids(), testKey); err != nil {
+			t.Fatal(err)
+		}
+		writeRules(t, root, "\n")
+		if _, rebuilt, err := EnsureFresh(ctx, root, srcs, gens, noMint(t), testKey); err != nil || !rebuilt {
+			t.Fatalf("rebuilt %v, %v", rebuilt, err)
+		}
+	})
+
+	// A new project: no rules yet, in stele.md or in the lock.
+	t.Run("no rules and none in the lock", func(t *testing.T) {
+		root := t.TempDir()
+		writeRules(t, root, "")
+		mint := func() string { return "project" }
+		if _, rebuilt, err := EnsureFresh(ctx, root, srcs, gens, mint, testKey); err != nil || !rebuilt {
+			t.Fatalf("rebuilt %v, %v", rebuilt, err)
+		}
+		if _, rebuilt, err := EnsureFresh(ctx, root, srcs, gens, noMint(t), testKey); err != nil || rebuilt {
+			t.Errorf("second EnsureFresh: rebuilt %v, %v", rebuilt, err)
+		}
+	})
+}
+
+// A user who removes every rule means it: stele check says the lock is out of
+// date, and stele compile empties it.
+func TestCompileStillEmptiesTheLock(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	gens := []Generated{idListing}
+	srcs := []source.Source{stelemd.New()}
+	writeRules(t, root, twoRules)
+	if _, err := Compile(ctx, root, srcs, gens, ids(), testKey); err != nil {
+		t.Fatal(err)
+	}
+	writeRules(t, root, "")
+	if _, _, err := EnsureFresh(ctx, root, srcs, gens, noMint(t), testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Plan(ctx, root, srcs, gens, noMint(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.LockChanged {
+		t.Error("Plan: stele check would not report the lock")
+	}
+
+	if _, err := Compile(ctx, root, srcs, gens, noMint(t), testKey); err != nil {
+		t.Fatal(err)
+	}
+	f, err := lock.Load(root)
+	if err != nil || len(f.Rules) != 0 {
+		t.Errorf("lock = %+v, %v, want no rules", f, err)
+	}
+	idx, err := index.Load(root, testKey)
+	if err != nil || len(idx.Rules) != 0 {
+		t.Errorf("index = %+v, %v, want no rules", idx, err)
 	}
 }
 

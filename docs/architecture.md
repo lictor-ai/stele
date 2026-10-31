@@ -388,13 +388,26 @@ is, it is applied: the index takes the ids and the project from the lock. If the
 plan would change the lock, nothing is written, not the lock, the index or a
 generated file, and the index goes on serving the rules. That is a pull still
 writing `stele.md` (git writes files one at a time), or a lock that holds
-external rules the hook cannot read; `stele check` reports the lock if it stays
-that way. This path re-reads `stele.md` and plans on each write until the lock
-and `stele.md` agree, and takes the compile lock without waiting: a busy compile
-lock or a failed plan leaves the index as it is. A real change
-to `stele.md` takes the path above, lock write included. Lock entries the index
-does not hold don't count as a disagreement, and neither does a missing or
-invalid lock.
+external rules the hook cannot read. `stele check` reads every source, so it
+reports the lock only when all of them disagree with it: `stele.md` left behind
+the lock, say. A teammate's external rules with `stele.md` unchanged leave it
+clean, while the hook goes on planning until `stele compile` brings the index up
+to date. This path takes the compile lock without waiting: a busy compile lock
+or a failed plan leaves the index as it is. It does not make a write wait, but
+it does cost one: `stele.md` is re-read and the rebuild planned on every write
+until the disagreement ends, which takes longer with more rules (74 ms at 1,000
+rules, about 0.5 s at 5,000, seconds beyond that). A real change to `stele.md`
+takes the path above, lock write included. Lock entries the index does not hold
+don't count as a disagreement, and neither does a missing or invalid lock.
+
+**A hook never empties the lock.** Git replaces `stele.lock`, then unlinks
+`stele.md` and creates it empty before filling it, so a hook can find a `stele.md`
+that is missing or empty, its fingerprint changed, with the lock already pulled.
+So when `EnsureFresh` would leave no rule from a built-in source while the lock
+holds some, it writes nothing, whatever set it off, and the index goes on serving
+the rules. Otherwise every rule would get a new id when `stele.md` landed. To
+remove every rule, a user runs `stele compile`, which has no such guard; until
+then `stele check` reports the lock as out of date.
 
 **`EnsureFresh` takes built-in sources only** (D45). An external source may be a
 network call to Confluence; it runs at `stele compile` and `stele check`, never

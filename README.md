@@ -170,7 +170,7 @@ wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
 
 If a rule can't be used — a `check` other than `regex`, a pattern that doesn't compile or matches empty text, a `blocking` that isn't `true` or `false` — `stele compile` names it and exits 1. It still writes `stele.lock`, so the rule keeps its id, and the hook enforces the other rules and tells you once a session.
 
-The hook also recompiles when `stele.md` changes, so edits take effect on the next write. Commit the updated `stele.lock` and `.claude/rules/stele-rules.md`. A session keeps the rules file it loaded at its start: a rule changed since is shown again before the next write it applies to.
+The hook also recompiles when `stele.md` changes, so edits take effect on the next write, except removing every rule, which takes `stele compile` (see [Limits](#limits)). Commit the updated `stele.lock` and `.claude/rules/stele-rules.md`. A session keeps the rules file it loaded at its start: a rule changed since is shown again before the next write it applies to.
 
 To remove stele: `stele uninstall`. It removes stele's hooks, `.claude/rules/stele-rules.md` and `.stele/`, and keeps `stele.md`, `stele.lock` and `stele.json`.
 
@@ -390,6 +390,8 @@ stele makes the rules hard to miss. It doesn't make them impossible to break. Kn
 **The agent can ignore the rules.** It is shown them and told about violations, but it can still choose not to follow them.
 
 **With `--check=off`, only `stele check` finds violations.** With both `--remind=off` and `--check=off`, the agent still loads the rules at session start, but nothing enforces them until CI.
+
+**Removing every rule takes `stele compile`.** A `git pull` can leave `stele.md` empty for a moment, so the hook never empties `stele.lock`. With no rules left in `stele.md`, or with `stele.md` gone and a `stele.json` beside it, the last rules stay in force until you run `stele compile`, and `stele check` fails until then. With `stele.md` gone and no `stele.json`, the hook does nothing at all.
 
 **Only Write, Edit and MultiEdit are checked.** The agent is told at the start of each session to write files with those only. `stele check` in CI is the only catch for anything else.
 

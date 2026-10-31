@@ -227,9 +227,14 @@ func staleGenerated(root string, idx index.Index, gens []Generated) bool {
 // doing: a pull, perhaps still writing stele.md. stele.lock is then only ever
 // read. A rebuild that keeps the lock as it is takes the ids and the project
 // from it. One that would change it writes nothing at all, and the index goes
-// on serving the rules: stele check reports the lock. That path never waits
-// for the compile lock, and a busy lock or a plan that fails leaves the index
-// as it is, so a write does not pay for it.
+// on serving the rules. That path never waits for the compile lock, and a busy
+// lock or a plan that fails leaves the index as it is, but a write does pay
+// to plan again, each time, until the lock and stele.md agree.
+//
+// It never empties the lock either: git replaces stele.lock, then unlinks
+// stele.md and creates it empty before filling it, so a rebuild that finds no
+// rule from a builtin while the lock holds some writes nothing. stele compile
+// is how a user really removes every rule.
 //
 // A generated file can be stale while the index is fresh, after a branch
 // switch or a deletion: then only the file is rewritten, and only when that
@@ -275,7 +280,34 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gen
 	if err != nil {
 		return index.Index{}, false, err
 	}
+	if emptiesLock(root, r, builtins) {
+		return cur, false, nil
+	}
 	return r.Index, true, Apply(root, r, key)
+}
+
+// emptiesLock reports whether r leaves no rule from a builtin while stele.lock
+// holds some.
+func emptiesLock(root string, r Result, builtins []source.Source) bool {
+	builtin := make(map[string]bool, len(builtins))
+	for _, b := range builtins {
+		builtin[b.Name()] = true
+	}
+	for _, e := range r.Index.Rules {
+		if builtin[e.Source] {
+			return false
+		}
+	}
+	prev, err := lock.Load(root)
+	if err != nil {
+		return true
+	}
+	for _, e := range prev.Rules {
+		if builtin[e.Source] {
+			return true
+		}
+	}
+	return false
 }
 
 // rebuild plans an index from cur, re-reading the stale builtins, and writes
