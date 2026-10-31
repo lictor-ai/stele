@@ -58,6 +58,20 @@ func TestLoadConfigByteOrderMark(t *testing.T) {
 	}
 }
 
+func TestLoadConfigUTF16(t *testing.T) {
+	for name, content := range map[string]string{
+		"little endian": "\xff\xfe{\x00}\x00",
+		"big endian":    "\xfe\xff\x00{\x00}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := LoadConfig(writeJSON(t, content))
+			if err == nil || !strings.Contains(err.Error(), "UTF-16") || !strings.Contains(err.Error(), "save it as UTF-8") {
+				t.Errorf("err = %v, want it to name UTF-16 and say to save as UTF-8", err)
+			}
+		})
+	}
+}
+
 func TestLoadConfigInvalid(t *testing.T) {
 	for name, content := range map[string]string{
 		"not json":           `{`,

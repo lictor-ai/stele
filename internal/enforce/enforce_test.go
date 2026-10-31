@@ -43,6 +43,32 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+// PowerShell 5.1's > writes UTF-16. It is not read: the error says what to do,
+// and the failure policy takes it from there.
+func TestLoadUTF16(t *testing.T) {
+	for name, content := range map[string]string{
+		"little endian": "\xff\xfe{\x00}\x00",
+		"big endian":    "\xfe\xff\x00{\x00}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, FileName), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := Load(root)
+			if got != Default() {
+				t.Errorf("Load = %+v, want the default policy", got)
+			}
+			if err == nil || !strings.Contains(err.Error(), "UTF-16") || !strings.Contains(err.Error(), "save it as UTF-8") {
+				t.Errorf("err = %v, want it to name UTF-16 and say to save as UTF-8", err)
+			}
+			if SetsBackstop(root) {
+				t.Error("SetsBackstop = true on UTF-16")
+			}
+		})
+	}
+}
+
 // A link is followed, but it must end at a regular file: a repository could
 // commit stele.json as a link to /dev/zero, and the hook reads it on every
 // write.

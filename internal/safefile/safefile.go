@@ -2,7 +2,8 @@
 // and provides the lock files, directory checks and bounded reads that go
 // with that. Nothing under .stele/ is covered by the repository's
 // .gitignore, so a cloned repository can commit anything there; these
-// helpers never follow a symlink or trust a file stele did not write.
+// helpers never trust a file stele did not write, and only ReadFollowing,
+// for a file outside .stele/, follows a symlink.
 //
 // Replace writes the new content to a temp file in the same directory, which
 // is then renamed over the target. The target is never truncated. On Windows

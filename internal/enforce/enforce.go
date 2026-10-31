@@ -11,10 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
+
+	"github.com/lictor-ai/stele/internal/safefile"
 )
 
 // FileName is the policy file at the repository root.
@@ -76,32 +76,25 @@ func SetsBackstop(root string) bool {
 	return ok
 }
 
-// read returns stele.json under root, without the byte order mark some
-// Windows editors and shells add.
+// read returns stele.json under root as Text returns it.
 //
 // A symlink is followed, since a user may share one policy between projects,
 // but it must end at a regular file of bounded size: a repository could commit
 // stele.json as a link to /dev/zero, and the hook reads it on every write.
 func read(root string) ([]byte, error) {
-	path := filepath.Join(root, FileName)
-	info, err := os.Stat(path)
+	data, err := safefile.ReadFollowing(filepath.Join(root, FileName), maxSize)
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s is not a regular file", FileName)
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxSize+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxSize {
-		return nil, fmt.Errorf("%s is over %d bytes", FileName, maxSize)
+	return Text(data)
+}
+
+// Text returns the content of stele.json ready to parse: without the UTF-8
+// byte order mark some Windows editors and shells add. UTF-16, which
+// PowerShell 5.1's > writes, is not decoded: the error says what to do.
+func Text(data []byte) ([]byte, error) {
+	if bytes.HasPrefix(data, []byte("\xff\xfe")) || bytes.HasPrefix(data, []byte("\xfe\xff")) {
+		return nil, fmt.Errorf("%s is UTF-16: save it as UTF-8", FileName)
 	}
 	return bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), nil
 }

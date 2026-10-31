@@ -30,10 +30,20 @@ const transientWait = 2 * time.Second
 // On Windows a read that meets another process's rename fails with a sharing
 // violation; it is retried for a while, as Replace retries its rename.
 func ReadRegular(path string, limit int64) ([]byte, error) {
+	return readRetrying(path, limit, os.Lstat)
+}
+
+// ReadFollowing is ReadRegular for a file a user may link on purpose: a
+// symlink is followed, but it must end at a regular file.
+func ReadFollowing(path string, limit int64) ([]byte, error) {
+	return readRetrying(path, limit, os.Stat)
+}
+
+func readRetrying(path string, limit int64, stat func(string) (fs.FileInfo, error)) ([]byte, error) {
 	deadline := time.Now().Add(transientWait)
 	backoff := time.Millisecond
 	for {
-		data, err := readRegular(path, limit)
+		data, err := readRegular(path, limit, stat)
 		if err == nil || !transient(err) || time.Now().After(deadline) {
 			return data, err
 		}
@@ -44,8 +54,9 @@ func ReadRegular(path string, limit int64) ([]byte, error) {
 	}
 }
 
-func readRegular(path string, limit int64) ([]byte, error) {
-	info, err := os.Lstat(path)
+// readRegular reads path, which stat must find to be a regular file.
+func readRegular(path string, limit int64, stat func(string) (fs.FileInfo, error)) ([]byte, error) {
+	info, err := stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
