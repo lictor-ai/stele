@@ -1,5 +1,10 @@
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+  <img src="docs/assets/logo.svg" alt="stele logo" width="72">
+</picture>
+
 # stele
 
 **Make Claude Code follow your repository's rules.**
@@ -8,10 +13,11 @@ Write your rules once in `stele.md`. stele shows them to the agent before it wri
 checks what it wrote, and checks again in CI.
 
 [![CI](https://github.com/lictor-ai/stele/actions/workflows/ci.yml/badge.svg)](https://github.com/lictor-ai/stele/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v1.0.0--dev.2-blue)](https://github.com/lictor-ai/stele/releases)
+[![Release](https://img.shields.io/badge/release-v1.0.0-blue)](https://github.com/lictor-ai/stele/releases)
 [![Go](https://img.shields.io/badge/go-1.27%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
+[Website](https://stele.lictorlabs.com) ·
 [Quick start](#quick-start) ·
 [How it works](#how-it-works) ·
 [Does it work?](#does-it-work) ·
