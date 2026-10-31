@@ -12,10 +12,13 @@ import (
 )
 
 var (
-	// ErrNotRegular is a file that is a symlink, a device or anything but a
-	// plain file. A cloned repository can commit a symlink to /dev/zero.
+	// ErrNotRegular is a path that holds a device, a directory or anything but
+	// a plain file: for ReadRegular a symlink too, and for ReadFollowing a
+	// symlink that ends at one of those. A cloned repository can commit a
+	// symlink to /dev/zero.
 	ErrNotRegular = errors.New("not a regular file")
-	// ErrTooLarge is a file over the limit ReadRegular was given.
+	// ErrTooLarge is a file over the limit ReadRegular or ReadFollowing was
+	// given.
 	ErrTooLarge = errors.New("file too large")
 )
 
@@ -24,8 +27,9 @@ var (
 const transientWait = 2 * time.Second
 
 // ReadRegular reads path if it is a regular file of at most limit bytes. It
-// never follows a symlink and never blocks on a device, so a file a cloned
-// repository planted cannot hang stele or exhaust its memory.
+// refuses a symlink or junction at path itself and never blocks on a device,
+// so a file a cloned repository planted cannot hang stele or exhaust its
+// memory. A link in a directory above path is followed.
 //
 // On Windows a read that meets another process's rename fails with a sharing
 // violation; it is retried for a while, as Replace retries its rename.
@@ -33,8 +37,8 @@ func ReadRegular(path string, limit int64) ([]byte, error) {
 	return readRetrying(path, limit, os.Lstat)
 }
 
-// ReadFollowing is ReadRegular for a file a user may link on purpose: a
-// symlink is followed, but it must end at a regular file.
+// ReadFollowing is ReadRegular for a file a user may link on purpose: a link
+// at path is followed too, but it must end at a regular file.
 func ReadFollowing(path string, limit int64) ([]byte, error) {
 	return readRetrying(path, limit, os.Stat)
 }

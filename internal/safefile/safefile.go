@@ -1,9 +1,12 @@
 // Package safefile writes files so a crash never leaves one half-written,
 // and provides the lock files, directory checks and bounded reads that go
 // with that. Nothing under .stele/ is covered by the repository's
-// .gitignore, so a cloned repository can commit anything there; these
-// helpers never trust a file stele did not write, and only ReadFollowing,
-// for a file outside .stele/, follows a symlink.
+// .gitignore, so a cloned repository can commit anything there. ReadRegular
+// refuses a symlink or junction at the path it is given; ReadFollowing follows
+// one, for a file outside .stele/, but it must end at a regular file. Neither
+// checks the directories above the path, where a link is followed: Dir checks
+// a directory. A lock's release reads through a link too, only to compare the
+// content with its token.
 //
 // Replace writes the new content to a temp file in the same directory, which
 // is then renamed over the target. The target is never truncated. On Windows
