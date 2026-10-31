@@ -456,11 +456,16 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **`stele check` and `stele publish` guard against programs a project brings with it, and only in these ways.**
 
-- **Programs refused.** `stele check` refuses a git, and `stele publish` a git, gh, glab or browser opener, found on `PATH` inside the project or inside the nearest git repository that holds it, or through a relative `PATH` entry. That counts one that links to somewhere else, as a nix `result/bin` does. Links and junctions are followed, and directories compared by identity, so another spelling of the path counts too. `stele check` then exits 2; `stele check <paths>` needs no git.
+- **Programs refused.** `stele check` refuses a git, and `stele publish` a git, gh, glab or browser opener, found on `PATH` inside the project or inside the git repository that holds it, or through a relative `PATH` entry. That counts one that links to somewhere else, as a nix `result/bin` does. Links and junctions are followed, and directories compared by identity, so another spelling of the path counts too. `stele check` then exits 2; `stele check <paths>` needs no git.
 - **`PATH` entries removed.** What they start doesn't get `PATH` entries that are empty, relative or inside those same directories. On Windows, a quoted entry goes whole if any `;`-separated part of it would.
-- **git config overridden.** Every git command they run is given `core.fsmonitor=false`, `safe.bareRepository=explicit`, `credential.interactive=never`, the `protocol` settings that allow only https and ssh, and `submodule.recurse=false`, `fetch.recurseSubmodules=false` and `push.recurseSubmodules=no`. So git won't use a folder laid out as a bare repository unless told to: `stele check` in one exits 2.
+- **git config overridden.** Every git command they run is given `core.fsmonitor=false` and `safe.bareRepository=explicit`, so git won't use a folder laid out as a bare repository unless told to: `stele check` in one exits 2. `stele publish` also gives `credential.interactive=never`, the `protocol` settings that allow only https and ssh, and `submodule.recurse=false`, `fetch.recurseSubmodules=false` and `push.recurseSubmodules=no`. `stele check` doesn't: a partial clone still fetches what it needs from where it was cloned.
 
-Not covered: only the nearest repository counts, so a superproject's folder or a linked worktree's main checkout is not inside the project. A program named by an environment variable, such as `GIT_SSH_COMMAND` or `GIT_EXEC_PATH`, still runs, as does one named by any git config not listed above, such as `core.sshCommand`.
+Not covered:
+
+- `safe.bareRepository` needs git 2.38 or later. An older git ignores it, and uses such a folder.
+- Only the repository nearest to where the project's path leads counts, so a superproject's folder or a linked worktree's main checkout is not inside the project.
+- A repository at your home directory or a filesystem root doesn't count: with `~/.git` or `/.git`, a program in `~/bin` or `/usr/bin` is not refused. The project's own folder still counts.
+- A program named by an environment variable, such as `GIT_SSH_COMMAND` or `GIT_EXEC_PATH`, still runs, as does one named by any git config not listed above, such as `core.sshCommand`.
 
 **`stele publish` refuses a `stele/publish/<path>` branch holding commits it did not make for this project.** Two projects that publish to the same `path` of one repository get that error; give each its own `path`.
 

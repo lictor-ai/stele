@@ -287,6 +287,122 @@ func TestEnclosingRepositoryThroughALink(t *testing.T) {
 	refused(t, filepath.Join(top, "bin"), link)
 }
 
+// The walk up from one entry must not leave a wrong answer for the next: bin
+// is inside only through its parent, and the entry below it is met second.
+// Only a spelling text cannot compare gets as far as that walk.
+func TestEnvEntryBelowOneAlreadyWalked(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path spellings")
+	}
+	root, bin := binDir(t)
+	spelled := `\\?\` + bin
+	out := t.TempDir()
+	env := []string{"PATH=" + spelled + sep + filepath.Join(spelled, "sub") + sep + out}
+	if got, ok := pathOf(Env(env, root)); !ok || got != out {
+		t.Errorf("PATH = %q, want %q", got, out)
+	}
+}
+
+// kept says that Vet and Env treat dir as outside the project at root.
+func kept(t *testing.T, dir, root string) {
+	t.Helper()
+	if _, err := Vet("git", filepath.Join(dir, "git"), root); err != nil {
+		t.Errorf("Vet in %s = %v", dir, err)
+	}
+	if got, ok := pathOf(Env([]string{"PATH=" + dir}, root)); !ok || got != dir {
+		t.Errorf("PATH = %q, want %q", got, dir)
+	}
+}
+
+// A repository at the home directory is not one a project was cloned into:
+// ~/.git holds dotfiles, and ~/bin is the user's.
+func TestHomeRepositoryDoesNotCount(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	root := filepath.Join(home, "notes")
+	for _, dir := range []string{filepath.Join(home, ".git"), root} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kept(t, filepath.Join(home, "bin"), root)
+	refused(t, filepath.Join(root, "bin"), root)
+}
+
+// The home directory is found by identity: HOME can name it through a link.
+func TestHomeRepositoryThroughALink(t *testing.T) {
+	home := t.TempDir()
+	link := filepath.Join(t.TempDir(), "home")
+	dirLink(t, home, link)
+	t.Setenv("HOME", link)
+	t.Setenv("USERPROFILE", link)
+	root := filepath.Join(home, "notes")
+	for _, dir := range []string{filepath.Join(home, ".git"), root} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kept(t, filepath.Join(home, "bin"), root)
+}
+
+// A repository below the home directory still counts.
+func TestRepositoryBelowHomeCounts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	top := filepath.Join(home, "work")
+	root := filepath.Join(top, "svc")
+	for _, dir := range []string{filepath.Join(top, ".git"), root} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refused(t, filepath.Join(top, "bin"), root)
+}
+
+// /.git in a container must not take /usr/bin into every project.
+func TestFilesystemRootIsNoRepository(t *testing.T) {
+	root := t.TempDir()
+	drive := filepath.VolumeName(root) + string(filepath.Separator)
+	if !homeOrFSRoot(drive) {
+		t.Errorf("homeOrFSRoot(%s) = false", drive)
+	}
+	if homeOrFSRoot(root) {
+		t.Errorf("homeOrFSRoot(%s) = true", root)
+	}
+}
+
+// A link to a project in another repository counts that repository, not the
+// one the link happens to sit in.
+func TestLinkedRootCountsOnlyItsRealRepository(t *testing.T) {
+	lexical, real := t.TempDir(), t.TempDir()
+	svc := filepath.Join(real, "svc")
+	for _, dir := range []string{filepath.Join(lexical, ".git"), filepath.Join(real, ".git"), svc} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(lexical, "svc")
+	dirLink(t, svc, link)
+	kept(t, filepath.Join(lexical, "bin"), link)
+	refused(t, filepath.Join(real, "bin"), link)
+}
+
+// A root whose links cannot be followed is judged as it is spelled.
+func TestRootThatCannotBeResolved(t *testing.T) {
+	top := t.TempDir()
+	if err := os.Mkdir(filepath.Join(top, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a, b := filepath.Join(top, "a"), filepath.Join(top, "b")
+	dirLink(t, b, a)
+	dirLink(t, a, b)
+	if _, err := Vet("git", filepath.Join(top, "bin", "git"), a); !errors.Is(err, ErrRefused) {
+		t.Errorf("Vet = %v, want ErrRefused", err)
+	}
+}
+
 // A dotfiles repository in the home directory must not take ~/bin for part
 // of a project below it: only the nearest repository counts.
 func TestOnlyTheNearestRepositoryCounts(t *testing.T) {

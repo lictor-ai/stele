@@ -953,13 +953,19 @@ and takes `PATH` entries inside the project, and empty or relative ones, out
 of what those programs inherit, so git cannot find an `ssh` there. "Inside"
 is by name and by file identity: `safefile.Resolve` follows links and
 junctions, then `os.SameFile` walks the parents, so other spellings of a path
-count. Only the nearest repository counts, of the root and of where it leads:
-`~/.git` must not take `~/bin` into every project. The package imports no
-`os/exec`, and `stele check` uses it without linking this package; it also
-holds `GitFlags`, passed to every git command of both. Every
-git call allows only the https
-and ssh transports, uses a bare repository only when named with
-`--git-dir`, never prompts, and keeps at most 1 MiB of what git prints. A token goes only to the fixed endpoints `api.github.com` and
+count. Only the repository nearest to where the root leads counts, and not
+one at the home directory or a filesystem root: `~/.git` must not take `~/bin`
+into every project, nor `/.git` take `/usr/bin`. The package imports no
+`os/exec`. `cmd/stele/check.go` uses it and does not import this package,
+though the one binary links both, through `cmd/stele/publish.go`.
+
+`toolpath.GitFlags` goes on every git command of both `stele check` and
+`stele publish`: a bare repository is used only when named with `--git-dir`,
+and no fsmonitor runs. The rest is this package's alone. Its git calls add
+`remoteFlags`, which allow only the https and ssh transports, never prompt and
+never touch submodules, and keep at most 1 MiB of what git prints. `stele check`
+adds neither: a partial clone must fetch from its own promisor over whatever
+transport it was cloned with, and `check` reads git's whole output. A token goes only to the fixed endpoints `api.github.com` and
 `gitlab.com/api/v4`, and only when `repo`'s host is exactly `github.com` or
 `gitlab.com` (D65). `stele hook` never reaches the package:
 `cmd/stele/hookreach_test.go` follows the hook's imports to check it.

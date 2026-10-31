@@ -64,7 +64,7 @@ func TestGitRefusesLocalTransport(t *testing.T) {
 
 func TestGitEnv(t *testing.T) {
 	t.Setenv("GIT_DIR", "/elsewhere")
-	env := strings.Join(gitEnv([]string{"X=1"}), "\n")
+	env := strings.Join(gitCmd{}.environ([]string{"X=1"}), "\n")
 	for _, want := range []string{"GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never", "GIT_ASKPASS=", "X=1"} {
 		if !strings.Contains(env, want) {
 			t.Errorf("env lacks %s", want)
@@ -82,7 +82,7 @@ func TestGitDropsPathInsideProject(t *testing.T) {
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+bin)
-	g := gitCmd{bin: filepath.Join(dir, "git"), root: root}
+	g := newGitCmd(filepath.Join(dir, "git"), root)
 	if _, err := g.run(context.Background(), t.TempDir(), nil, nil, "version"); err != nil {
 		t.Fatal(err)
 	}

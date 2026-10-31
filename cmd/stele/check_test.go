@@ -460,6 +460,51 @@ func TestCheckRunsNoProgramFromRepositoryConfig(t *testing.T) {
 	}
 }
 
+// A partial clone fetches the blobs a diff needs from its promisor, here to
+// find a rename. That fetch is the user's own, over whatever transport they
+// cloned with: stele check must not forbid it, as stele publish forbids
+// everything but https and ssh.
+func TestCheckPartialCloneFetchesFromItsPromisor(t *testing.T) {
+	root := gitProject(t, checkRules)
+	gitT(t, root, "config", "uploadpack.allowFilter", "true")
+	body := strings.Repeat("a line that stays through the rename\n", 40)
+	writeAt(t, root, "old.txt", body)
+	commitAll(t, root, "base")
+	gitT(t, root, "branch", "base")
+	if err := os.Rename(filepath.Join(root, "old.txt"), filepath.Join(root, "new.txt")); err != nil {
+		t.Fatal(err)
+	}
+	writeAt(t, root, "new.txt", body+"one more\n")
+	commitAll(t, root, "rename and edit")
+
+	clone := filepath.Join(t.TempDir(), "clone")
+	gitT(t, root, "clone", "-q", "--filter=blob:none", "file:///"+strings.TrimPrefix(filepath.ToSlash(root), "/"), clone)
+	t.Chdir(clone)
+	if code, out, errOut := runCmd("check", "--base", "origin/base"); code != exitOK {
+		t.Errorf("check = %d, stdout %q, stderr %q, want 0", code, out, errOut)
+	}
+}
+
+// With ~/.git, dotfiles for example, git in ~/bin is the user's own: a
+// project at ~/notes is not inside that repository.
+func TestGitBinKeepsGitOutsideAHomeRepository(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	notes := filepath.Join(home, "notes")
+	for _, dir := range []string{filepath.Join(home, ".git"), notes} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := filepath.Join(home, "bin")
+	plantGit(t, bin)
+	t.Setenv("PATH", bin)
+	if _, err := gitBin(notes); err != nil {
+		t.Errorf("gitBin = %v, want the git in ~/bin", err)
+	}
+}
+
 func TestCheckNoGitOnPath(t *testing.T) {
 	root := gitProject(t, checkRules)
 	writeAt(t, root, "a.go", "package a\n")
@@ -471,15 +516,16 @@ func TestCheckNoGitOnPath(t *testing.T) {
 }
 
 // git finds what it starts on PATH, as stele finds git.
-func TestGitCommandDropsPathInsideProject(t *testing.T) {
+func TestGitToolDropsPathInsideProject(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 	plantGit(t, outside)
 	t.Setenv("PATH", outside+string(os.PathListSeparator)+filepath.Join(root, "bin"))
-	cmd, err := gitCommand(root, "version")
+	g, err := newGitTool(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	cmd := g.command("version")
 	if !strings.EqualFold(filepath.Dir(cmd.Path), outside) || cmd.Dir != root {
 		t.Errorf("cmd = %s in %s", cmd.Path, cmd.Dir)
 	}
