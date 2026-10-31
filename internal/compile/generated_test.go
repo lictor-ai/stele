@@ -154,33 +154,56 @@ var idListing = Generated{Path: "gen/rules.txt", Render: func(idx index.Index) [
 	return []byte(strings.Join(entryIDs(idx), "\n") + "\n")
 }}
 
+// rewrite changes stele.lock as a pull would.
+func rewrite(t *testing.T, root string, change func(*lock.File)) {
+	t.Helper()
+	f, err := lock.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change(&f)
+	if err := lock.Save(root, f); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// lockBytes is stele.lock as it is on disk; nil when it is missing.
+func lockBytes(t *testing.T, root string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, lock.FileName))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func writeGen(t *testing.T, root string, ids []string) {
+	t.Helper()
+	gen := filepath.Join(root, "gen", "rules.txt")
+	if err := os.WriteFile(gen, []byte(strings.Join(ids, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A pull brings a stele.lock with new ids and the rules file generated from
 // it, and leaves stele.md alone. The index follows the lock: it must not put
-// its old ids back in the committed file. Anything that does not change what
-// a rule's id is leaves the index alone.
+// its old ids back in the committed file. A lock that stele.md disagrees with
+// is left for stele check, and nothing is written. Anything that does not
+// change what a rule's id is leaves the index alone.
 func TestEnsureFreshFollowsAPulledLock(t *testing.T) {
 	ctx := context.Background()
 	gens := []Generated{idListing}
-	rewrite := func(t *testing.T, root string, change func(*lock.File)) {
-		t.Helper()
-		f, err := lock.Load(root)
-		if err != nil {
-			t.Fatal(err)
-		}
-		change(&f)
-		if err := lock.Save(root, f); err != nil {
-			t.Fatal(err)
-		}
-	}
 	tests := []struct {
 		name string
 		pull func(t *testing.T, root string)
 		// rebuilt says the index is rebuilt.
-		rebuilt bool
-		// lockRewritten says stele.md wins over the pulled lock.
-		lockRewritten bool
-		wantIDs       []string
-		wantProject   string
+		rebuilt     bool
+		wantIDs     []string
+		wantProject string
+		// genIDs is the pulled rules file's ids, when not wantIDs.
+		genIDs []string
+		// planMints says the plan needs an id, which it throws away.
+		planMints bool
 	}{{
 		name: "new ids",
 		pull: func(t *testing.T, root string) {
@@ -201,9 +224,15 @@ func TestEnsureFreshFollowsAPulledLock(t *testing.T) {
 		pull: func(t *testing.T, root string) {
 			rewrite(t, root, func(f *lock.File) { f.Rules[0].Hash = "not-this-rule" })
 		},
-		rebuilt:       true,
-		lockRewritten: true,
-		wantIDs:       []string{"id-1", "id-2"},
+		wantIDs: []string{"id-1", "id-2"},
+	}, {
+		name: "a rule missing",
+		pull: func(t *testing.T, root string) {
+			rewrite(t, root, func(f *lock.File) { f.Rules = f.Rules[:1] })
+		},
+		wantIDs:   []string{"id-1", "id-2"},
+		genIDs:    []string{"id-1"},
+		planMints: true,
 	}, {
 		name: "reordered",
 		pull: func(t *testing.T, root string) {
@@ -250,21 +279,19 @@ func TestEnsureFreshFollowsAPulledLock(t *testing.T) {
 			tt.pull(t, root)
 
 			// The pulled file is what the pulled lock gives.
-			gen := filepath.Join(root, "gen", "rules.txt")
-			want := strings.Join(tt.wantIDs, "\n") + "\n"
-			if err := os.WriteFile(gen, []byte(want), 0o644); err != nil {
-				t.Fatal(err)
+			genIDs := tt.genIDs
+			if genIDs == nil {
+				genIDs = tt.wantIDs
 			}
-			pulled, err := os.ReadFile(filepath.Join(root, lock.FileName))
-			if err != nil && !errors.Is(err, fs.ErrNotExist) {
-				t.Fatal(err)
-			}
-			noMint := func() string {
-				t.Error("the hook minted an id")
-				return "minted"
+			writeGen(t, root, genIDs)
+			want := readGen(t, root)
+			pulled := lockBytes(t, root)
+			newID := noMint(t)
+			if tt.planMints {
+				newID = func() string { return "thrown-away" }
 			}
 
-			idx, rebuilt, err := EnsureFresh(ctx, root, srcs, gens, noMint, testKey)
+			idx, rebuilt, err := EnsureFresh(ctx, root, srcs, gens, newID, testKey)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -281,23 +308,230 @@ func TestEnsureFreshFollowsAPulledLock(t *testing.T) {
 			if idx.Project != project {
 				t.Errorf("index project = %q, want %q", idx.Project, project)
 			}
+
+			// It settles: the next write finds nothing to do, and neither
+			// write touched the lock or the rules file.
+			if _, rebuilt, err := EnsureFresh(ctx, root, srcs, gens, newID, testKey); err != nil || rebuilt {
+				t.Errorf("second EnsureFresh: rebuilt %v, %v", rebuilt, err)
+			}
 			if got := readGen(t, root); got != want {
 				t.Errorf("generated file = %q, want it left as %q", got, want)
 			}
-			after, err := os.ReadFile(filepath.Join(root, lock.FileName))
-			if err != nil && !errors.Is(err, fs.ErrNotExist) {
-				t.Fatal(err)
-			}
-			if same := bytes.Equal(after, pulled); same == tt.lockRewritten {
-				t.Errorf("stele.lock rewritten = %v, want %v:\n%s", !same, tt.lockRewritten, after)
-			}
-
-			// It settles: the next write finds nothing to do.
-			if _, rebuilt, err := EnsureFresh(ctx, root, srcs, gens, noMint, testKey); err != nil || rebuilt {
-				t.Errorf("second EnsureFresh: rebuilt %v, %v", rebuilt, err)
+			if got := lockBytes(t, root); !bytes.Equal(got, pulled) {
+				t.Errorf("stele.lock rewritten:\n%s\nwant it left as:\n%s", got, pulled)
 			}
 		})
 	}
+}
+
+// noMint is a newID for a hook that must not need one.
+func noMint(t *testing.T) func() string {
+	return func() string {
+		t.Error("the hook minted an id")
+		return "minted"
+	}
+}
+
+// git writes the files of a pull one at a time, so a hook can run with the
+// new stele.lock and the old stele.md. It writes nothing then, or it would
+// drop a teammate's rule from the lock and mint it another id once stele.md
+// lands.
+func TestEnsureFreshWaitsOutAPull(t *testing.T) {
+	ctx := context.Background()
+	gens := []Generated{idListing}
+	srcs := []source.Source{stelemd.New()}
+	const newRules = "tags: [db]\n\nNever concatenate SQL.\n\n---\n\nEvery handler goes through the middleware chain.\n\n---\n\nPrefer table-driven tests.\n"
+
+	root := t.TempDir()
+	writeRules(t, root, twoRules)
+	if _, err := Compile(ctx, root, srcs, gens, ids(), testKey); err != nil {
+		t.Fatal(err)
+	}
+
+	// The teammate's repository: rule 1 reworded, teammate-1 added.
+	theirs := t.TempDir()
+	if err := os.WriteFile(filepath.Join(theirs, lock.FileName), lockBytes(t, root), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeRules(t, theirs, newRules)
+	mint := func() string { return "teammate-1" }
+	if _, err := Compile(ctx, theirs, srcs, gens, mint, testKey); err != nil {
+		t.Fatal(err)
+	}
+	wantIDs := []string{"id-1", "id-2", "teammate-1"}
+
+	// The pull has reached stele.lock and the rules file, not stele.md.
+	pulled := lockBytes(t, theirs)
+	if err := os.WriteFile(filepath.Join(root, lock.FileName), pulled, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeGen(t, root, wantIDs)
+	want := readGen(t, root)
+
+	for hook := 1; hook <= 2; hook++ {
+		idx, rebuilt, err := EnsureFresh(ctx, root, srcs, gens, func() string { return "thrown-away" }, testKey)
+		if err != nil || rebuilt {
+			t.Fatalf("hook %d: rebuilt %v, %v", hook, rebuilt, err)
+		}
+		if diff := cmp.Diff([]string{"id-1", "id-2"}, entryIDs(idx)); diff != "" {
+			t.Errorf("hook %d: index ids (-want +got):\n%s", hook, diff)
+		}
+		if got := lockBytes(t, root); !bytes.Equal(got, pulled) {
+			t.Errorf("hook %d: stele.lock rewritten:\n%s", hook, got)
+		}
+		if got := readGen(t, root); got != want {
+			t.Errorf("hook %d: generated file = %q, want %q", hook, got, want)
+		}
+	}
+
+	// stele.md lands.
+	writeRules(t, root, newRules)
+	idx, rebuilt, err := EnsureFresh(ctx, root, srcs, gens, noMint(t), testKey)
+	if err != nil || !rebuilt {
+		t.Fatalf("after stele.md: rebuilt %v, %v", rebuilt, err)
+	}
+	if diff := cmp.Diff(wantIDs, entryIDs(idx)); diff != "" {
+		t.Errorf("index ids (-want +got):\n%s", diff)
+	}
+	if got := lockBytes(t, root); !bytes.Equal(got, pulled) {
+		t.Errorf("stele.lock rewritten:\n%s", got)
+	}
+	if got := readGen(t, root); got != want {
+		t.Errorf("generated file = %q, want %q", got, want)
+	}
+}
+
+// The hook cannot read an external source, so it cannot tell what a pulled
+// lock says about one. It keeps the lock as pulled, every entry of it.
+func TestEnsureFreshKeepsPulledExternalEntries(t *testing.T) {
+	ctx := context.Background()
+	gens := []Generated{idListing}
+	for name, change := range map[string]func(*lock.File){
+		"reworded": func(f *lock.File) { f.Rules[2].Hash = "reworded-by-a-teammate" },
+		"added": func(f *lock.File) {
+			f.Rules[2].ID = "pulled-org"
+			f.Rules = append(f.Rules, lock.Entry{ID: "org-new", Source: "org", Hash: "h", Position: 1})
+		},
+		"removed": func(f *lock.File) { f.Rules = f.Rules[:2] },
+		"new ids and an entry the index lacks": func(f *lock.File) {
+			f.Rules[0].ID = "pulled-1"
+			f.Rules = append(f.Rules, lock.Entry{ID: "org-new", Source: "org", Hash: "h", Position: 1})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeRules(t, root, twoRules)
+			org := newFake()
+			org.rules[0].ID = ""
+			if _, err := Compile(ctx, root, []source.Source{stelemd.New(), org}, gens, ids(), testKey); err != nil {
+				t.Fatal(err)
+			}
+			rewrite(t, root, change)
+			pulled := lockBytes(t, root)
+			want := readGen(t, root)
+
+			for hook := 1; hook <= 2; hook++ {
+				_, rebuilt, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, gens, func() string { return "thrown-away" }, testKey)
+				if err != nil || rebuilt {
+					t.Errorf("hook %d: rebuilt %v, %v", hook, rebuilt, err)
+				}
+				if got := lockBytes(t, root); !bytes.Equal(got, pulled) {
+					t.Errorf("hook %d: stele.lock rewritten:\n%s", hook, got)
+				}
+				if got := readGen(t, root); got != want {
+					t.Errorf("hook %d: generated file = %q, want %q", hook, got, want)
+				}
+			}
+		})
+	}
+}
+
+// An id that moved to the rule of another source, with one body in both:
+// every id and hash still pairs up, and only the source tells the lock has
+// changed.
+func TestEnsureFreshSeesAnIDChangeSource(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	gens := []Generated{idListing}
+	writeRules(t, root, "One body in two sources.\n")
+	org := newFake()
+	org.rules[0].ID = ""
+	org.rules[0].Body = "One body in two sources."
+	if _, err := Compile(ctx, root, []source.Source{stelemd.New(), org}, gens, ids(), testKey); err != nil {
+		t.Fatal(err)
+	}
+	rewrite(t, root, func(f *lock.File) { f.Rules[0].ID, f.Rules[1].ID = f.Rules[1].ID, f.Rules[0].ID })
+	writeGen(t, root, []string{"id-2", "id-1"})
+	pulled := lockBytes(t, root)
+
+	idx, rebuilt, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, gens, noMint(t), testKey)
+	if err != nil || !rebuilt {
+		t.Fatalf("rebuilt %v, %v, want a rebuild", rebuilt, err)
+	}
+	if diff := cmp.Diff([]string{"id-2", "id-1"}, entryIDs(idx)); diff != "" {
+		t.Errorf("index ids (-want +got):\n%s", diff)
+	}
+	if got := lockBytes(t, root); !bytes.Equal(got, pulled) {
+		t.Errorf("stele.lock rewritten:\n%s", got)
+	}
+}
+
+// unreadable is a builtin whose fingerprint is unchanged and that fails a read.
+type unreadable struct{ source.Source }
+
+func (unreadable) Read(context.Context, string) ([]source.Rule, string, error) {
+	return nil, "", errors.New("cannot read")
+}
+
+// A write never pays for a lock that disagrees: it does not wait for another
+// compile, and a plan that fails leaves it with the index it has.
+func TestEnsureFreshPulledLockNeverHoldsUpTheHook(t *testing.T) {
+	ctx := context.Background()
+	setup := func(t *testing.T) string {
+		t.Helper()
+		root := t.TempDir()
+		writeRules(t, root, twoRules)
+		if _, err := Compile(ctx, root, []source.Source{stelemd.New()}, nil, ids(), testKey); err != nil {
+			t.Fatal(err)
+		}
+		rewrite(t, root, func(f *lock.File) { f.Rules[0].ID = "pulled-1" })
+		return root
+	}
+
+	t.Run("another compile holds the lock", func(t *testing.T) {
+		root := setup(t)
+		unlock, err := lockCompile(root, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer unlock()
+		start := time.Now()
+		idx, rebuilt, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, nil, noMint(t), testKey)
+		if err != nil || rebuilt {
+			t.Fatalf("rebuilt %v, %v", rebuilt, err)
+		}
+		if d := time.Since(start); d >= lockWait {
+			t.Errorf("waited %v for the compile lock", d)
+		}
+		if diff := cmp.Diff([]string{"id-1", "id-2"}, entryIDs(idx)); diff != "" {
+			t.Errorf("index ids (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("the plan fails", func(t *testing.T) {
+		root := setup(t)
+		pulled := lockBytes(t, root)
+		idx, rebuilt, err := EnsureFresh(ctx, root, []source.Source{unreadable{stelemd.New()}}, nil, noMint(t), testKey)
+		if err != nil || rebuilt {
+			t.Fatalf("rebuilt %v, %v", rebuilt, err)
+		}
+		if len(idx.Rules) != 2 {
+			t.Errorf("index = %+v, want the one it had", idx)
+		}
+		if got := lockBytes(t, root); !bytes.Equal(got, pulled) {
+			t.Errorf("stele.lock rewritten:\n%s", got)
+		}
+	})
 }
 
 // A directory on the way that is a link is refused, after the lock and the

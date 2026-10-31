@@ -85,7 +85,8 @@ const (
 	// rule and leave stele.lock and the index disagreeing.
 	lockName = "compile.lock"
 	// lockWait is how long a compile waits for another. Only the lock and
-	// the index are written under it, never a source read, so it is short.
+	// the index are written under it, and only built-in sources read, so it
+	// is short.
 	lockWait = 5 * time.Second
 	// lockStale is the age past which the lock was left by a crash.
 	lockStale = 30 * time.Second
@@ -217,9 +218,18 @@ func staleGenerated(root string, idx index.Index, gens []Generated) bool {
 // no usable index it builds one from the builtins alone; external rules come
 // back at the next stele compile. The bool says whether it recompiled.
 //
-// It never reads an external source, so it never drops one's lock entries
-// either: their rules keep their ids for the next stele compile, even when
-// the index no longer holds them.
+// It never reads an external source, so it keeps the lock entries of a source
+// the index does not list: their rules keep their ids for the next stele
+// compile. When a builtin changed, an entry the index does not hold, from a
+// source it lists, is dropped.
+//
+// A lock that disagrees while every fingerprint matches is someone else's
+// doing: a pull, perhaps still writing stele.md. stele.lock is then only ever
+// read. A rebuild that keeps the lock as it is takes the ids and the project
+// from it. One that would change it writes nothing at all, and the index goes
+// on serving the rules: stele check reports the lock. That path never waits
+// for the compile lock, and a busy lock or a plan that fails leaves the index
+// as it is, so a write does not pay for it.
 //
 // A generated file can be stale while the index is fresh, after a branch
 // switch or a deletion: then only the file is rewritten, and only when that
@@ -228,7 +238,7 @@ func staleGenerated(root string, idx index.Index, gens []Generated) bool {
 // be made at once is skipped, not an error: the index serves the rules, and
 // stele check reports the file.
 func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gens []Generated, newID func() string, key sign.Key) (index.Index, bool, error) {
-	cur, ok, stale, err := staleness(ctx, root, builtins, key)
+	cur, ok, stale, lockOnly, err := staleness(ctx, root, builtins, key)
 	if err != nil || (ok && len(stale) == 0 && !staleGenerated(root, cur, gens)) {
 		return cur, false, err
 	}
@@ -237,13 +247,20 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gen
 		return cur, false, nil
 	}
 
-	unlock, err := lockCompile(root, lockWait)
+	wait := lockWait
+	if lockOnly {
+		wait = 0
+	}
+	unlock, err := lockCompile(root, wait)
 	if err != nil {
+		if lockOnly {
+			return cur, false, nil
+		}
 		return index.Index{}, false, err
 	}
 	defer unlock()
 	// Another process may have rebuilt while this one waited for the lock.
-	cur, ok, stale, err = staleness(ctx, root, builtins, key)
+	cur, ok, stale, lockOnly, err = staleness(ctx, root, builtins, key)
 	if err != nil {
 		return cur, false, err
 	}
@@ -251,6 +268,19 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gen
 		return cur, false, writeGenerated(root, generate(root, cur, gens), safefile.Replace)
 	}
 
+	r, err := rebuild(ctx, root, cur, ok, stale, builtins, gens, newID, key)
+	if lockOnly && (err != nil || r.LockChanged) {
+		return cur, false, nil
+	}
+	if err != nil {
+		return index.Index{}, false, err
+	}
+	return r.Index, true, Apply(root, r, key)
+}
+
+// rebuild plans an index from cur, re-reading the stale builtins, and writes
+// nothing. With ok false there is no index to carry anything over from.
+func rebuild(ctx context.Context, root string, cur index.Index, ok bool, stale map[string]bool, builtins []source.Source, gens []Generated, newID func() string, key sign.Key) (Result, error) {
 	// Rules keep the order Plan gives them: builtins first, then the rest in
 	// index order.
 	var rules []source.Rule
@@ -267,7 +297,7 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gen
 		}
 		rs, fp, err := read(ctx, root, b)
 		if err != nil {
-			return index.Index{}, false, err
+			return Result{}, err
 		}
 		rules = append(rules, rs...)
 		fps[b.Name()] = fp
@@ -277,42 +307,38 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gen
 			rules = append(rules, rule(e))
 		}
 	}
-
-	r, err := plan(root, rules, fps, gens, newID, true, key)
-	if err != nil {
-		return index.Index{}, false, err
-	}
-	return r.Index, true, Apply(root, r, key)
+	return plan(root, rules, fps, gens, newID, true, key)
 }
 
 // staleness loads the index and says which builtins changed since it was
-// built. A stele.lock the index no longer agrees with makes every builtin
-// stale, so the rebuild takes its ids from that lock. ok is false when there
-// is no usable index; cur is then empty.
-func staleness(ctx context.Context, root string, builtins []source.Source, key sign.Key) (cur index.Index, ok bool, stale map[string]bool, err error) {
+// built. When none did but stele.lock no longer agrees with the index, every
+// builtin is stale, so a rebuild takes its ids from that lock, and lockOnly
+// is true. ok is false when there is no usable index; cur is then empty.
+func staleness(ctx context.Context, root string, builtins []source.Source, key sign.Key) (cur index.Index, ok bool, stale map[string]bool, lockOnly bool, err error) {
 	cur, err = index.Load(root, key)
 	if errors.Is(err, index.ErrNoIndex) {
-		return index.Index{}, false, nil, nil
+		return index.Index{}, false, nil, false, nil
 	}
 	if err != nil {
-		return index.Index{}, false, nil, err
+		return index.Index{}, false, nil, false, err
 	}
 	stale = make(map[string]bool)
 	for _, b := range builtins {
 		fp, err := b.Fingerprint(ctx, root)
 		if err != nil {
-			return index.Index{}, false, nil, fmt.Errorf("source %s: %w", b.Name(), err)
+			return index.Index{}, false, nil, false, fmt.Errorf("source %s: %w", b.Name(), err)
 		}
 		if old, found := cur.Sources[b.Name()]; !found || old != fp {
 			stale[b.Name()] = true
 		}
 	}
-	if !lockAgrees(root, cur) {
+	if len(stale) == 0 && !lockAgrees(root, cur) {
+		lockOnly = true
 		for _, b := range builtins {
 			stale[b.Name()] = true
 		}
 	}
-	return cur, true, stale, nil
+	return cur, true, stale, lockOnly, nil
 }
 
 // lockAgrees reports whether stele.lock gives the index's project and each of
@@ -350,7 +376,7 @@ func refresh(ctx context.Context, root string, builtins []source.Source, gens []
 		return
 	}
 	defer unlock()
-	cur, ok, stale, err := staleness(ctx, root, builtins, key)
+	cur, ok, stale, _, err := staleness(ctx, root, builtins, key)
 	if err != nil || !ok || len(stale) > 0 {
 		return // another process is rebuilding; it writes the files too
 	}
