@@ -3,6 +3,7 @@ package safefile
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -16,19 +17,36 @@ func TestResolvePlainPath(t *testing.T) {
 	}
 }
 
+// sameDir reports whether got is want itself, not a link to it: got is not
+// followed. Text cannot tell, as a temp directory can be spelled with an 8.3
+// short name on one side and the long name on the other.
+func sameDir(t *testing.T, got, want string) bool {
+	t.Helper()
+	a, err := os.Lstat(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.Stat(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return os.SameFile(a, b)
+}
+
 func TestResolveSymlink(t *testing.T) {
 	dir, out := t.TempDir(), t.TempDir()
 	link := filepath.Join(dir, "link")
 	if err := os.Symlink(out, link); err != nil {
 		t.Skipf("symlink: %v", err)
 	}
-	real, err := filepath.EvalSymlinks(out)
-	if err != nil {
-		t.Fatal(err)
+	if sameDir(t, link, out) {
+		t.Fatal("sameDir followed the link: it could not tell Resolve did nothing")
 	}
-	got, ok := Resolve(filepath.Join(link, "new", "c.txt"))
-	if want := filepath.Join(real, "new", "c.txt"); !ok || got != want {
-		t.Errorf("through a link = %q, %v, want %q", got, ok, want)
+	rest := filepath.Join("new", "c.txt")
+	got, ok := Resolve(filepath.Join(link, rest))
+	base, found := strings.CutSuffix(got, string(filepath.Separator)+rest)
+	if !ok || !found || !sameDir(t, base, out) {
+		t.Errorf("through a link = %q, %v, want %s below %s", got, ok, rest, out)
 	}
 }
 

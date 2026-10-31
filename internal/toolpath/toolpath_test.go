@@ -164,23 +164,46 @@ func dirLink(t *testing.T, target, link string) {
 	}
 }
 
+// sameDir reports whether got is want itself, not a link to it: got is not
+// followed. Text cannot tell, as a temp directory can be spelled with an 8.3
+// short name on one side and the long name on the other.
+func sameDir(t *testing.T, got, want string) bool {
+	t.Helper()
+	a, err := os.Lstat(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.Stat(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return os.SameFile(a, b)
+}
+
 // safefile.Resolve lives on the hook's path, where nothing starts a process,
 // so its tests with a junction are here.
 func TestResolveThroughALink(t *testing.T) {
 	dir, out := t.TempDir(), t.TempDir()
 	link := filepath.Join(dir, "link")
 	dirLink(t, out, link)
-	got, ok := safefile.Resolve(filepath.Join(link, "new", "c.txt"))
-	if want := filepath.Join(out, "new", "c.txt"); !ok || !strings.EqualFold(got, want) {
-		t.Errorf("through a link = %q, %v, want %q", got, ok, want)
+	if sameDir(t, link, out) {
+		t.Fatal("sameDir followed the link: it could not tell Resolve did nothing")
+	}
+	rest := filepath.Join("new", "c.txt")
+	got, ok := safefile.Resolve(filepath.Join(link, rest))
+	base, found := strings.CutSuffix(got, string(filepath.Separator)+rest)
+	if !ok || !found || !sameDir(t, base, out) {
+		t.Errorf("through a link = %q, %v, want %s below %s", got, ok, rest, out)
 	}
 }
 
 func TestResolveDanglingLink(t *testing.T) {
-	gone := filepath.Join(t.TempDir(), "gone")
+	parent := t.TempDir()
+	gone := filepath.Join(parent, "gone")
 	link := filepath.Join(t.TempDir(), "link")
 	dirLink(t, gone, link)
-	if got, ok := safefile.Resolve(link); !ok || !strings.EqualFold(got, gone) {
+	got, ok := safefile.Resolve(link)
+	if !ok || filepath.Base(got) != "gone" || !sameDir(t, filepath.Dir(got), parent) {
 		t.Errorf("Resolve = %q, %v, want %q", got, ok, gone)
 	}
 }
