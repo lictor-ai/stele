@@ -212,10 +212,10 @@ func staleGenerated(root string, idx index.Index, gens []Generated) bool {
 }
 
 // EnsureFresh re-reads only builtins, and only those whose fingerprint
-// changed. Rules from every other source are carried over from the current
-// index. With no usable index it builds one from the builtins alone; external
-// rules come back at the next stele compile. The bool says whether it
-// recompiled.
+// changed, or all of them when stele.lock no longer agrees with the index.
+// Rules from every other source are carried over from the current index. With
+// no usable index it builds one from the builtins alone; external rules come
+// back at the next stele compile. The bool says whether it recompiled.
 //
 // It never reads an external source, so it never drops one's lock entries
 // either: their rules keep their ids for the next stele compile, even when
@@ -286,7 +286,9 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gen
 }
 
 // staleness loads the index and says which builtins changed since it was
-// built. ok is false when there is no usable index; cur is then empty.
+// built. A stele.lock the index no longer agrees with makes every builtin
+// stale, so the rebuild takes its ids from that lock. ok is false when there
+// is no usable index; cur is then empty.
 func staleness(ctx context.Context, root string, builtins []source.Source, key sign.Key) (cur index.Index, ok bool, stale map[string]bool, err error) {
 	cur, err = index.Load(root, key)
 	if errors.Is(err, index.ErrNoIndex) {
@@ -305,7 +307,38 @@ func staleness(ctx context.Context, root string, builtins []source.Source, key s
 			stale[b.Name()] = true
 		}
 	}
+	if !lockAgrees(root, cur) {
+		for _, b := range builtins {
+			stale[b.Name()] = true
+		}
+	}
 	return cur, true, stale, nil
+}
+
+// lockAgrees reports whether stele.lock gives the index's project and each of
+// its rules the identity the index holds. A pull can change the lock while
+// stele.md stays the same. Entries the index does not hold, such as an
+// external source's, say nothing. Neither does a lock that is missing or
+// invalid: the index serves the rules, and stele check reports the lock.
+func lockAgrees(root string, idx index.Index) bool {
+	f, err := lock.Load(root)
+	if err != nil || f.Project == "" {
+		return true
+	}
+	if f.Project != idx.Project {
+		return false
+	}
+	entries := make(map[string]lock.Entry, len(f.Rules))
+	for _, e := range f.Rules {
+		entries[e.ID] = e
+	}
+	for _, r := range idx.Rules {
+		e, ok := entries[r.ID]
+		if !ok || e.Source != r.Source || e.Hash != r.BodyHash {
+			return false
+		}
+	}
+	return true
 }
 
 // refresh rewrites stale generated files while the index is fresh, if it can

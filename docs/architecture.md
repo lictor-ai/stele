@@ -270,7 +270,7 @@ rule claim two entries or mint a second project id.
 ```go
 type Index struct {
     Version int
-    Project string            // copied from stele.lock, so the hot path never opens the lock
+    Project string            // copied from stele.lock
     Sources map[string]string // source name → fingerprint at compile
     Rules   []Entry
 }
@@ -339,7 +339,8 @@ func Plan(ctx context.Context, root string, srcs []source.Source, gens []Generat
 func Compile(ctx context.Context, root string, srcs []source.Source, gens []Generated, newID func() string, key sign.Key) (Result, error)
 // Apply writes the lock, the index and the generated files, each only when it changed, in that order.
 func Apply(root string, r Result, key sign.Key) error
-// EnsureFresh re-reads only builtins, and only those whose fingerprint changed.
+// EnsureFresh re-reads only builtins, and only those whose fingerprint changed,
+// or all of them when stele.lock no longer agrees with the index.
 // Rules from every other source are carried over from the current index.
 // A generated file stale while the index is fresh is rewritten alone, best effort.
 func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gens []Generated, newID func() string, key sign.Key) (index.Index, bool, error)
@@ -375,6 +376,16 @@ inspects the `Report`, and never writes. `EnsureFresh` is the one `request` call
 — it asks each built-in source for its `Fingerprint`, and only when one differs
 does it re-read that source, reconcile and `Apply`. The returned bool says
 whether it recompiled, so the caller can log it.
+
+**A pulled `stele.lock` counts as a change.** A pull can bring new ids with
+`stele.md` untouched, so the fingerprints match while the index holds old ids,
+and refreshing the rules file from it would overwrite the committed file. So
+`EnsureFresh` also opens `stele.lock` on each write, and when the lock gives the
+project or a rule of the index another identity it rebuilds every built-in
+source, taking the ids from that lock. The lock keeps its bytes unless
+`stele.md` disagrees with it. Lock entries the index does not hold don't count,
+and neither does a missing or invalid lock: the index still serves the rules,
+and `stele check` reports the lock.
 
 **`EnsureFresh` takes built-in sources only** (D45). An external source may be a
 network call to Confluence; it runs at `stele compile` and `stele check`, never

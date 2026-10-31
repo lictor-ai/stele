@@ -43,7 +43,7 @@ var ErrNoIndex = errors.New("no index")
 // Index is the compiled corpus.
 type Index struct {
 	Version int               `json:"version"`
-	Project string            `json:"project"` // copied from stele.lock, so the hot path never opens the lock
+	Project string            `json:"project"` // copied from stele.lock
 	Sources map[string]string `json:"sources"` // source name → fingerprint at compile
 	Rules   []Entry           `json:"rules"`
 }
