@@ -120,7 +120,7 @@ func TestRunReopensWhenUnchanged(t *testing.T) {
 		case r.Method == "GET" && strings.Contains(r.URL.RawQuery, "state=opened"):
 			writeJSONTo(w, 200, []any{})
 		case r.Method == "GET":
-			writeJSONTo(w, 200, []map[string]any{{"iid": 2, "web_url": "https://gitlab.com/g/s/rules/-/merge_requests/2"}})
+			writeJSONTo(w, 200, []map[string]any{{"iid": 2, "source_project_id": 1, "target_project_id": 1, "web_url": "https://gitlab.com/g/s/rules/-/merge_requests/2"}})
 		case r.Method == "PUT":
 			writeJSONTo(w, 200, map[string]any{"iid": 2, "web_url": "https://gitlab.com/g/s/rules/-/merge_requests/2"})
 		default:

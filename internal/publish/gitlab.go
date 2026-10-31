@@ -8,8 +8,17 @@ import (
 )
 
 type gitlabMergeRequest struct {
-	IID    int    `json:"iid"`
-	WebURL string `json:"web_url"`
+	IID             int    `json:"iid"`
+	WebURL          string `json:"web_url"`
+	SourceProjectID int    `json:"source_project_id"`
+	TargetProjectID int    `json:"target_project_id"`
+}
+
+// ownMR reports whether m comes from a branch of the project it targets. The
+// source_branch filter also matches forks, and anyone can open a merge request
+// from a fork under the publish branch's name.
+func ownMR(m gitlabMergeRequest) bool {
+	return m.SourceProjectID != 0 && m.SourceProjectID == m.TargetProjectID
 }
 
 // gitlabMR finds the open merge request from the publish branch, or reopens
@@ -22,13 +31,23 @@ func gitlabMR(ctx context.Context, r remote, token string, req mrRequest) (mrRes
 	// The project id is its path with every '/' encoded as %2F.
 	mrs := gitlabAPI + "/projects/" + url.PathEscape(r.Project) + "/merge_requests"
 	list := func(state, target string) ([]gitlabMergeRequest, error) {
-		q := url.Values{"state": {state}, "source_branch": {req.Branch}}
+		// Forks are dropped here, not by the API: a full page keeps ours in
+		// sight among them.
+		q := url.Values{"state": {state}, "source_branch": {req.Branch}, "per_page": {"100"}}
 		if target != "" {
 			q.Set("target_branch", target)
 		}
-		var out []gitlabMergeRequest
-		_, err := call(ctx, "GitLab", http.MethodGet, mrs+"?"+q.Encode(), token, nil, nil, &out)
-		return out, err
+		var found []gitlabMergeRequest
+		if _, err := call(ctx, "GitLab", http.MethodGet, mrs+"?"+q.Encode(), token, nil, nil, &found); err != nil {
+			return nil, err
+		}
+		var own []gitlabMergeRequest
+		for _, m := range found {
+			if ownMR(m) {
+				own = append(own, m)
+			}
+		}
+		return own, nil
 	}
 
 	open, err := list("opened", req.Base)
