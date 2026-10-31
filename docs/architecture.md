@@ -1508,8 +1508,8 @@ another process. So the rename retries those errors, access denied and sharing
 violation, and only those, for up to 2 seconds; anything else fails at once. On final failure it
 reports the likely cause rather than an opaque `*LinkError`. Reads retry the same
 way: on Windows a read that meets another process's rename fails with a sharing
-violation or access denied, which `safefile.ReadRegular` retries rather than
-reporting.
+violation or access denied, which `safefile.ReadRegular` and
+`safefile.ReadFollowing` retry rather than reporting.
 
 **stele trusts only what it would have written itself.** Nothing under `.stele/`
 is covered by the repository's own `.gitignore`, so a repository can commit
@@ -1526,10 +1526,15 @@ an expected shape, and anything else gets one of two outcomes:
 | `*.lock` | plain file holding a token | a non-file is moved aside at once; a plain file once stale (§3) |
 
 Every read of a file under `.stele/` or of `stele.lock` goes through
-`safefile.ReadRegular` — `stele.md` is not covered: a user may symlink it on
-purpose. It reads a regular file only, never through
-a symlink, never a device, capped in size, so a link to `/dev/zero` cannot hang
-stele or exhaust its memory. `safefile.Replace` moves anything but a plain file
+`safefile.ReadRegular`, but for a lock's release, which reads its lock file
+directly and only compares it with its token — `stele.md` is not covered: a
+user may symlink it on purpose. `ReadRegular` reads a regular file only, capped
+in size. It refuses a symlink or junction at the path itself and never reads a
+device, so a link to `/dev/zero` cannot hang stele or exhaust its memory; a link
+in a directory above the path is followed. `enforce.Load` reads `stele.json` through
+`safefile.ReadFollowing`, which follows a link but holds the same limits at its
+end, 1 MiB here; a file that fails them, or is UTF-16, is an error that follows
+the failure policy. `safefile.Replace` moves anything but a plain file
 out of its way before the rename, which callers rely on only for files stele can
 regenerate or has just read as a plain file. A non-empty directory moved aside
 stays, renamed `*.stale`; nothing reads it again. Session ids that are Windows
