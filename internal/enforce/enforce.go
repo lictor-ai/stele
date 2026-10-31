@@ -7,9 +7,11 @@
 package enforce
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -17,6 +19,9 @@ import (
 
 // FileName is the policy file at the repository root.
 const FileName = "stele.json"
+
+// maxSize caps stele.json. It is read on every write, by the hook.
+const maxSize = 1 << 20
 
 // Policy is how hard the hook enforces. Which parts of the hook run is not
 // policy: stele init writes it on the hook command (ADR-0006, ADR-0008).
@@ -35,7 +40,7 @@ func Default() Policy { return Policy{} }
 // is not valid JSON is an error, returned with the default policy so a caller
 // can still act on it.
 func Load(root string) (Policy, error) {
-	data, err := os.ReadFile(filepath.Join(root, FileName))
+	data, err := read(root)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Default(), nil
 	}
@@ -59,7 +64,7 @@ func Load(root string) (Policy, error) {
 // nothing reads since ADR-0008: stele init says so, and never edits the file
 // (D38). A missing or invalid stele.json sets nothing.
 func SetsBackstop(root string) bool {
-	data, err := os.ReadFile(filepath.Join(root, FileName))
+	data, err := read(root)
 	if err != nil {
 		return false
 	}
@@ -69,4 +74,34 @@ func SetsBackstop(root string) bool {
 	}
 	_, ok := keys["backstop"]
 	return ok
+}
+
+// read returns stele.json under root, without the byte order mark some
+// Windows editors and shells add.
+//
+// A symlink is followed, since a user may share one policy between projects,
+// but it must end at a regular file of bounded size: a repository could commit
+// stele.json as a link to /dev/zero, and the hook reads it on every write.
+func read(root string) ([]byte, error) {
+	path := filepath.Join(root, FileName)
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", FileName)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxSize {
+		return nil, fmt.Errorf("%s is over %d bytes", FileName, maxSize)
+	}
+	return bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), nil
 }

@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,7 +58,7 @@ func LoadConfig(root string) (Config, error) {
 			Path string `json:"path"`
 		} `json:"publish"`
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := json.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &raw); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", enforce.FileName, err)
 	}
 	if raw.Publish == nil {

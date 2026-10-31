@@ -47,6 +47,17 @@ func TestLoadConfigDefaultPath(t *testing.T) {
 	}
 }
 
+func TestLoadConfigByteOrderMark(t *testing.T) {
+	root := writeJSON(t, "\xef\xbb\xbf"+`{"publish": {"repo": "git@github.com:me/g.git"}}`)
+	cfg, err := LoadConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Repo != "git@github.com:me/g.git" {
+		t.Errorf("cfg = %+v", cfg)
+	}
+}
+
 func TestLoadConfigInvalid(t *testing.T) {
 	for name, content := range map[string]string{
 		"not json":           `{`,
