@@ -115,12 +115,12 @@ func TestRunForeignLinkIgnored(t *testing.T) {
 func TestRunReopensWhenUnchanged(t *testing.T) {
 	f := newFixture(t, "git@gitlab.com:g/s/rules.git", "", "Use tabs.\n", map[string]string{"README.md": "hi\n"})
 	setTokens(t, "t")
-	newAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) {
+	glAPI(t, func(w http.ResponseWriter, r *http.Request, _ string) {
 		switch {
 		case r.Method == "GET" && strings.Contains(r.URL.RawQuery, "state=opened"):
 			writeJSONTo(w, 200, []any{})
 		case r.Method == "GET":
-			writeJSONTo(w, 200, []map[string]any{{"iid": 2, "web_url": "https://gitlab.com/g/s/rules/-/merge_requests/2"}})
+			writeJSONTo(w, 200, []map[string]any{{"iid": 2, "source_project_id": 1, "target_project_id": 1, "web_url": "https://gitlab.com/g/s/rules/-/merge_requests/2"}})
 		case r.Method == "PUT":
 			writeJSONTo(w, 200, map[string]any{"iid": 2, "web_url": "https://gitlab.com/g/s/rules/-/merge_requests/2"})
 		default:
