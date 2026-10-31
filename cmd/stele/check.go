@@ -26,6 +26,7 @@ import (
 	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/source"
+	"github.com/lictor-ai/stele/internal/toolpath"
 )
 
 // runCheck validates the rules, then runs the checkers on the selected files,
@@ -98,10 +99,11 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 
 	// 2. The code.
 	var files []string
+	var g gitTool
 	if len(paths) > 0 {
 		files, err = explicitFiles(root, paths)
-	} else {
-		files, err = gitFiles(root, *base, *all)
+	} else if g, err = newGitTool(root); err == nil {
+		files, err = gitFiles(g, *base, *all)
 	}
 	if err != nil {
 		return cantRun("%v", err)
@@ -116,7 +118,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	// A rules change passes CI, but reviewers must see it (#52). A stale
 	// stele.lock has already failed above.
 	if *base != "" {
-		if rep.RuleFilesChanged, err = ruleFileChanges(root, *base); err != nil {
+		if rep.RuleFilesChanged, err = ruleFileChanges(g, *base); err != nil {
 			return cantRun("%v", err)
 		}
 	}
@@ -269,42 +271,39 @@ func explicitFiles(root string, paths []string) ([]string, error) {
 // since it left base; or with all, every tracked file. Deleted files are
 // left out. Only files under root are listed, so a stele.md in a subdirectory
 // of the repository checks only its own files.
-func gitFiles(root, base string, all bool) ([]string, error) {
-	if _, err := exec.LookPath("git"); err != nil {
-		return nil, errors.New("stele check needs git to find changed files; pass paths instead")
-	}
+func gitFiles(g gitTool, base string, all bool) ([]string, error) {
 	switch {
 	case all:
-		return git(root, "ls-files", "-z")
+		return g.list("ls-files", "-z")
 	case base != "":
-		if _, err := git(root, "rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
+		if _, err := g.list("rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
 			return nil, fmt.Errorf("--base %s: unknown ref", base)
 		}
-		files, err := git(root, "diff", "--name-only", "-z", "--relative", "--diff-filter=ACMRT", base+"...HEAD", "--")
+		files, err := g.list("diff", "--name-only", "-z", "--relative", "--diff-filter=ACMRT", base+"...HEAD", "--")
 		if err != nil && strings.Contains(err.Error(), "no merge base") {
 			return nil, fmt.Errorf("%v (in CI, a shallow clone has no history: fetch with fetch-depth: 0)", err)
 		}
 		return files, err
 	}
-	if _, err := git(root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"); err != nil {
+	if _, err := g.list("rev-parse", "--verify", "--quiet", "HEAD^{commit}"); err != nil {
 		// No commit yet, or not a repository: then ls-files says which.
-		return git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+		return g.list("ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	}
-	changed, err := git(root, "diff", "--name-only", "-z", "--relative", "--diff-filter=ACMRT", "HEAD", "--")
+	changed, err := g.list("diff", "--name-only", "-z", "--relative", "--diff-filter=ACMRT", "HEAD", "--")
 	if err != nil {
 		return nil, err
 	}
-	untracked, err := git(root, "ls-files", "-z", "--others", "--exclude-standard")
+	untracked, err := g.list("ls-files", "-z", "--others", "--exclude-standard")
 	if err != nil {
 		return nil, err
 	}
 	return dedupe(append(changed, untracked...)), nil
 }
 
-// git runs git in root and splits its NUL-separated output, sorted and
-// without repeats.
-func git(root string, args ...string) ([]string, error) {
-	files, err := gitRaw(root, args...)
+// list runs git in the project and splits its NUL-separated output, sorted
+// and without repeats.
+func (g gitTool) list(args ...string) ([]string, error) {
+	files, err := g.raw(args...)
 	return dedupe(files), err
 }
 
@@ -312,8 +311,8 @@ func git(root string, args ...string) ([]string, error) {
 // that the branch adds, modifies or deletes since its merge base with base.
 // A rename counts as a deletion and an addition: moving stele.json away
 // drops it.
-func ruleFileChanges(root, base string) ([]check.RuleFileChange, error) {
-	out, err := gitRaw(root, "diff", "--name-status", "-z", "--relative", "--no-renames", base+"...HEAD", "--")
+func ruleFileChanges(g gitTool, base string) ([]check.RuleFileChange, error) {
+	out, err := g.raw("diff", "--name-status", "-z", "--relative", "--no-renames", base+"...HEAD", "--")
 	if err != nil {
 		return nil, err
 	}
@@ -334,10 +333,49 @@ func ruleFileChanges(root, base string) ([]check.RuleFileChange, error) {
 	return cs, nil
 }
 
-// gitRaw runs git in root and splits its NUL-separated output, in order.
-func gitRaw(root string, args ...string) ([]string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = root
+// gitBin finds git on PATH, as stele publish does: one inside the project at
+// root, which a cloned repository could have put there, is refused.
+func gitBin(root string) (string, error) {
+	p, err := exec.LookPath("git")
+	if errors.Is(err, exec.ErrDot) {
+		return "", fmt.Errorf("git: found through a relative PATH entry: %w", toolpath.ErrRefused)
+	}
+	if err != nil {
+		return "", errors.New("stele check needs git to find changed files; pass paths instead")
+	}
+	return toolpath.Vet("git", p, root)
+}
+
+// gitTool is git for one stele check of the project at root, found once, with
+// an environment worked out once: PATH can be long, and one check runs git
+// several times.
+type gitTool struct {
+	bin, root string
+	env       []string
+}
+
+// newGitTool finds git for the project at root. No PATH entry inside the
+// project reaches it.
+func newGitTool(root string) (gitTool, error) {
+	bin, err := gitBin(root)
+	if err != nil {
+		return gitTool{}, err
+	}
+	return gitTool{bin: bin, root: root, env: toolpath.Env(os.Environ(), root)}, nil
+}
+
+// command is git with args, to run in the project, under toolpath.GitFlags as
+// stele publish runs it.
+func (g gitTool) command(args ...string) *exec.Cmd {
+	cmd := exec.Command(g.bin, append(toolpath.GitFlags(), args...)...)
+	cmd.Dir = g.root
+	cmd.Env = g.env
+	return cmd
+}
+
+// raw runs git in the project and splits its NUL-separated output, in order.
+func (g gitTool) raw(args ...string) ([]string, error) {
+	cmd := g.command(args...)
 	var errOut bytes.Buffer
 	cmd.Stderr = &errOut
 	out, err := cmd.Output()

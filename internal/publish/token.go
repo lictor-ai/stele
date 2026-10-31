@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/lictor-ai/stele/internal/toolpath"
 )
 
 // tokenTimeout bounds one attempt to read a stored login.
@@ -63,7 +65,7 @@ func cliToken(ctx context.Context, root, dir string, argv []string) string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = withoutTokens(os.Environ())
+	cmd.Env = withoutTokens(toolpath.Env(os.Environ(), root))
 	out := &capped{max: maxOutput}
 	cmd.Stdout = out
 	if err := cmd.Run(); err != nil {

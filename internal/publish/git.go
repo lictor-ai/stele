@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/lictor-ai/stele/internal/toolpath"
 )
 
 // ErrGit is a git command that failed. The error holds git's own message,
@@ -27,6 +29,21 @@ var (
 	netTimeout = 30 * time.Minute
 )
 
+// remoteFlags go after toolpath.GitFlags on every git command, and are stele
+// publish's alone: "repo" comes from stele.json, which a clone brings. Only
+// https and ssh may be used, so it can never run a transport command (ext::)
+// or reach a local path; credential helpers never prompt; submodules are
+// never fetched or pushed.
+var remoteFlags = []string{
+	"-c", "protocol.allow=never",
+	"-c", "protocol.https.allow=always",
+	"-c", "protocol.ssh.allow=always",
+	"-c", "credential.interactive=never",
+	"-c", "submodule.recurse=false",
+	"-c", "fetch.recurseSubmodules=false",
+	"-c", "push.recurseSubmodules=no",
+}
+
 // network are the git commands that talk to the remote.
 var network = map[string]bool{"clone": true, "fetch": true, "push": true, "ls-remote": true}
 
@@ -43,24 +60,6 @@ func timeoutFor(args []string) time.Duration {
 		break
 	}
 	return gitTimeout
-}
-
-// safety is passed to every git command. Only https and ssh may be used, so
-// "repo" can never run a transport command (ext::) or reach a local path;
-// credential helpers never prompt; submodules are never fetched or pushed.
-var safety = []string{
-	"-c", "protocol.allow=never",
-	"-c", "protocol.https.allow=always",
-	"-c", "protocol.ssh.allow=always",
-	"-c", "credential.interactive=never",
-	"-c", "submodule.recurse=false",
-	"-c", "fetch.recurseSubmodules=false",
-	"-c", "push.recurseSubmodules=no",
-	"-c", "core.fsmonitor=false",
-	// A bare repository is used only when named with --git-dir: a cloned
-	// project laid out as one could otherwise bring its own config, with
-	// filters and hooks that run commands.
-	"-c", "safe.bareRepository=explicit",
 }
 
 // quiet is added to git's environment: no prompt on the terminal, from Git
@@ -85,23 +84,36 @@ var dropped = []string{
 
 // gitCmd runs git safely.
 type gitCmd struct {
-	bin string // the absolute path of git
+	bin string   // the absolute path of git
+	env []string // the environment to start from, or nil for this process's
 }
 
-// args returns the arguments to run git with: safety first.
+// newGitCmd is git at bin for the project at root. No PATH entry inside the
+// project reaches it. The environment is worked out here, once: PATH can be
+// long, and one publish runs git many times.
+func newGitCmd(bin, root string) gitCmd {
+	return gitCmd{bin: bin, env: toolpath.Env(os.Environ(), root)}
+}
+
+// args returns the arguments to run git with: toolpath.GitFlags and
+// remoteFlags first.
 func (g gitCmd) args(args []string) []string {
-	out := append([]string{}, safety...)
+	out := append(toolpath.GitFlags(), remoteFlags...)
 	if localRemote != "" {
 		out = append(out, "-c", "protocol.file.allow=always")
 	}
 	return append(out, args...)
 }
 
-// env returns git's environment: this process's, without the variables in
-// dropped, with quiet and extra.
-func gitEnv(extra []string) []string {
+// environ returns git's environment: g's, without the variables in dropped,
+// with quiet and extra.
+func (g gitCmd) environ(extra []string) []string {
+	base := g.env
+	if base == nil {
+		base = os.Environ()
+	}
 	var out []string
-	for _, kv := range os.Environ() {
+	for _, kv := range base {
 		name, _, _ := strings.Cut(kv, "=")
 		if !dropName(name) {
 			out = append(out, kv)
@@ -161,7 +173,7 @@ func (g gitCmd) runLimit(ctx context.Context, dir string, extraEnv []string, std
 	}
 	cmd := exec.CommandContext(ctx, g.bin, g.args(args)...)
 	cmd.Dir = dir
-	cmd.Env = gitEnv(extraEnv)
+	cmd.Env = g.environ(extraEnv)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}

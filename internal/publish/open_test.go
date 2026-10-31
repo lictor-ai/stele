@@ -2,6 +2,7 @@ package publish
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -45,6 +46,29 @@ func TestOpenPassesTheLinkAsOneArgument(t *testing.T) {
 	}
 	if want := append(append([]string{}, prefix...), link); !slices.Equal(calls[0].Args, want) {
 		t.Errorf("args = %q, want %q", calls[0].Args, want)
+	}
+}
+
+// xdg-open is a script that looks on PATH for a browser.
+func TestOpenDropsPathInsideProject(t *testing.T) {
+	name, _ := openCommand(runtime.GOOS)
+	dir, log := fakeTools(t, name)
+	root := t.TempDir()
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+filepath.Join(root, "bin"))
+	if err := Open(root, "https://github.com/x"); err != nil {
+		t.Fatal(err)
+	}
+	var calls []fakeCall
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if calls = fakeCalls(t, log); len(calls) > 0 {
+			break
+		}
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v", calls)
+	}
+	if got := calls[0].Env["PATH"]; got != dir {
+		t.Errorf("PATH = %q, want %q", got, dir)
 	}
 }
 

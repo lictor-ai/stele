@@ -260,7 +260,7 @@ With `--base`, `stele check` also says when the branch adds, changes or deletes 
 |---|---|
 | 0 | Rules are valid (or there are none) and there is no blocking violation |
 | 1 | A rule is invalid, `stele.lock` or `.claude/rules/stele-rules.md` is out of date, or there is a blocking violation |
-| 2 | stele couldn't run: bad flags, no git, unknown `--base` ref, no merge base |
+| 2 | stele couldn't run: bad flags, no git, a git inside the project, unknown `--base` ref, no merge base |
 
 GitHub Actions:
 
@@ -455,6 +455,19 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 **`stele publish` has not been run against gitlab.com.** It was run against github.com; its GitLab calls are tested only against a fake server.
 
 **`stele publish` needs a repository with at least one commit, and git access to it.** git and Git Credential Manager are never allowed to prompt. ssh still can: a key's passphrase or an unknown host key is asked by ssh itself.
+
+**`stele check` and `stele publish` guard against programs a project brings with it, and only in these ways.**
+
+- **Programs refused.** `stele check` refuses a git, and `stele publish` a git, gh, glab or browser opener, found on `PATH` inside the project or inside the git repository that holds it, or through a relative `PATH` entry. That counts one that links to somewhere else, as a nix `result/bin` does. Links and junctions are followed, and directories compared by identity, so another spelling of the path counts too. `stele check` then exits 2; `stele check <paths>` needs no git.
+- **`PATH` entries removed.** What they start doesn't get `PATH` entries that are empty, relative or inside those same directories. On Windows, a quoted entry goes whole if any `;`-separated part of it would.
+- **git config overridden.** Every git command they run is given `core.fsmonitor=false` and `safe.bareRepository=explicit`, so git won't use a folder laid out as a bare repository unless told to: `stele check` in one exits 2. `stele publish` also gives `credential.interactive=never`, the `protocol` settings that allow only https and ssh, and `submodule.recurse=false`, `fetch.recurseSubmodules=false` and `push.recurseSubmodules=no`. `stele check` doesn't: a partial clone still fetches what it needs from where it was cloned.
+
+Not covered:
+
+- `safe.bareRepository` needs git 2.38 or later. An older git ignores it, and uses such a folder.
+- Only the repository nearest to where the project's path leads counts, so a superproject's folder or a linked worktree's main checkout is not inside the project.
+- A repository at your home directory or a filesystem root doesn't count: with `~/.git` or `/.git`, a program in `~/bin` or `/usr/bin` is not refused. The project's own folder still counts.
+- A program named by an environment variable, such as `GIT_SSH_COMMAND` or `GIT_EXEC_PATH`, still runs, as does one named by any git config not listed above, such as `core.sshCommand`.
 
 **`stele publish` refuses a `stele/publish/<path>` branch holding commits it did not make for this project.** Two projects that publish to the same `path` of one repository get that error; give each its own `path`.
 

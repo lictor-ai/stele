@@ -2,8 +2,11 @@ package publish
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"runtime"
+
+	"github.com/lictor-ai/stele/internal/toolpath"
 )
 
 // openCommand is the program that opens a link in the browser on goos, and
@@ -32,6 +35,7 @@ func Open(root, link string) error {
 		return err
 	}
 	cmd := exec.Command(bin, append(prefix, link)...)
+	cmd.Env = toolpath.Env(os.Environ(), root)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

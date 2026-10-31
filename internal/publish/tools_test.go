@@ -65,6 +65,25 @@ func TestResolveToolRefusesInsideEnclosingRepository(t *testing.T) {
 	}
 }
 
+// With ~/.git, dotfiles for example, a tool in ~/bin is the user's own.
+func TestResolveToolKeepsToolOutsideAHomeRepository(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	root := filepath.Join(home, "notes")
+	for _, dir := range []string{filepath.Join(home, ".git"), root} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := filepath.Join(home, "bin")
+	fakeTool(t, bin, "faketool")
+	t.Setenv("PATH", bin)
+	if _, err := resolveTool("faketool", root); err != nil {
+		t.Errorf("resolveTool = %v", err)
+	}
+}
+
 func TestResolveToolOutsideProject(t *testing.T) {
 	root := t.TempDir()
 	bin := t.TempDir()

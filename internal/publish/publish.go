@@ -49,7 +49,7 @@ func Run(ctx context.Context, root string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	g := gitCmd{bin: gitBin}
+	g := newGitCmd(gitBin, root)
 	c, err := readCommitted(ctx, g, root)
 	if err != nil {
 		return Result{}, err
