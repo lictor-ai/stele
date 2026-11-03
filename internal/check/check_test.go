@@ -321,6 +321,29 @@ func TestRunFile(t *testing.T) {
 	}
 }
 
+// Checks names the rules RunFile would check a file against: valid, with a
+// checker that can check content, and in scope.
+func TestChecks(t *testing.T) {
+	idx := index.Index{Rules: []index.Entry{
+		entry("go", "Go only.", []string{"*.go"}, map[string]string{"check": "fake"}),
+		entry("any", "Everywhere.", nil, map[string]string{"check": "fake"}),
+		entry("md", "Markdown only.", []string{"*.md"}, map[string]string{"check": "fake"}),
+		entry("bad", "Bad blocking.", nil, map[string]string{"check": "fake", "blocking": "maybe"}),
+		entry("plug", "A plugin rule.", nil, map[string]string{"check": "plugin"}),
+		entry("guide", "Guidance only.", nil, nil),
+	}}
+	cs := map[string]Checker{"fake": &contentFake{fake: fake{name: "fake"}}, "plugin": &fake{name: "plugin"}}
+	if diff := cmp.Diff([]string{"any", "go"}, Checks(idx, "a.go", cs)); diff != "" {
+		t.Errorf("Checks(a.go) (-want +got):\n%s", diff)
+	}
+	if got := Checks(idx, "stele.md", cs); len(got) != 0 {
+		t.Errorf("Checks(stele.md) = %v, want none: stele's own files are never checked", got)
+	}
+	if got := Checks(index.Index{}, "a.go", cs); len(got) != 0 {
+		t.Errorf("Checks with no rules = %v", got)
+	}
+}
+
 func TestExitCode(t *testing.T) {
 	tests := []struct {
 		name string

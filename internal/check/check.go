@@ -212,6 +212,28 @@ func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Ch
 	return p.report
 }
 
+// Checks returns the ids, sorted, of the rules RunFile checks file against:
+// valid rules in scope whose checker can check content. A clean check is
+// still a check of these rules, which the log records (ADR-0010).
+func Checks(idx index.Index, file string, cs map[string]Checker) []string {
+	if Own(file) {
+		return nil
+	}
+	var ids []string
+	for _, g := range prepare(idx, cs).groups {
+		if _, ok := g.checker.(ContentChecker); !ok {
+			continue
+		}
+		for _, r := range g.rules {
+			if scope.Applies(r.Scope, file) {
+				ids = append(ids, r.ID)
+			}
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // maxPerFile caps the violations reported for one rule in one file. A
 // pattern that matches every line would otherwise bury everything else.
 const maxPerFile = 100

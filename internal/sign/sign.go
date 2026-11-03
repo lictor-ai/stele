@@ -74,6 +74,18 @@ func LoadKey(dir string) (Key, error) {
 			return nil, fmt.Errorf("stele key %s: %w", path, err)
 		}
 	}
+	return readKey(path)
+}
+
+// LoadExistingKey returns the key in dir, or an error wrapping
+// fs.ErrNotExist when there is none. Unlike LoadKey it never creates the key
+// or its directory: for a command that only records what it did where stele
+// already runs, such as stele check in CI.
+func LoadExistingKey(dir string) (Key, error) {
+	return readKey(filepath.Join(dir, keyFile))
+}
+
+func readKey(path string) (Key, error) {
 	data, err := safefile.ReadRegular(path, 1024)
 	if err != nil {
 		return nil, fmt.Errorf("stele key %s: %w", path, err)
@@ -83,6 +95,22 @@ func LoadKey(dir string) (Key, error) {
 		return nil, fmt.Errorf("stele key %s is corrupt: delete it, and stele makes a new one and rebuilds what it signed", path)
 	}
 	return Key(k), nil
+}
+
+// MAC returns the hex MAC of body for purpose, for a record signed on its
+// own, such as one line of the log, rather than a whole sealed file.
+func (k Key) MAC(purpose string, body []byte) string {
+	return hex.EncodeToString(k.mac(purpose, body))
+}
+
+// Verify reports whether mac is body's MAC for purpose. A nil key verifies
+// nothing.
+func (k Key) Verify(purpose string, body []byte, mac string) bool {
+	if len(k) == 0 {
+		return false
+	}
+	got, err := hex.DecodeString(mac)
+	return err == nil && hmac.Equal(got, k.mac(purpose, body))
 }
 
 // Seal returns body signed for purpose. The purpose, such as "index" or

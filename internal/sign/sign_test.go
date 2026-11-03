@@ -3,6 +3,7 @@ package sign
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -107,5 +108,68 @@ func TestLoadKeyCorrupt(t *testing.T) {
 	}
 	if _, err := LoadKey(dir); err == nil {
 		t.Error("LoadKey accepted a corrupt key")
+	}
+}
+
+// LoadExistingKey never makes a key or its directory: stele check in CI
+// must leave the machine as it found it.
+func TestLoadExistingKeyMissingCreatesNothing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "stele")
+	if _, err := LoadExistingKey(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("err = %v, want ErrNotExist", err)
+	}
+	if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("LoadExistingKey created %s", dir)
+	}
+}
+
+func TestLoadExistingKeyReadsKey(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "stele")
+	want, err := LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadExistingKey(dir)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("LoadExistingKey = %x, %v; want the key LoadKey made", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, keyFile), []byte("not hex\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadExistingKey(dir); err == nil {
+		t.Error("LoadExistingKey accepted a corrupt key")
+	}
+}
+
+func TestMACVerify(t *testing.T) {
+	body := []byte(`{"v":1}`)
+	mac := testKey.MAC("log", body)
+	if len(mac) != 64 {
+		t.Fatalf("MAC is %d hex digits, want 64", len(mac))
+	}
+	if !testKey.Verify("log", body, mac) {
+		t.Fatal("Verify refused its own MAC")
+	}
+	other := Key(bytes.Repeat([]byte{8}, keySize))
+	tests := []struct {
+		name    string
+		key     Key
+		purpose string
+		body    []byte
+		mac     string
+	}{
+		{"another purpose", testKey, "index", body, mac},
+		{"another machine's key", other, "log", body, mac},
+		{"no key", nil, "log", body, mac},
+		{"edited body", testKey, "log", []byte(`{"v":2}`), mac},
+		{"not hex", testKey, "log", body, "zz"},
+		{"empty", testKey, "log", body, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.key.Verify(tt.purpose, tt.body, tt.mac) {
+				t.Error("Verify accepted it")
+			}
+		})
 	}
 }

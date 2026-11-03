@@ -20,6 +20,7 @@ import (
 	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/install"
+	"github.com/lictor-ai/stele/internal/journal"
 	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/safefile"
 	"github.com/lictor-ai/stele/internal/scope"
@@ -176,6 +177,8 @@ func beforeWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	if !d.Deny {
 		return adapter.Answer{Context: note}
 	}
+	record(root, key, &journal.DeniedRecord{Header: logHeader(idx.Project, ev, ev.AgentID), Prompt: ev.PromptID,
+		Via: "write", Files: []string{rel}, Rules: ruleIDs(d.Rules), More: d.More})
 	return adapter.Answer{Deny: true, Reason: install.BlockMessageMore(agent.Words(), rel, blockRules(d.Rules), d.More, note)}
 }
 
@@ -276,6 +279,14 @@ func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	var r check.Report
 	if !own(rel) {
 		r = check.RunFileLines(idx, rel, content, plugin.BuiltinCheckers(), keep)
+		if ids := check.Checks(idx, rel, plugin.BuiltinCheckers()); len(ids) > 0 {
+			rec := &journal.CheckedRecord{Header: logHeader(idx.Project, ev, ev.AgentID), Prompt: ev.PromptID,
+				File: rel, Rules: ids, More: r.Truncated}
+			for _, f := range r.Violations {
+				rec.Violations = append(rec.Violations, journal.Violation{Rule: f.RuleID, Line: f.Line, Blocking: f.Blocking})
+			}
+			record(root, key, rec)
+		}
 	}
 
 	var hard, soft []install.Violation

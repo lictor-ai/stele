@@ -144,7 +144,8 @@ stele.lock                id ↔ rule, project id. committed. STELE WRITES, user
 
 .stele/                   everything else generated. fully gitignored.
   index.json              compiled corpus
-  log.jsonl               append-only
+  log.jsonl               append-only, each line signed (D69)
+  log.1.jsonl             the log before it passed 32 MiB (D69)
   state/<session>.json    current prompt_id, arm state, touched dirs
   state/current           pointer to the session that last blocked
   push/<sink>.json        how far stele push got, per sink
@@ -620,6 +621,11 @@ spawn story changes for them.
 
 > **Team milestone, not v1** (ADR-0004, D58).
 
+> **Amended by ADR-0010 (D69).** The log is back, with a different record: one
+> line per thing stele did, of kind `loaded`, `denied`, `checked` or `check`,
+> holding rule ids, paths and counts, signed per line, rotated at 32 MiB. The
+> `fetch` record below stays with the team milestone's MCP server.
+
 `.stele/log.jsonl`. Append-only, local, gitignored. It never leaves the machine
 unless the user lists a sink and runs `stele push` (§2.4).
 
@@ -663,6 +669,10 @@ until there is data.
 > **Amended by ADR-0004 (D58).** In v1 the hooks, not MCP tools, put rules in
 > front of the agent, and there is no log or sink: `--push` is in the "team"
 > milestone. The rest of this section is v1.
+
+> **Amended by ADR-0010 (D69).** Where stele already runs, a machine with its
+> key and a project with `.stele/`, `stele check` appends one line to the log.
+> In CI it still writes nothing.
 
 The hook and the MCP tools put rules in front of the agent before it writes.
 `stele check` is the other half: it checks code against those rules in CI, after
@@ -801,7 +811,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D55 | Org-wide rules reach a repository only through a source plugin. | — |
 | D56 | `stele.md` follows Markdown where it can: a `---` inside a fenced code block or an HTML comment does not separate rules, and HTML comments before a rule's metadata are skipped. | — |
 | D57 | stele trusts only the generated files it wrote on this machine. `index.json` and session state carry an HMAC-SHA256 made with a per-user key kept outside every repository (the user config directory, owner-only); a file that does not verify is rebuilt or started afresh. `stele.lock` is shared on purpose and not signed. Malware running as the user is out of scope. | follows from D24 and D45: `.stele/` is not covered by the repository's `.gitignore`, so a repository could otherwise commit an index the agent is served |
-| D58 | v1 is for one developer. Rules are chosen by `scope`, not by a model: a `PreToolUse` hook denies a write that brings rules not yet shown this turn, with those rules as the reason; a `PostToolUse` hook runs built-in checks on the written file and reports violations. The MCP server, matcher subagent, logging, plugins and sinks move to the "team" milestone, with D12–D15, D30, D33–D35 and D39; D16, D29 and D37 are amended. | ADR-0004 |
+| D58 | v1 is for one developer. Rules are chosen by `scope`, not by a model: a `PreToolUse` hook denies a write that brings rules not yet shown this turn, with those rules as the reason; a `PostToolUse` hook runs built-in checks on the written file and reports violations. The MCP server, matcher subagent, logging, plugins and sinks move to the "team" milestone, with D12–D15, D30, D33–D35 and D39; D16, D29 and D37 are amended. *Amended by D69: a local log comes back.* | ADR-0004 |
 | D59 | A `scope` item starting with `!` excludes: a rule applies to a file that matches no exclusion and at least one other item; a scope of only exclusions applies to every other file. Order does not matter. A broken exclusion excludes nothing. | e2e 2026-10-23, What to change 1 (#39) |
 | D60 | `init` also registers `stele hook` on `SessionStart` and `SubagentStart`. In a stele project it answers with context telling the agent to create and change files with Write and Edit only, never through Bash, which skips both hooks; the deny and violation messages say it too. Bash writes are still not seen. | tests of v1.0.0-dev.0 (#50) |
 | D61 | `init` also registers `stele hook` on `PreToolUse` for Bash. The hook lexes the command, never runs it, and finds the files it writes by redirection, `tee`, `sed -i` and `perl -i`. A write into a file a scoped rule covers is denied once per file, per agent, per turn, with the rules not yet shown and a pointer to Write and Edit; run again, it goes through unchecked. A write, removal or copy onto one of stele's own files asks. Nothing runs after a Bash command, and a failure of stele only warns. | tests of v1.0.0-dev.0 (#57) |
@@ -812,6 +822,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D66 | D53 gains a second exit: `stele publish`, run by the developer, sends `stele.md`, its `path`, the project's commit hash and id, and the author's identity. Network calls are allowed in `internal/publish` only (ADR-0007). | — |
 | D67 | **Amends D16 and D63.** `backstop` is removed from `stele.json`: `--remind` decides whether the hook may deny a write to show rules, `--check` whether a blocking violation after a write is sent back as a block. `block_on_error` stays and applies to whatever part runs. stele does not edit a `stele.json` that still sets `backstop`; `init` notes that it is no longer read (ADR-0008). | #71 |
 | D68 | Everything specific to one coding agent is behind the `adapter.Adapter` interface, in `internal/adapter/<agent>`: the hook protocol, install, the rules file the agent loads, what it loaded at a session start, the files that configure it, and the words that name its tools. Only those packages, the registry `cmd/stele/agents.go` and the install tests' `internal/install/agent_test.go` import an adapter (ADR-0009). | — |
+| D69 | **Amends D58 and §7, §8.** stele keeps a local log, `.stele/log.jsonl`: one line per session start that recorded its loaded rules (`loaded`), write or Bash command denied to show rules (`denied`), check after a write (`checked`, clean ones too) and `stele check` run (`check`). Each line has `v`, `kind`, `project`, `ts`, `session` and `agent` (the adapter's `Name()`), and holds rule ids, paths and counts only. Each line carries an HMAC with this machine's key; lines that do not verify are skipped. Lines are appended under a lock, only where `.stele/` already exists; a line that cannot be written in 100 ms is dropped, and the hook's answer never depends on it. `stele check` logs only where the key and `.stele/` exist, so not in CI. The log rotates once at 32 MiB to `log.1.jsonl`, and never leaves the machine (ADR-0010). | #11 |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 

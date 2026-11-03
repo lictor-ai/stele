@@ -22,6 +22,8 @@ var eventNames = map[adapter.Kind]string{
 	adapter.SubagentStart: "SubagentStart",
 }
 
+func (Adapter) Name() string { return "claude-code" }
+
 func (Adapter) Parse(stdin []byte) (adapter.Event, error) { return Parse(stdin) }
 
 func (Adapter) Render(ev adapter.Event, a adapter.Answer) []byte {
