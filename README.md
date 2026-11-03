@@ -248,7 +248,7 @@ There are four kinds of line:
 | `checked` | A file is checked after a write, with what it broke, or nothing |
 | `check` | `stele check` runs, with its counts |
 
-A line holds rule ids, file paths and counts. Never code, rule text or diffs. It is signed with your machine's key, so a log someone committed or edited is ignored. The log never leaves your machine, and `stele uninstall` deletes it with `.stele/`.
+A line holds rule ids, file paths, session and prompt ids, and counts. Never code, rule text or diffs. Each line is signed with your machine's key, so a line made on another machine, edited, or not written by stele is ignored. stele never sends the log anywhere, and `stele uninstall` deletes it with `.stele/`.
 
 ## CI: stele check
 
@@ -468,9 +468,11 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **`stele check` logs only where stele already runs.** With no key or no `.stele/`, as in CI, it records nothing.
 
-**The log keeps about 64 MiB.** Past 32 MiB it moves to `.stele/log.1.jsonl`, replacing the older one.
+**The log keeps about 64 MiB, up to 96 MiB on Windows.** Past 32 MiB it moves to `.stele/log.1.jsonl`, replacing the older one. On Windows the move fails while another program has the log open; lines are then still added up to 64 MiB, and dropped after that until the move works.
 
-**Lines not signed on this machine are ignored.** A log copied from another machine reads as empty. Deleted lines aren't noticed.
+**Signing checks each line, not the log.** A line made on another machine, edited, or not written by stele is ignored. A line deleted, repeated, moved, or copied from another project's log on your machine isn't noticed.
+
+**A log you add to git leaves with it.** `.stele/` ignores itself, but `git add -f .stele/log.jsonl` commits the log like any file, and a push sends its file paths and session and prompt ids along.
 
 ### Upgrades
 
@@ -481,7 +483,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 ### Network and publishing
 
-**Only `stele publish` sends anything, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com. stele makes no other network call, and the log never leaves the machine. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
+**Only `stele publish` sends anything, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com. stele makes no other network call, and never sends the log. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 
 **`stele publish` opens merge requests on github.com and gitlab.com only.** Any other host, a self-hosted GitHub or GitLab included, gets the branch pushed and is told to open the request by hand, with no link.
 

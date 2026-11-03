@@ -185,6 +185,16 @@ func TestHookLogsCheckedClean(t *testing.T) {
 	}
 }
 
+// A binary file is skipped by the checker, so no rule was checked: no line
+// says it was checked clean.
+func TestHookLogsNoBinaryCheck(t *testing.T) {
+	root := project(t, checkRules)
+	postHook(t, root, "post-write", "internal/db.go", "package db\x00\nvar password = 1\n")
+	if ls := readLog(t, root); len(ls) != 0 {
+		t.Errorf("log = %+v, want nothing for a skipped binary file", ls)
+	}
+}
+
 // A write no checked rule covers is not logged: nothing was checked.
 func TestHookLogsNoCheck(t *testing.T) {
 	root := project(t, hookRules)

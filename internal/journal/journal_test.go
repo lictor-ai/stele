@@ -18,6 +18,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/lictor-ai/stele/internal/index"
+	"github.com/lictor-ai/stele/internal/safefile"
 	"github.com/lictor-ai/stele/internal/sign"
 )
 
@@ -222,6 +223,64 @@ func TestReadAcrossRotation(t *testing.T) {
 	out, bad := readAll(t, root, testKey)
 	if bad != 0 || len(out) != 2 || !strings.Contains(out[0].Body, `"old"`) || !strings.Contains(out[1].Body, `"new"`) {
 		t.Errorf("read %+v, %d bad; want old then new", out, bad)
+	}
+}
+
+// Read takes the writers' lock, so it never sees a rotation half done or a
+// line half written.
+func TestReadWaitsForTheLock(t *testing.T) {
+	root := project(t)
+	if err := Append(root, testKey, &LoadedRecord{Header: head("s1")}); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := safefile.Lock(filepath.Join(root, index.Dir, FileName+".lock"), time.Second, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan int)
+	go func() {
+		Read(root, testKey, func(Kind, []byte) error { return nil })
+		done <- 1
+	}()
+	select {
+	case <-done:
+		t.Fatal("Read did not wait for the lock")
+	case <-time.After(200 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Read did not finish once the lock was free")
+	}
+}
+
+// A file too large to read is skipped and reported, and the other is still
+// read.
+func TestReadSkipsOversizedFile(t *testing.T) {
+	old := maxRead
+	maxRead = 512
+	t.Cleanup(func() { maxRead = old })
+	root := project(t)
+	dir := filepath.Join(root, index.Dir)
+	if err := os.WriteFile(filepath.Join(dir, Rotated), bytes.Repeat([]byte("x"), 1000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Append(root, testKey, &LoadedRecord{Header: Header{Session: "s"}}); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(filepath.Join(dir, FileName)); fi.Size() > maxRead {
+		t.Fatalf("the test line is %d bytes, over the test cap", fi.Size())
+	}
+	out, bad := readAll(t, root, testKey)
+	if len(out) != 1 || bad != 1 {
+		t.Errorf("read %d lines, %d bad; want the log read and the oversized file counted", len(out), bad)
+	}
+}
+
+func TestReadNoSteleDir(t *testing.T) {
+	if out, bad := readAll(t, t.TempDir(), testKey); len(out) != 0 || bad != 0 {
+		t.Errorf("read %v, %d bad", out, bad)
 	}
 }
 

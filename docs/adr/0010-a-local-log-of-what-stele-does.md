@@ -65,9 +65,12 @@ skip kinds they do not know. Removing a field or changing what one means bumps
 `.gitignore`. Each line ends with a `mac` field: the HMAC-SHA256, made with
 this machine's key for purpose `log`, of the line as written without it. The
 reader strips the field and verifies the bytes that were signed; a line that
-does not verify (torn by a crash, committed by a clone, signed on another
-machine, edited) is skipped and counted. Lines can still be deleted; that only
-loses data. Every line stays plain JSON.
+does not verify (torn by a crash, made on another machine, edited, or written
+by anything but stele) is skipped and counted. The MAC covers one line, not
+the file: a line deleted, repeated, moved, or copied from another project's
+log on the same machine still verifies. That only loses or skews this
+machine's own data, which only its user can write. Every line stays plain
+JSON.
 
 **Where it is written, and where not.** A line is written only where `.stele/`
 is already a real directory; the log never creates it. The hook writes after
@@ -81,15 +84,24 @@ writes no line.
 **Two writers at once.** A line is appended under the lock file
 `log.jsonl.lock`, opened with `O_APPEND` and never through a link
 (`safefile.Append`). A writer waits at most 100 ms for the lock; past that the
-line is dropped. Every failure, a panic included, is dropped without a word:
-the log never slows down or breaks the hook.
+line is dropped. A log whose last line was cut short gets a newline first, so
+the next line stands alone. Every failure, a panic included, is dropped
+without a word: the log never slows down or breaks the hook. The reader takes
+the same lock while it reads both files, so it never sees a rotation half
+done or a line half written.
 
 **Size.** Past 32 MiB the log is renamed to `log.1.jsonl`, replacing an older
-one, and a new log starts: at most about 64 MiB on disk. This closes the
-architecture's open "journal rotation".
+one, and a new log starts. The cap is soft: on Windows the rename fails while
+any process has the log open, and lines are then still appended up to
+64 MiB, past which they are dropped until a rename succeeds. So at most about
+96 MiB on disk. A file too large to read is skipped and counted, not a failed
+read. This closes the architecture's open "journal rotation".
 
-**It stays on the machine.** Nothing sends it anywhere. A sink (D53, #17)
-will, when listed. `stele uninstall` removes `.stele/`, and the log with it.
+**It stays on the machine.** stele sends it nowhere. A sink (D53, #17) will,
+when listed. `.stele/` ignores itself, so git leaves the log out unless it is
+added by force (`git add -f`); then it is committed and pushed like any file,
+with its session and prompt ids and file paths. `stele uninstall` removes
+`.stele/`, and the log with it.
 
 ### Positive Consequences
 

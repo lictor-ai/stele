@@ -321,9 +321,9 @@ func TestRunFile(t *testing.T) {
 	}
 }
 
-// Checks names the rules RunFile would check a file against: valid, with a
-// checker that can check content, and in scope.
-func TestChecks(t *testing.T) {
+// RunFileChecked names the rules it checked the file against: valid, with a
+// checker that can check content, in scope, and not skipped by the checker.
+func TestRunFileChecked(t *testing.T) {
 	idx := index.Index{Rules: []index.Entry{
 		entry("go", "Go only.", []string{"*.go"}, map[string]string{"check": "fake"}),
 		entry("any", "Everywhere.", nil, map[string]string{"check": "fake"}),
@@ -332,15 +332,19 @@ func TestChecks(t *testing.T) {
 		entry("plug", "A plugin rule.", nil, map[string]string{"check": "plugin"}),
 		entry("guide", "Guidance only.", nil, nil),
 	}}
-	cs := map[string]Checker{"fake": &contentFake{fake: fake{name: "fake"}}, "plugin": &fake{name: "plugin"}}
-	if diff := cmp.Diff([]string{"any", "go"}, Checks(idx, "a.go", cs)); diff != "" {
-		t.Errorf("Checks(a.go) (-want +got):\n%s", diff)
+	f := &contentFake{fake: fake{name: "fake"}}
+	cs := map[string]Checker{"fake": f, "plugin": &fake{name: "plugin"}}
+	if _, ids := RunFileChecked(idx, "a.go", nil, cs, nil); cmp.Diff([]string{"any", "go"}, ids) != "" {
+		t.Errorf("checked %v, want any and go", ids)
 	}
-	if got := Checks(idx, "stele.md", cs); len(got) != 0 {
-		t.Errorf("Checks(stele.md) = %v, want none: stele's own files are never checked", got)
+	if _, ids := RunFileChecked(idx, "stele.md", nil, cs, nil); len(ids) != 0 {
+		t.Errorf("checked %v on stele.md, want none: stele's own files are never checked", ids)
 	}
-	if got := Checks(index.Index{}, "a.go", cs); len(got) != 0 {
-		t.Errorf("Checks with no rules = %v", got)
+	// A checker that skipped the file checked none of its rules.
+	f.skipped = []Skip{{File: "a.go", Reason: "binary"}}
+	r, ids := RunFileChecked(idx, "a.go", nil, cs, nil)
+	if len(ids) != 0 || len(r.Skipped) != 1 {
+		t.Errorf("after a skip: checked %v, skipped %v; want none checked and the skip reported", ids, r.Skipped)
 	}
 }
 

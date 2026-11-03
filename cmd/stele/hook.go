@@ -278,8 +278,9 @@ func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	// never checked, as check.RunFileLines skips stele's other files.
 	var r check.Report
 	if !own(rel) {
-		r = check.RunFileLines(idx, rel, content, plugin.BuiltinCheckers(), keep)
-		if ids := check.Checks(idx, rel, plugin.BuiltinCheckers()); len(ids) > 0 {
+		var ids []string
+		r, ids = check.RunFileChecked(idx, rel, content, plugin.BuiltinCheckers(), keep)
+		if len(ids) > 0 {
 			rec := &journal.CheckedRecord{Header: logHeader(idx.Project, ev, ev.AgentID), Prompt: ev.PromptID,
 				File: rel, Rules: ids, More: r.Truncated}
 			for _, f := range r.Violations {

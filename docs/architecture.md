@@ -859,6 +859,10 @@ type RuleFileChange struct{ File, Change string } // Change: added, modified, de
 func Run(ctx context.Context, root string, idx index.Index, files []string, cs map[string]Checker) (Report, error)
 func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker) Report // pure
 func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) Report
+// RunFileChecked also returns the ids of the rules it checked: in scope, and
+// not skipped by their checker (a binary file is checked against none). The
+// post-write hook logs them (ADR-0010).
+func RunFileChecked(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) (Report, []string)
 func Validate(idx index.Index, cs map[string]Checker) []Problem // the rule problems Run reports, reading no file
 func (r Report) ExitCode() int // 0, 1; errors from Run are 2
 
@@ -1663,8 +1667,11 @@ that, as for git or any local tool.
 **`journal.Append` appends one line per call through `safefile.Append`**, which
 holds the lock file `log.jsonl.lock` on every OS, opens with `O_APPEND`, never
 writes through a link (`O_NOFOLLOW` where there is one, and a check that what it
-opened is the plain file at the path), and rotates the log to `log.1.jsonl` past
-32 MiB. It waits at most 100 ms for the lock, then drops the line (ADR-0010).
+opened is the plain file at the path), adds a newline first when the last line
+was cut short, and rotates the log to `log.1.jsonl` past 32 MiB. The cap is
+soft: where the rename fails (Windows, while the log is open), lines are added
+up to twice the cap. It waits at most 100 ms for the lock, then drops the line
+(ADR-0010). `journal.Read` holds the same lock while it reads both files.
 Each line carries its own MAC (§3, `internal/journal`), so a torn or planted
 line is skipped on read.
 
