@@ -2,16 +2,19 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/lictor-ai/stele/internal/check"
+	"github.com/lictor-ai/stele/internal/journal"
 	"github.com/lictor-ai/stele/internal/lock"
 )
 
@@ -183,6 +186,58 @@ func TestCheck(t *testing.T) {
 				t.Errorf("check wrote files:\nbefore %s\nafter  %s", before, after)
 			}
 		})
+	}
+}
+
+// Where stele already runs, a check run is logged with its counts.
+func TestCheckLogsRun(t *testing.T) {
+	root := gitProject(t, checkRules)
+	clock(t, time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC))
+	writeAt(t, root, "a.go", "package a\n\nvar password = 1\n")
+	code, _, errOut := runCmd("check")
+	if code != exitFailed {
+		t.Fatalf("check = %d, want 1 (stderr %q)", code, errOut)
+	}
+	ls := readLog(t, root)
+	if len(ls) != 1 || ls[0].Kind != journal.CheckRun {
+		t.Fatalf("log = %s, want one check line", kinds(ls))
+	}
+	l := ls[0]
+	if l.Mode != "changed" || l.Errors != 1 || l.Exit != exitFailed || l.Session != "" || l.Agent != "" || l.Project != projectID(t, root) {
+		t.Errorf("line = %+v", l)
+	}
+	if id := ruleID(t, root, 0); l.Broken[id] != 1 || len(l.Broken) != 1 {
+		t.Errorf("broken = %v, want %s once", l.Broken, id)
+	}
+}
+
+// In CI there is no key and no .stele/: stele check makes neither.
+func TestCheckLogsNothingInCI(t *testing.T) {
+	root := gitProject(t, checkRules)
+	if err := os.RemoveAll(filepath.Join(root, ".stele")); err != nil {
+		t.Fatal(err)
+	}
+	ci := t.TempDir()
+	old := keyDir
+	keyDir = func() (string, error) { return ci, nil }
+	t.Cleanup(func() { keyDir = old })
+	before := snapshot(t, root)
+	if code, _, errOut := runCmd("check"); code != exitOK {
+		t.Fatalf("check = %d (stderr %q)", code, errOut)
+	}
+	if after := snapshot(t, root); after != before {
+		t.Errorf("check wrote files:\nbefore %s\nafter  %s", before, after)
+	}
+	if entries, _ := os.ReadDir(ci); len(entries) != 0 {
+		t.Errorf("check made a key: %v", entries)
+	}
+	// With a key but no .stele/, still nothing.
+	if _, err := loadKey(); err != nil {
+		t.Fatal(err)
+	}
+	runCmd("check")
+	if _, err := os.Lstat(filepath.Join(root, ".stele")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("check made .stele")
 	}
 }
 

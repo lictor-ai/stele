@@ -156,7 +156,9 @@ func TestCompileRejectsArguments(t *testing.T) {
 }
 
 // snapshot lists every file under root with its content, leaving out .git:
-// git refreshes its own index when stele asks it what changed.
+// git refreshes its own index when stele asks it what changed. The log in
+// .stele/ is left out too: stele check adds its line there, and
+// TestCheckLogsRun and TestCheckLogsNothingInCI cover it.
 func snapshot(t *testing.T, root string) string {
 	t.Helper()
 	var b strings.Builder
@@ -167,8 +169,11 @@ func snapshot(t *testing.T, root string) string {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		data, err := os.ReadFile(path)
 		rel, _ := filepath.Rel(root, path)
+		if strings.HasPrefix(filepath.ToSlash(rel), ".stele/log.") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
 		b.WriteString(rel + "=" + string(data) + ";")
 		return err
 	})

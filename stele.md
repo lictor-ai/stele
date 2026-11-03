@@ -87,7 +87,7 @@ package imports no net package.
 
 ---
 
-scope: ["cmd/stele/{hook,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,lock,plugin,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
+scope: ["cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,journal,lock,plugin,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
 check: regex
 pattern: (?m)^\s*(import\s+)?([\w.]+\s+)?"os/exec"\s*$
 message: no subprocess on the hook's path (D45)
@@ -100,7 +100,7 @@ publish (internal/publish) only; stele hook never reaches either.
 
 ---
 
-scope: ["cmd/stele/{hook,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,lock,plugin,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
+scope: ["cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,journal,lock,plugin,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
 check: regex
 pattern: "github\.com/lictor-ai/stele/internal/publish"
 message: stele hook never reaches stele publish (D45, D66)

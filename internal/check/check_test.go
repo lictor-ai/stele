@@ -321,6 +321,33 @@ func TestRunFile(t *testing.T) {
 	}
 }
 
+// RunFileChecked names the rules it checked the file against: valid, with a
+// checker that can check content, in scope, and not skipped by the checker.
+func TestRunFileChecked(t *testing.T) {
+	idx := index.Index{Rules: []index.Entry{
+		entry("go", "Go only.", []string{"*.go"}, map[string]string{"check": "fake"}),
+		entry("any", "Everywhere.", nil, map[string]string{"check": "fake"}),
+		entry("md", "Markdown only.", []string{"*.md"}, map[string]string{"check": "fake"}),
+		entry("bad", "Bad blocking.", nil, map[string]string{"check": "fake", "blocking": "maybe"}),
+		entry("plug", "A plugin rule.", nil, map[string]string{"check": "plugin"}),
+		entry("guide", "Guidance only.", nil, nil),
+	}}
+	f := &contentFake{fake: fake{name: "fake"}}
+	cs := map[string]Checker{"fake": f, "plugin": &fake{name: "plugin"}}
+	if _, ids := RunFileChecked(idx, "a.go", nil, cs, nil); cmp.Diff([]string{"any", "go"}, ids) != "" {
+		t.Errorf("checked %v, want any and go", ids)
+	}
+	if _, ids := RunFileChecked(idx, "stele.md", nil, cs, nil); len(ids) != 0 {
+		t.Errorf("checked %v on stele.md, want none: stele's own files are never checked", ids)
+	}
+	// A checker that skipped the file checked none of its rules.
+	f.skipped = []Skip{{File: "a.go", Reason: "binary"}}
+	r, ids := RunFileChecked(idx, "a.go", nil, cs, nil)
+	if len(ids) != 0 || len(r.Skipped) != 1 {
+		t.Errorf("after a skip: checked %v, skipped %v; want none checked and the skip reported", ids, r.Skipped)
+	}
+}
+
 func TestExitCode(t *testing.T) {
 	tests := []struct {
 		name string

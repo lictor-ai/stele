@@ -33,7 +33,11 @@ Guideline enforcement for coding agents. Go, single binary.
 9. `docs/adr/0009-agent-adapter-interface.md` — everything specific to one
    coding agent is behind `adapter.Adapter`, in `internal/adapter/<agent>`. The
    spec carries it as D68.
-10. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+10. `docs/adr/0010-a-local-log-of-what-stele-does.md` — `.stele/log.jsonl`:
+    one signed line per thing stele did (rules loaded, write denied, write
+    checked, `stele check` run), rule ids, paths and counts only, never sent.
+    The spec carries it as D69.
+11. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.

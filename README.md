@@ -172,7 +172,7 @@ If a rule can't be used — a `check` other than `regex`, a pattern that doesn't
 
 The hook also recompiles when `stele.md` changes, so edits take effect on the next write, except removing every rule, which takes `stele compile` (see [Limits](#limits)). Commit the updated `stele.lock` and `.claude/rules/stele-rules.md`. A session keeps the rules file it loaded at its start: a rule changed since is shown again before the next write it applies to.
 
-To remove stele: `stele uninstall`. It removes stele's hooks, `.claude/rules/stele-rules.md` and `.stele/`, and keeps `stele.md`, `stele.lock` and `stele.json`.
+To remove stele: `stele uninstall`. It removes stele's hooks, `.claude/rules/stele-rules.md` and `.stele/` (its [log](#what-stele-records) too), and keeps `stele.md`, `stele.lock` and `stele.json`.
 
 ## Writing stele.md
 
@@ -231,6 +231,25 @@ Scope globs:
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
 - **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock`, `.claude/rules/stele-rules.md` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` and the switches say. So does a write to Claude Code's settings files, which run stele's hooks: `.claude/settings.json` and `.claude/settings.local.json` anywhere in the project or from the session's directory up to the git root, and your user `settings.json`. A change there can weaken stele or turn it off. Allow it only if you asked for it.
 
+## What stele records
+
+stele keeps a log of what it did in `.stele/log.jsonl`, one JSON line per event. Here is a write it checked, which broke a rule on line 3:
+
+```
+{"v":1,"kind":"checked","project":"150f0e27-e658-4514-a7c1-bd630412f323","ts":"2026-11-03T20:49:41.084298Z","session":"abc123","agent":"claude-code","file":"main.go","rules":["b7e248f0-fe55-4b23-89d0-6f0b9addf63d"],"violations":[{"rule":"b7e248f0-fe55-4b23-89d0-6f0b9addf63d","line":3,"blocking":true}],"more":0,"mac":"1d598cd1fdf7b37010c1750185898a5cb3f77561a9d69f49b6d6971cd1d73152"}
+```
+
+There are four kinds of line:
+
+| `kind` | When |
+|---|---|
+| `loaded` | A session or subagent starts, with the rules it loaded from `.claude/rules/stele-rules.md` |
+| `denied` | A write or a Bash command is denied to show rules, with the rules shown |
+| `checked` | A file is checked after a write, with what it broke, or nothing |
+| `check` | `stele check` runs, with its counts |
+
+A line holds rule ids, file paths, session and prompt ids, and counts. Never code, rule text or diffs. Each line is signed with your machine's key, so a line made on another machine, edited, or not written by stele is ignored. stele never sends the log anywhere, and `stele uninstall` deletes it with `.stele/`.
+
 ## CI: stele check
 
 | Command | Checks |
@@ -253,6 +272,8 @@ checked 1 file: 2 errors
 ```
 
 A non-blocking violation prints `warning` instead of `error`. Lines and columns start at 1; a column counts characters.
+
+On your machine, `stele check` adds one line to the [log](#what-stele-records). In CI it writes nothing: it only logs where stele already has its key and `.stele/`.
 
 With `--base`, `stele check` also says when the branch adds, changes or deletes a `stele.md` or `stele.json` (`stele.md: modified on this branch: ...`), so reviewers see a change to the rules. It doesn't change the exit code; in JSON it is `rule_files_changed`.
 
@@ -439,6 +460,20 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **So is a git worktree or submodule** (a directory with its own `.git`). It gets no rules from an outer `stele.md`, only from its own. `stele check` there says nothing to check until it has its own `stele.md`, `stele.json` or `stele.lock`.
 
+### Log
+
+**A line can be lost, and nothing says so.** A line waits at most 100 ms for another writer, and a log stele can't write is skipped: the hook never waits or fails for it.
+
+**Only what stele did is recorded.** A write let through, a write that asks you first, and a Bash command run again after its deny have no line.
+
+**`stele check` logs only where stele already runs.** With no key or no `.stele/`, as in CI, it records nothing.
+
+**The log keeps about 64 MiB, up to 96 MiB on Windows.** Past 32 MiB it moves to `.stele/log.1.jsonl`, replacing the older one. On Windows the move fails while another program has the log open; lines are then still added up to 64 MiB, and dropped after that until the move works.
+
+**Signing checks each line, not the log.** A line made on another machine, edited, or not written by stele is ignored. A line deleted, repeated, moved, or copied from another project's log on your machine isn't noticed.
+
+**A log you add to git leaves with it.** `.stele/` ignores itself, but `git add -f .stele/log.jsonl` commits the log like any file, and a push sends its file paths and session and prompt ids along.
+
 ### Upgrades
 
 **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about.
@@ -448,7 +483,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 ### Network and publishing
 
-**Only `stele publish` sends anything, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com. stele makes no other network call. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
+**Only `stele publish` sends anything, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com. stele makes no other network call, and never sends the log. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 
 **`stele publish` opens merge requests on github.com and gitlab.com only.** Any other host, a self-hosted GitHub or GitLab included, gets the branch pushed and is told to open the request by hand, with no link.
 

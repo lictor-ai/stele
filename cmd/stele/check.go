@@ -22,6 +22,8 @@ import (
 	"github.com/lictor-ai/stele/internal/check"
 	"github.com/lictor-ai/stele/internal/compile"
 	"github.com/lictor-ai/stele/internal/enforce"
+	"github.com/lictor-ai/stele/internal/index"
+	"github.com/lictor-ai/stele/internal/journal"
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/scope"
@@ -123,6 +125,10 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	if !none {
+		logCheck(root, r.Index, rep, checkMode(*base, *all, paths), len(files))
+	}
+
 	if *format == "json" {
 		for _, sp := range subs {
 			for _, f := range sp.files {
@@ -137,6 +143,41 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		printCheck(stdout, r.Lock, rep, subs, len(r.Index.Rules), len(files))
 	}
 	return rep.ExitCode()
+}
+
+// checkMode names how stele check chose its files, for the log.
+func checkMode(base string, all bool, paths []string) string {
+	switch {
+	case len(paths) > 0:
+		return "paths"
+	case all:
+		return "all"
+	case base != "":
+		return "base"
+	}
+	return "changed"
+}
+
+// logCheck records the run in the log (ADR-0010), only where stele already
+// runs: a machine with a key and a project with .stele/. In CI, which has
+// neither, it writes nothing, and every failure is ignored.
+func logCheck(root string, idx index.Index, rep check.Report, mode string, files int) {
+	key, err := loadExistingKey()
+	if err != nil {
+		return
+	}
+	rec := &journal.CheckRunRecord{Header: journal.Header{Project: idx.Project, TS: now().UTC()},
+		Mode: mode, Files: files, Rules: len(idx.Rules), Problems: len(rep.Problems),
+		Skipped: len(rep.Skipped), Truncated: rep.Truncated, Exit: rep.ExitCode(), Broken: map[string]int{}}
+	for _, f := range rep.Violations {
+		if f.Blocking {
+			rec.Errors++
+		} else {
+			rec.Warnings++
+		}
+		rec.Broken[f.RuleID]++
+	}
+	record(root, key, rec)
 }
 
 // noRuleFiles reports whether root has no stele.md, stele.json or stele.lock:

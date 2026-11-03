@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 
 	"github.com/lictor-ai/stele/internal/adapter"
+	"github.com/lictor-ai/stele/internal/journal"
+	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/safefile"
 	"github.com/lictor-ai/stele/internal/session"
 )
@@ -57,7 +59,8 @@ func prime(ev adapter.Event, root string) {
 	if err == nil && agent.OwnedRules(data) {
 		loaded = agent.ReadRules(data)
 	}
-	_, _ = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
+	primed := false
+	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
 		if launch {
 			st.LaunchRoot = true
 		}
@@ -70,9 +73,20 @@ func prime(ev adapter.Event, root string) {
 			return nil
 		}
 		st.Primed = withPrimed(st.Primed, id, loaded)
+		primed = true
 		return nil
 	})
-	_, _, _ = freshIndex(root, key)
+	idx, _, ierr := freshIndex(root, key)
+	if err != nil || !primed {
+		return
+	}
+	// After freshIndex, which makes .stele/ and mints the project id.
+	project := idx.Project
+	if ierr != nil {
+		lf, _ := lock.Load(root)
+		project = lf.Project
+	}
+	record(root, key, &journal.LoadedRecord{Header: logHeader(project, ev, id), Rules: loadedIDs(loaded)})
 }
 
 // withPrimed returns a copy of m in which agent id's record is loaded,

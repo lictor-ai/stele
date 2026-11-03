@@ -119,6 +119,10 @@ type Words struct {
 
 // Adapter is everything stele knows about one agent (ADR-0009).
 type Adapter interface {
+	// Name is a stable id for the agent in the log and in reports, such as
+	// "claude-code": lower case, never shown as prose (Words().Agent is).
+	Name() string
+
 	// Parse reads a hook payload. A payload that is not the agent's is an
 	// error.
 	Parse(stdin []byte) (Event, error)

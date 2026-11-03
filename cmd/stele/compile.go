@@ -64,6 +64,16 @@ func loadKey() (sign.Key, error) {
 	return sign.LoadKey(dir)
 }
 
+// loadExistingKey is loadKey that never makes a key: for stele check, which
+// records its run only on a machine where stele already runs.
+func loadExistingKey() (sign.Key, error) {
+	dir, err := keyDir()
+	if err != nil {
+		return nil, err
+	}
+	return sign.LoadExistingKey(dir)
+}
+
 // setup parses a command's flags and finds the project root.
 func setup(name string, args []string, stderr io.Writer) (string, bool) {
 	fs := flag.NewFlagSet("stele "+name, flag.ContinueOnError)

@@ -7,6 +7,7 @@ import (
 	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/backstop"
 	"github.com/lictor-ai/stele/internal/install"
+	"github.com/lictor-ai/stele/internal/journal"
 	"github.com/lictor-ai/stele/internal/safefile"
 	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/session"
@@ -147,6 +148,8 @@ func bashRoot(ev adapter.Event, sw adapter.Switches, root string, rels []string,
 	if !d.Deny {
 		return adapter.Answer{Context: joinNotes(note, throughBash(files))}
 	}
+	record(root, key, &journal.DeniedRecord{Header: logHeader(idx.Project, ev, ev.AgentID), Prompt: ev.PromptID,
+		Via: "shell", Files: d.Files, Rules: ruleIDs(d.Rules), More: d.More})
 	paths := make([]string, len(d.Files))
 	for i, f := range d.Files {
 		paths[i] = showPath(f)

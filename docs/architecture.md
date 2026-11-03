@@ -543,6 +543,42 @@ style guide's test for choosing between them points here.
 
 ### `internal/journal` — the log
 
+> **Amended by ADR-0010 (D69).** The `Entry` below is the team milestone's
+> `fetch` record. v1 writes one line per thing stele did instead:
+
+```go
+type Kind string // "loaded", "denied", "checked", "check"
+
+type Header struct {
+    V        int       `json:"v"`       // 1 (D50)
+    Kind     Kind      `json:"kind"`
+    Project  string    `json:"project"` // from stele.lock (D51)
+    TS       time.Time `json:"ts"`      // UTC
+    Session  string    `json:"session"` // "" for stele check
+    Agent    string    `json:"agent"`   // adapter.Name(); "" for stele check
+    Subagent string    `json:"subagent,omitempty"`
+}
+
+type LoadedRecord   struct { Header; Rules []string }                        // a start, with the rules it loaded
+type DeniedRecord   struct { Header; Prompt, Via string; Files, Rules []string; More int }
+type CheckedRecord  struct { Header; Prompt, File string; Rules []string; Violations []Violation; More int }
+type Violation      struct { Rule string; Line int; Blocking bool }
+type CheckRunRecord struct { Header; Mode string; Files, Rules, Problems, Errors, Warnings, Skipped, Truncated, Exit int; Broken map[string]int }
+
+func Append(root string, key sign.Key, r Record) error // only where .stele/ is a real directory
+func Read(root string, key sign.Key, fn func(kind Kind, body []byte) error) (bad int, err error)
+```
+
+A line is the record's JSON with a last field `"mac"`: the HMAC of that JSON
+without it, for purpose `log` (D57). `Read` strips the field, verifies the bytes
+that were signed, and skips and counts every line that does not verify. Ids,
+paths and counts only; a test fails on a field outside that list. The hook calls
+`Append` through `record` (`cmd/stele/hook_log.go`), after its answer is decided
+and saved, and drops every error and panic. `stele check` calls it only with a key
+it did not create (`sign.LoadExistingKey`).
+
+The team milestone's record:
+
 ```go
 type Entry struct {
     V          int       `json:"v"`       // record format version, 1 (D50)
@@ -823,6 +859,10 @@ type RuleFileChange struct{ File, Change string } // Change: added, modified, de
 func Run(ctx context.Context, root string, idx index.Index, files []string, cs map[string]Checker) (Report, error)
 func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker) Report // pure
 func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) Report
+// RunFileChecked also returns the ids of the rules it checked: in scope, and
+// not skipped by their checker (a binary file is checked against none). The
+// post-write hook logs them (ADR-0010).
+func RunFileChecked(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) (Report, []string)
 func Validate(idx index.Index, cs map[string]Checker) []Problem // the rule problems Run reports, reading no file
 func (r Report) ExitCode() int // 0, 1; errors from Run are 2
 
@@ -1057,6 +1097,9 @@ type Rule struct{ ID string; Scope []string; Body string }
 type Words struct{ Agent, Shell, WriteTools, WriteInstead string }
 
 type Adapter interface {
+    // A stable id in the log and in reports: "claude-code" (ADR-0010).
+    Name() string
+
     // The hook protocol.
     Parse(stdin []byte) (Event, error)
     Render(ev Event, a Answer) []byte                     // nil when there is nothing to say
@@ -1621,9 +1664,16 @@ would still be trusted. **So generated files are signed** (D57, `internal/sign`)
 Malware already running as the user can read the key; nothing file-based stops
 that, as for git or any local tool.
 
-**`journal.Append` opens with `O_APPEND`** and writes one line per call. Short
-appends are atomic on POSIX. Windows offers no equivalent guarantee, so the writer
-takes a lock file for the duration of the append.
+**`journal.Append` appends one line per call through `safefile.Append`**, which
+holds the lock file `log.jsonl.lock` on every OS, opens with `O_APPEND`, never
+writes through a link (`O_NOFOLLOW` where there is one, and a check that what it
+opened is the plain file at the path), adds a newline first when the last line
+was cut short, and rotates the log to `log.1.jsonl` past 32 MiB. The cap is
+soft: where the rename fails (Windows, while the log is open), lines are added
+up to twice the cap. It waits at most 100 ms for the lock, then drops the line
+(ADR-0010). `journal.Read` holds the same lock while it reads both files.
+Each line carries its own MAC (§3, `internal/journal`), so a torn or planted
+line is skipped on read.
 
 **Session state is locked per session**, not across sessions, because each session
 owns its own file. Within a session the hook and the MCP process both
@@ -1738,7 +1788,7 @@ string literals scattered through the code, so they can be revised and diffed.
 | `shell` | Table-driven over `Targets`: redirections, heredoc bodies, quotes, `[[ ]]` and `(( ))`, substitutions, variables, `cd`, `tee`, `sed -i`, `perl -i`, removals and copies, devices, Windows and Git Bash paths, caps. A fuzz test: it never panics, and stays fast. |
 | `backstop.Decide` | Table-driven over the full cross-product of state, error and `HasRules`. Pure, so no fixtures. |
 | `matcher` | Table-driven. Cap, truncation, empty selection. |
-| `index`, `session`, `journal` | Temp directories. Concurrent-write tests for the replace path, including a locked target. |
+| `index`, `session`, `journal` | Temp directories. Concurrent-write tests for the replace path, including a locked target. For the log: the exact line per kind, concurrent appends, rotation, and lines that must not verify (forged, torn, edited, another machine's). |
 | `serve` | Drive the SDK over an in-memory transport, asserting schemas and results. |
 | `cmd/stele hook` | Feed recorded stdin JSON, assert stdout JSON and exit code. |
 | End to end | A real Claude Code session on this repository. |
@@ -1756,7 +1806,7 @@ stele init         set stele up here: Claude Code hooks, stele.md, .stele/, then
                      [--remind=on|off] [--check=on|off]
 stele uninstall    remove exactly what init wrote
 stele compile      every source, then compile.Plan + compile.Apply (lock, index, .claude/rules/stele-rules.md); prints the reconcile report
-stele check        validate the rules, run checkers on changed files; writes nothing (for CI)
+stele check        validate the rules, run checkers on changed files; writes nothing but a log line where stele already runs, nothing in CI (ADR-0010)
                      [--base <ref> | --all] [--format text|json] [path...]
 stele status       describe the install [--format text|json]
 stele push         send new log entries to every listed sink
@@ -1830,8 +1880,9 @@ block stele's own matcher subagent.
 - **Protocol version 2.** Nothing needs it yet. When something does, stele has
   to speak both versions for a while, and `describe` is where it finds out which
   one a plugin speaks.
-- **`journal` rotation** — the log grows without bound. Not a v1 problem at one
-  entry per turn, but it has no answer.
+
+*`journal` rotation was open here. ADR-0010 settles it: past 32 MiB the log
+moves to `log.1.jsonl`, and one older file is kept.*
 
 *Windows line endings were open here while compile wrote back to `stele.md`. D38
 removed the write path, so nothing has to preserve them.*

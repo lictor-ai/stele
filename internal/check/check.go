@@ -188,10 +188,21 @@ func RunFile(idx index.Index, file string, content []byte, cs map[string]Checker
 // already breaks a rule many times still shows the agent's own violation. A
 // nil keep keeps all.
 func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) Report {
+	r, _ := RunFileChecked(idx, file, content, cs, keep)
+	return r
+}
+
+// RunFileChecked is RunFileLines also returning the ids, sorted, of the
+// rules the file was checked against: valid rules in scope whose checker
+// ran on it and did not skip it. A clean check is still a check of these
+// rules, which the log records (ADR-0010); a binary file was checked against
+// none.
+func RunFileChecked(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) (Report, []string) {
 	p := prepare(idx, cs)
 	if Own(file) {
-		return p.report
+		return p.report, nil
 	}
+	var ids []string
 	for _, g := range p.groups {
 		cc, ok := g.checker.(ContentChecker)
 		if !ok || !g.applies(file) {
@@ -199,6 +210,13 @@ func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Ch
 		}
 		res := cc.CheckContent(g.rules, file, content)
 		p.report.Skipped = append(p.report.Skipped, res.Skipped...)
+		if !skips(res.Skipped, file) {
+			for _, r := range g.rules {
+				if scope.Applies(r.Scope, file) {
+					ids = append(ids, r.ID)
+				}
+			}
+		}
 		for _, v := range res.Violations {
 			if keep != nil && !keep(v.Line) {
 				continue
@@ -209,7 +227,18 @@ func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Ch
 		}
 	}
 	p.report.finish()
-	return p.report
+	sort.Strings(ids)
+	return p.report, ids
+}
+
+// skips reports whether ss holds a skip of file.
+func skips(ss []Skip, file string) bool {
+	for _, s := range ss {
+		if s.File == file {
+			return true
+		}
+	}
+	return false
 }
 
 // maxPerFile caps the violations reported for one rule in one file. A

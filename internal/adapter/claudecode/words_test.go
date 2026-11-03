@@ -17,6 +17,14 @@ func TestSessionContext(t *testing.T) {
 	}
 }
 
+// The log's agent id never changes with the wording: results from older logs
+// must still compare (ADR-0010).
+func TestName(t *testing.T) {
+	if got := (Adapter{}).Name(); got != "claude-code" {
+		t.Errorf("Name() = %q, want claude-code", got)
+	}
+}
+
 // The templates are embedded as checked out; .gitattributes keeps them LF on
 // every platform, so the agent never reads a stray \r.
 func TestAssetsHaveLFLineEnds(t *testing.T) {
