@@ -42,6 +42,7 @@ internal/compile/     the one place that turns sources into an index
 internal/session/     state/<session>.json: arm state, touched dirs
 internal/enforce/     the enforcement policy
 internal/journal/     log.jsonl
+internal/stats/       stele stats: counts from log.jsonl — pure logic (D70)
 internal/matcher/     request / corpus / fetch — pure logic
 internal/backstop/    the hook decision — pure logic
 internal/serve/       MCP wiring over the SDK
@@ -547,7 +548,7 @@ style guide's test for choosing between them points here.
 > `fetch` record. v1 writes one line per thing stele did instead:
 
 ```go
-type Kind string // "loaded", "denied", "checked", "check"
+type Kind string // "loaded", "denied", "checked", "wrote" (D70), "check"
 
 type Header struct {
     V        int       `json:"v"`       // 1 (D50)
@@ -562,6 +563,7 @@ type Header struct {
 type LoadedRecord   struct { Header; Rules []string }                        // a start, with the rules it loaded
 type DeniedRecord   struct { Header; Prompt, Via string; Files, Rules []string; More int }
 type CheckedRecord  struct { Header; Prompt, File string; Rules []string; Violations []Violation; More int }
+type WroteRecord    struct { Header; Prompt, File string; Rules []string }  // every rule whose scope applies (D70)
 type Violation      struct { Rule string; Line int; Blocking bool }
 type CheckRunRecord struct { Header; Mode string; Files, Rules, Problems, Errors, Warnings, Skipped, Truncated, Exit int; Broken map[string]int }
 
@@ -575,7 +577,9 @@ that were signed, and skips and counts every line that does not verify. Ids,
 paths and counts only; a test fails on a field outside that list. The hook calls
 `Append` through `record` (`cmd/stele/hook_log.go`), after its answer is decided
 and saved, and drops every error and panic. `stele check` calls it only with a key
-it did not create (`sign.LoadExistingKey`).
+it did not create (`sign.LoadExistingKey`). The post-write hook writes a `wrote`
+line for every write that went through, `--check=off` too, before the file is
+read back (D70).
 
 The team milestone's record:
 
@@ -604,6 +608,28 @@ func Append(dir string, e Entry) error
 No `offered` field — D34 makes it the whole index every time, so `IndexHash` pins
 it and *offered but never selected* is derived. Excerpts are carried because a
 UUID alone is unreadable later and a deleted rule resolves to nothing (spec §7).
+
+### `internal/stats` — how the rules are doing
+
+D70; the definitions are in `docs/superpowers/specs/2026-11-03-stele-stats-design.md`.
+
+```go
+const ReportVersion, MinTurns, MinBroken = 1, 30, 10
+
+type Rule  struct { ID, Excerpt string; Scope []string; New bool } // New: not in stele.lock yet
+type Input struct { Project string; Since, Until time.Time; Loc *time.Location; Rules []Rule; RulesKnown bool }
+
+func ParseSince(s string, now time.Time, loc *time.Location) (time.Time, error) // 30d, 12h, 2w, 2026-10-01, all
+func Collect(root string, key sign.Key, in Input) ([]Line, LogCounts, error)    // journal.Read, filtered
+func Compute(in Input, lines []Line, counts LogCounts) Report                    // pure
+```
+
+`Collect` is the package's only IO, through `journal.Read`. `Compute` turns the
+lines into turns, broken rules and what followed, dead rules and denies per local
+day, for all agents and for each. `cmd/stele/stats.go` gets the rules from
+`compile.Plan` with the built-in sources (the last valid index when `stele.md`
+does not compile), and prints. Nothing it imports reaches the network or a process
+(`TestStatsNeverReachesNetwork`).
 
 ### `internal/backstop` — the hook decision
 
@@ -1808,6 +1834,8 @@ stele uninstall    remove exactly what init wrote
 stele compile      every source, then compile.Plan + compile.Apply (lock, index, .claude/rules/stele-rules.md); prints the reconcile report
 stele check        validate the rules, run checkers on changed files; writes nothing but a log line where stele already runs, nothing in CI (ADR-0010)
                      [--base <ref> | --all] [--format text|json] [path...]
+stele stats        how the rules are doing, from the local log; writes nothing, no network (D70)
+                     [--since 30d|12h|2w|YYYY-MM-DD|all] [--format text|json]
 stele status       describe the install [--format text|json]
 stele push         send new log entries to every listed sink
 stele mcp          run the MCP server on stdio

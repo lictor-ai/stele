@@ -80,6 +80,10 @@ func TestAppendLineShape(t *testing.T) {
 			`{"v":1,"kind":"checked","project":"p1","ts":"2026-11-03T10:00:00.123Z","session":"s1","agent":"claude-code","file":"a.go","rules":["r1"],"violations":[{"rule":"r1","line":3,"blocking":true}],"more":0}`},
 		{"checked clean", &CheckedRecord{Header: head("s1"), File: "a.go", Rules: []string{"r1"}},
 			`{"v":1,"kind":"checked","project":"p1","ts":"2026-11-03T10:00:00.123Z","session":"s1","agent":"claude-code","file":"a.go","rules":["r1"],"violations":[],"more":0}`},
+		{"wrote", &WroteRecord{Header: head("s1"), Prompt: "u1", File: "a.go", Rules: []string{"r2", "r1"}},
+			`{"v":1,"kind":"wrote","project":"p1","ts":"2026-11-03T10:00:00.123Z","session":"s1","agent":"claude-code","prompt":"u1","file":"a.go","rules":["r1","r2"]}`},
+		{"wrote no rules", &WroteRecord{Header: head("s1"), File: "a.go"},
+			`{"v":1,"kind":"wrote","project":"p1","ts":"2026-11-03T10:00:00.123Z","session":"s1","agent":"claude-code","file":"a.go","rules":[]}`},
 		{"check run", &CheckRunRecord{Header: Header{Project: "p1", TS: ts}, Mode: "changed", Files: 4, Rules: 3, Errors: 2, Warnings: 1, Exit: 1,
 			Broken: map[string]int{"r2": 1, "r1": 2}},
 			`{"v":1,"kind":"check","project":"p1","ts":"2026-11-03T10:00:00.123Z","session":"","agent":"","mode":"changed","file_count":4,"rule_count":3,"problems":0,"errors":2,"warnings":1,"skipped":0,"truncated":0,"exit":1,"broken":{"r1":2,"r2":1}}`},
@@ -350,7 +354,7 @@ func TestRecordFieldsAreIdsPathsCounts(t *testing.T) {
 			}
 		}
 	}
-	for _, r := range []any{LoadedRecord{}, DeniedRecord{}, CheckedRecord{}, CheckRunRecord{}} {
+	for _, r := range []any{LoadedRecord{}, DeniedRecord{}, CheckedRecord{}, WroteRecord{}, CheckRunRecord{}} {
 		walk(reflect.TypeOf(r))
 	}
 	sort.Strings(allowed)

@@ -239,16 +239,60 @@ stele keeps a log of what it did in `.stele/log.jsonl`, one JSON line per event.
 {"v":1,"kind":"checked","project":"150f0e27-e658-4514-a7c1-bd630412f323","ts":"2026-11-03T20:49:41.084298Z","session":"abc123","agent":"claude-code","file":"main.go","rules":["b7e248f0-fe55-4b23-89d0-6f0b9addf63d"],"violations":[{"rule":"b7e248f0-fe55-4b23-89d0-6f0b9addf63d","line":3,"blocking":true}],"more":0,"mac":"1d598cd1fdf7b37010c1750185898a5cb3f77561a9d69f49b6d6971cd1d73152"}
 ```
 
-There are four kinds of line:
+There are five kinds of line:
 
 | `kind` | When |
 |---|---|
 | `loaded` | A session or subagent starts, with the rules it loaded from `.claude/rules/stele-rules.md` |
 | `denied` | A write or a Bash command is denied to show rules, with the rules shown |
+| `wrote` | A write went through, with every rule that applies to the file |
 | `checked` | A file is checked after a write, with what it broke, or nothing |
 | `check` | `stele check` runs, with its counts |
 
 A line holds rule ids, file paths, session and prompt ids, and counts. Never code, rule text or diffs. Each line is signed with your machine's key, so a line made on another machine, edited, or not written by stele is ignored. stele never sends the log anywhere, and `stele uninstall` deletes it with `.stele/`.
+
+## How the rules are doing: stele stats
+
+`stele stats` reads the log and tells you which rules the agent breaks, whether it fixes them, and which rules never come up:
+
+```
+$ stele stats
+last 30 days, 2026-10-04 to 2026-11-03 (+01:00), from .stele/log.jsonl
+3 sessions, 36 turns with a write, 39 writes (39 checked), 3 denied (3 writes)
+
+Broken most often (fixed: the agent's next write to the file, in the same turn, did not break it)
+  4 writes, fixed 3 of 4  787f8bcc-82e6-4ab6-93d9-02860d4921ba "Never put credentials in code. Read them from the environmen…"
+
+Dead: no write met a file they apply to, in 30 turns or more
+  883fc015-b304-4f73-802c-b3df0f35516a "Migrations are append-only: never edit one that was merged." scope: migrations/**
+
+Denied per day
+  2026-11-03  3 (3 writes), 36 turns
+
+stele check: 1 run, 0 found violations
+```
+
+What each part means:
+
+- **A turn** is one message you sent in which the agent wrote something stele saw.
+- **Broken** counts the writes that broke a rule. **Fixed** means the agent's next write to that file, in the same turn, didn't break it again.
+- **Dead** rules are rules no write touched a file for. Their scope may be wrong, or the code they were for may be gone. A rule is judged only once 30 turns have passed since a session first loaded it. A rule `stele.lock` doesn't have yet is never judged.
+- **Denied per day** counts the writes and Bash commands denied to show rules, by your local day.
+
+With more than one agent in the log, a **By agent** part gives the same numbers for each.
+
+**Too little data.** Under 30 turns, stats says so first and judges no rule:
+
+```
+Too little data to judge the rules: 6 turns with a write logged, stats need 30. The counts below are what happened, not a trend.
+```
+
+| Flag | |
+|---|---|
+| `--since 30d` | The window: `12h`, `30d`, `2w`, a day like `2026-10-01`, or `all`. Default `30d` |
+| `--format json` | JSON, with `"v": 1` and the project id. It has every broken rule, and a fix rate once a rule has 10 broken writes |
+
+`stele stats` exits 0, or 2 when it can't run. It reads the log and `stele.md`, writes nothing, and makes no network call. Lines it can't use are counted at the end: lines not signed on this machine, lines from another project, lines in a newer format.
 
 ## CI: stele check
 
@@ -464,13 +508,19 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **A line can be lost, and nothing says so.** A line waits at most 100 ms for another writer, and a log stele can't write is skipped: the hook never waits or fails for it.
 
-**Only what stele did is recorded.** A write let through, a write that asks you first, and a Bash command run again after its deny have no line.
+**Only writes the hook sees are recorded.** A Write or Edit that went through has a `wrote` line. A Bash command that writes has no `wrote` line, and one run again after its deny has no line at all. Nothing is recorded with stele's hooks off.
 
 **`stele check` logs only where stele already runs.** With no key or no `.stele/`, as in CI, it records nothing.
 
 **The log keeps about 64 MiB, up to 96 MiB on Windows.** Past 32 MiB it moves to `.stele/log.1.jsonl`, replacing the older one. On Windows the move fails while another program has the log open; lines are then still added up to 64 MiB, and dropped after that until the move works.
 
 **Signing checks each line, not the log.** A line made on another machine, edited, or not written by stele is ignored. A line deleted, repeated, moved, or copied from another project's log on your machine isn't noticed.
+
+**A dead rule may still be needed.** `stele stats` knows only the writes the hook saw, so a rule for files written only through Bash, by hand, or with the hooks off looks dead. It is judged only after 30 turns.
+
+**"Fixed" is about the lines the agent wrote.** It means the agent's next write to the file in the same turn didn't break the rule. After an edit to other lines, the old violation can still be in the file; `stele check` reads the whole file.
+
+**The thresholds are fixed.** 30 turns before a rule is judged dead, 10 broken writes before a fix rate. They can't be changed yet.
 
 **A log you add to git leaves with it.** `.stele/` ignores itself, but `git add -f .stele/log.jsonl` commits the log like any file, and a push sends its file paths and session and prompt ids along.
 

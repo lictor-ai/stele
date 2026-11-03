@@ -46,6 +46,28 @@ func TestHookNeverReachesPublish(t *testing.T) {
 		t.Fatal("no hook*.go files found")
 	}
 
+	for _, p := range forbidden(reached(t, repo, start)) {
+		t.Errorf("stele hook reaches %s", p)
+	}
+}
+
+// TestStatsNeverReachesNetwork guards D70: stele stats reads the log on
+// this machine, and nothing it imports may reach the network, a process or
+// internal/publish.
+func TestStatsNeverReachesNetwork(t *testing.T) {
+	repo, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range forbidden(reached(t, repo, []string{"stats.go"})) {
+		t.Errorf("stele stats reaches %s", p)
+	}
+}
+
+// reached is every package the files import, through the repository's own
+// packages.
+func reached(t *testing.T, repo string, start []string) map[string]bool {
+	t.Helper()
 	seen := map[string]bool{}
 	var queue []string
 	add := func(files []string) {
@@ -72,15 +94,21 @@ func TestHookNeverReachesPublish(t *testing.T) {
 		dir := filepath.Join(repo, filepath.FromSlash(strings.TrimPrefix(p, module+"/")))
 		add(packageFiles(t, dir))
 	}
+	return seen
+}
 
+// forbidden are the packages in seen that reach the network or a process.
+func forbidden(seen map[string]bool) []string {
+	var out []string
 	for p := range seen {
 		switch {
 		case p == module+"/internal/publish",
 			p == "net", strings.HasPrefix(p, "net/"),
 			p == "os/exec":
-			t.Errorf("stele hook reaches %s", p)
+			out = append(out, p)
 		}
 	}
+	return out
 }
 
 // fileImports returns the import paths of one Go file.
