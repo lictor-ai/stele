@@ -250,6 +250,42 @@ func TestInitFetchesGitSource(t *testing.T) {
 	}
 }
 
+// A fresh clone has no index. The hook rebuilds from stele.md alone, and
+// must leave the committed stele.lock and rules file as they are: they hold
+// the shared rules and their pin, which the hook cannot read (D71).
+func TestHookOnAFreshCloneKeepsSharedRules(t *testing.T) {
+	_, _, _ = sharedRemote(t)
+	root := project(t, hookRules)
+	withGitSource(t, root, "main")
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile: %s", errOut)
+	}
+	rulesFile := filepath.Join(root, ".claude", "rules", "stele-rules.md")
+	lockBefore, _ := os.ReadFile(filepath.Join(root, lock.FileName))
+	rulesBefore, _ := os.ReadFile(rulesFile)
+	if !strings.Contains(string(rulesBefore), "No panic in library code.") {
+		t.Fatalf("rules file lacks the shared rules:\n%s", rulesBefore)
+	}
+
+	// The clone: no .stele/, and the hook must not reach the remote.
+	if err := os.RemoveAll(filepath.Join(root, ".stele")); err != nil {
+		t.Fatal(err)
+	}
+	localRemotes[sharedRepo] = filepath.Join(t.TempDir(), "gone.git")
+	hook(t, write(filepath.Join(root, "a.go"), "p1", ""))
+	postHook(t, root, "post-write", "a.go", "package a\n")
+
+	if after, _ := os.ReadFile(filepath.Join(root, lock.FileName)); string(after) != string(lockBefore) {
+		t.Errorf("the hook rewrote stele.lock:\n%s\nwant\n%s", after, lockBefore)
+	}
+	if after, _ := os.ReadFile(rulesFile); string(after) != string(rulesBefore) {
+		t.Errorf("the hook rewrote the rules file:\n%s\nwant\n%s", after, rulesBefore)
+	}
+	if code, out, errOut := runCmd("compile"); code != exitOK || !strings.Contains(out, "up to date") && !strings.Contains(out, ".stele/index.json") {
+		t.Errorf("compile after = %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
 // sources is where git starts; the hook and stats reach neither it nor
 // internal/gitexec.
 func TestSourcesReachGit(t *testing.T) {
