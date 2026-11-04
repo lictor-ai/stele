@@ -3,6 +3,7 @@ package lock
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -172,16 +173,6 @@ func TestReconcile(t *testing.T) {
 			want: []string{"a", "X"},
 			rep:  Report{Supplied: 1, ByHash: 1, Rekeyed: []Rekey{{Old: "b", New: "X"}}},
 		},
-		{
-			name: "a supplied id taken from another rule is not inherited by position",
-			rules: []source.Rule{
-				md(0, sql2),
-				{Source: "org", Position: 0, Body: http, ID: "a"},
-			},
-			prev: ab,
-			want: []string{"new-1", "a"},
-			rep:  Report{Supplied: 1, Minted: 1, Dropped: 1},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -239,5 +230,25 @@ func TestReconcileDuplicateSuppliedID(t *testing.T) {
 	_, _, _, err := Reconcile(rules, File{}, ids())
 	if !errors.Is(err, ErrDuplicateID) {
 		t.Fatalf("err = %v, want ErrDuplicateID", err)
+	}
+}
+
+// A source may not supply the id stele.lock holds for a rule of another
+// source that is still there, same body or same place: that rule would
+// silently get a new id and lose its history.
+func TestReconcileSuppliedIDOfARuleStillThere(t *testing.T) {
+	ab := lockOf([]string{"a", "b"}, md(0, sql), md(1, http))
+	for name, rules := range map[string][]source.Rule{
+		"same body": {md(0, sql), md(1, http), {Source: "org", Position: 0, Body: creds, ID: "a"}},
+		"reworded":  {md(0, sql2), md(1, http), {Source: "org", Position: 0, Body: creds, ID: "a"}},
+	} {
+		_, _, _, err := Reconcile(rules, ab, ids())
+		if !errors.Is(err, ErrDuplicateID) || !strings.Contains(err.Error(), "stelemd") {
+			t.Errorf("%s: err = %v, want ErrDuplicateID naming the stelemd rule", name, err)
+		}
+	}
+	// The rule moved to the source that now supplies its id: no clash.
+	if _, _, _, err := Reconcile([]source.Rule{md(0, http), {Source: "org", Position: 0, Body: sql, ID: "a"}}, ab, ids()); err != nil {
+		t.Errorf("a rule that moved: %v", err)
 	}
 }
