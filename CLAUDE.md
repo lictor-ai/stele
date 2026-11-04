@@ -37,7 +37,12 @@ Guideline enforcement for coding agents. Go, single binary.
     one signed line per thing stele did (rules loaded, write denied, write
     checked, `stele check` run), rule ids, paths and counts only, never sent.
     The spec carries it as D69.
-11. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+11. `docs/adr/0011-rules-from-another-git-repository.md` — a built-in `git`
+    source reads rules from another repository at `stele compile`, `stele
+    check` and `stele init`, never in the hook; the commit is pinned in
+    `stele.lock`. It amends D45, D53, D62 and D66. The spec carries it as
+    D71–D72.
+12. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
@@ -52,7 +57,9 @@ enterprise idea. Do not implement it or use it as a v1 format.
 - Only source plugins open rule files (D40). Everything else reads `index.json`.
   The one exception: `stele publish` reads `stele.md` from git to copy it (D64).
 - External plugins never run on the hot path: not in `stele hook`, not in
-  `stele mcp` (D45).
+  `stele mcp` (D45). Nor does the `git` source, nor anything that starts git:
+  only `internal/gitexec` and `cmd/stele/check.go` run git, and the hook and
+  `stele stats` never reach them (D71).
 - Only `internal/adapter/<agent>`, `cmd/stele/agents.go` and
   `internal/install/agent_test.go` (the install tests, which check the real
   adapter's output) import an agent adapter; nothing else names Claude Code's
@@ -61,4 +68,5 @@ enterprise idea. Do not implement it or use it as a v1 format.
   the repository (D43).
 - Nothing leaves the machine except through a sink listed in `stele.json`, and
   only from `stele push` or `stele check --push` (D53), or from `stele publish`
-  to the `repo` in `stele.json` (D66).
+  to the `repo` in `stele.json` (D66). The `git` source fetches rules in and
+  sends nothing of the project (D71).

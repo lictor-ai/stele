@@ -49,6 +49,7 @@ internal/serve/       MCP wiring over the SDK
 internal/plugin/      registry of built-in and external plugins, exec protocol, sinks
 internal/status/      stele status: describe the install as JSON
 internal/publish/     stele publish: stele.md to a git repository as a merge request (D64–D66)
+internal/gitexec/     git for what reaches a remote: stele publish and the git source (ADR-0011)
 internal/toolpath/    programs and PATH entries inside the project, refused; the flags on every git command
 internal/check/       the Checker slot: stele check's runner and report
   regex/              the built-in regex checker
@@ -1045,10 +1046,11 @@ the user cache directory behind a `safefile` lock, commits with plumbing on a
 temporary index, pushes `stele/publish/<path>` with `--force-with-lease`, and
 asks the GitHub or GitLab API for the merge request.
 
-It is the only package that imports `net/http`, and with `stele check` the
-only one that starts processes: `git`, `gh`, `glab` and the browser opener,
-each resolved on `PATH` and refused inside the project or the repository
-that holds it (as D43 does for plugins). `internal/toolpath` holds that test,
+It is the only package that imports `net/http`, and with `stele check` and
+`internal/gitexec` the only one that starts processes: `git` (through
+`gitexec`), `gh`, `glab` and the browser opener, each resolved on `PATH` with
+`gitexec.Tool` and refused inside the project or the repository that holds it
+(as D43 does for plugins). `internal/toolpath` holds that test,
 and takes `PATH` entries inside the project, and empty or relative ones, out
 of what those programs inherit, so git cannot find an `ssh` there. "Inside"
 is by name and by file identity: `safefile.Resolve` follows links and
@@ -1061,14 +1063,43 @@ though the one binary links both, through `cmd/stele/publish.go`.
 
 `toolpath.GitFlags` goes on every git command of both `stele check` and
 `stele publish`: a bare repository is used only when named with `--git-dir`,
-and no fsmonitor runs. The rest is this package's alone. Its git calls add
-`remoteFlags`, which allow only the https and ssh transports, never prompt and
-never touch submodules, and keep at most 1 MiB of what git prints. `stele check`
+and no fsmonitor runs. The rest belongs to what reaches a remote, in
+`internal/gitexec`. Its git calls add `gitexec.RemoteFlags`, which allow only
+the https and ssh transports, never prompt and never touch submodules, and
+keep at most 1 MiB of what git prints. `stele check`
 adds neither: a partial clone must fetch from its own promisor over whatever
 transport it was cloned with, and `check` reads git's whole output. A token goes only to the fixed endpoints `api.github.com` and
 `gitlab.com/api/v4`, and only when `repo`'s host is exactly `github.com` or
 `gitlab.com` (D65). `stele hook` never reaches the package:
 `cmd/stele/hookreach_test.go` follows the hook's imports to check it.
+
+### `internal/gitexec` — git for what reaches a remote
+
+```go
+type Cmd struct {
+    Bin        string        // git's absolute path
+    Env        []string      // PATH cut to entries outside the project (toolpath.Env)
+    AllowFile  bool          // tests only, set in code: a bare repository on disk
+    NetTimeout time.Duration // a command that talks to the remote; 0 is NetTimeout
+}
+func New(bin, root string) Cmd
+func (g Cmd) Run(ctx context.Context, dir string, env []string, stdin []byte, args ...string) (string, error)
+func (g Cmd) RunLimit(ctx context.Context, dir string, env []string, stdin []byte, limit int, args ...string) (string, error)
+func Tool(name, root string) (string, error) // on PATH, never inside the project
+func ValidateRepo(repo string) error          // https, ssh or user@host:path; nothing else
+func HostPath(repo string) (host, path string)
+func Message(stderr string) string            // git's message, cleaned, no link the remote chose
+func Clean(s string) string; func CleanLines(s string) string
+var ErrGit, ErrToolNotFound, ErrToolRefused error
+```
+
+The git runner `stele publish` and the `git` source share (ADR-0011): every
+call gets `toolpath.GitFlags` and `RemoteFlags`, an environment with no
+prompt and none of the variables that point git at another repository, a time
+limit, and a cap on what it keeps of git's output. It imports `os/exec`, and
+`net/url` only to check a URL: git does the network. Neither `stele hook` nor
+`stele stats` reaches it; `cmd/stele/hookreach_test.go` lists it with
+`internal/publish` and `os/exec`.
 
 Errors are sentinels wrapped with what to do: `ErrNoConfig`, `ErrBadConfig`,
 `ErrNotRepo`, `ErrUntracked`, `ErrEdited`, `ErrNoProject`, `ErrToolNotFound`,
