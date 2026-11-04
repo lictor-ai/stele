@@ -113,6 +113,7 @@ func TestTimeoutFor(t *testing.T) {
 	const net = 7 * time.Minute
 	for _, args := range [][]string{
 		{"clone", "--bare"}, {"--git-dir=x", "fetch"}, {"--git-dir=x", "push"}, {"ls-remote", "--symref"},
+		{"-c", "transfer.fsckObjects=true", "--git-dir=x", "fetch"},
 	} {
 		if got := TimeoutFor(args, net); got != net {
 			t.Errorf("TimeoutFor(%q) = %v, want %v", args, got, net)

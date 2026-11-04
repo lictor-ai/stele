@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -43,10 +44,15 @@ var RemoteFlags = []string{
 var network = map[string]bool{"clone": true, "fetch": true, "push": true, "ls-remote": true}
 
 // TimeoutFor is the time limit for git with args, given the limit net for a
-// command that talks to the remote: the first word that is not an option is
-// the command.
+// command that talks to the remote: the first word that is not an option, nor
+// the value of a -c, is the command.
 func TimeoutFor(args []string, net time.Duration) time.Duration {
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "-c" {
+			i++
+			continue
+		}
 		if strings.HasPrefix(a, "-") {
 			continue
 		}
@@ -57,6 +63,14 @@ func TimeoutFor(args []string, net time.Duration) time.Duration {
 	}
 	return GitTimeout
 }
+
+// userinfo is the user and password part of a URL.
+var userinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@`)
+
+// Redact hides the user and password of every URL in s: a url.insteadOf in
+// the user's git config can put a token there, and git prints the URL when
+// it fails.
+func Redact(s string) string { return userinfo.ReplaceAllString(s, "${1}***@") }
 
 // quiet is added to git's environment: no prompt on the terminal, from Git
 // Credential Manager or from an askpass program. An empty GIT_ASKPASS makes
@@ -230,7 +244,8 @@ func firstWord(args []string) string {
 
 // Message cleans what git wrote on stderr for printing. Lines the remote
 // sent that hold a link are dropped: stele never shows a link the remote
-// chose. A refusal such as "remote: Permission denied" stays.
+// chose. A refusal such as "remote: Permission denied" stays. Credentials in
+// a URL are hidden (Redact).
 func Message(stderr string) string {
 	var keep []string
 	for _, line := range strings.Split(CleanLines(stderr), "\n") {
@@ -241,7 +256,7 @@ func Message(stderr string) string {
 		if strings.HasPrefix(strings.TrimSpace(line), "remote:") && strings.Contains(line, "://") {
 			continue
 		}
-		keep = append(keep, line)
+		keep = append(keep, Redact(line))
 	}
 	return strings.Join(keep, "\n")
 }

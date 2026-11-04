@@ -60,6 +60,10 @@ func ValidateRepo(repo string) error {
 	if _, has := u.User.Password(); has {
 		return errors.New("repo holds a password; remove it and let git's own login supply it")
 	}
+	if strings.HasPrefix(u.User.Username(), "-") {
+		// ssh would read the user as an option: -oProxyCommand runs a command.
+		return bad("its user starts with -")
+	}
 	if u.Scheme != "https" && u.Scheme != "ssh" {
 		return bad("only https and ssh are allowed")
 	}
