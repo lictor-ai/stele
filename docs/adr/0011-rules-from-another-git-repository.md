@@ -82,6 +82,25 @@ rules from the signed index, as it keeps an external source's. `stele stats`
 does not run it either (D70). Only `internal/gitexec` starts git for it, and
 `cmd/stele/hookreach_test.go` checks that neither path reaches that package.
 
+**Where it lives.** The source is `internal/source/gitrepo`, and it is pure:
+it reads files through a `Git` interface and imports no `os/exec` and no
+`internal/gitexec`, so it fits the rules that keep both out of
+`internal/{compile,plugin,source}/**`, which the hook reaches.
+`internal/plugin` builds it from `stele.json` with the `Git` it is given.
+That `Git` is `internal/gitexec`'s, injected from `cmd/stele/sources.go`,
+which the hook-path rules do not cover and which only `stele compile`,
+`stele check` and `stele init` call. `cmd/stele/compile.go` and
+`internal/install` import neither `os/exec` nor `internal/gitexec`.
+
+**The hook never drops what it did not read.** The hook's recompile reads
+only the builtins. It keeps every other source's lock entries and every pin
+in `stele.lock`, and it never rewrites `.claude/rules/stele-rules.md` from an
+index that lacks a pinned source's rules. So on a fresh clone, before the
+first `stele compile`, `stele check` or `stele init` on the machine, a write
+leaves `stele.lock` and the committed rules file as they are.
+
+**Free.** The git source is free (D48).
+
 **What leaves the machine.** A fetch sends git's protocol request to the
 `repo` listed in `stele.json`: which refs and objects it wants, which of the
 guidelines repository's own commits it has, git's user agent, and the user's
@@ -104,7 +123,8 @@ govern everything that sends project data.
   the user's keys to it. This is the same exposure as a submodule or a Go
   module path, and it is documented.
 * CI needs read access to the guidelines repository.
-* On a fresh clone, before the first `stele compile` or `stele init` on that
-  machine, the hook's deny and check know only the project's own rules. The
-  committed rules file still brings the shared ones to the agent.
+* On a fresh clone, before the first `stele compile`, `stele check` or
+  `stele init` on that machine, the hook's deny and check know only the
+  project's own rules. The committed rules file, which the hook leaves alone,
+  still brings the shared ones to the agent.
 * An older stele refuses a version 2 `stele.lock`.

@@ -40,8 +40,9 @@ Guideline enforcement for coding agents. Go, single binary.
 11. `docs/adr/0011-rules-from-another-git-repository.md` — a built-in `git`
     source reads rules from another repository at `stele compile`, `stele
     check` and `stele init`, never in the hook; the commit is pinned in
-    `stele.lock`. It amends D45, D53, D62 and D66. The spec carries it as
-    D71–D72.
+    `stele.lock`. It amends ADR-0004 and ADR-0007, which kept compile and
+    check offline (they may now fetch a listed repository; the hook still
+    never does), and D45, D53, D62 and D66. The spec carries it as D71–D72.
 12. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
