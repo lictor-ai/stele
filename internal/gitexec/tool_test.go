@@ -1,4 +1,4 @@
-package publish
+package gitexec
 
 import (
 	"errors"
@@ -32,7 +32,7 @@ func TestResolveToolRefusesInsideProject(t *testing.T) {
 	bin := filepath.Join(root, "bin")
 	fakeTool(t, bin, "faketool")
 	t.Setenv("PATH", bin)
-	_, err := resolveTool("faketool", root)
+	_, err := Tool("faketool", root)
 	if !errors.Is(err, ErrToolRefused) {
 		t.Fatalf("err = %v, want ErrToolRefused", err)
 	}
@@ -40,7 +40,7 @@ func TestResolveToolRefusesInsideProject(t *testing.T) {
 		t.Errorf("err = %q, want it to name %s", err, bin)
 	}
 	if runtime.GOOS == "windows" {
-		if _, err := resolveTool("faketool", strings.ToUpper(root)); !errors.Is(err, ErrToolRefused) {
+		if _, err := Tool("faketool", strings.ToUpper(root)); !errors.Is(err, ErrToolRefused) {
 			t.Errorf("root in another case: err = %v, want ErrToolRefused", err)
 		}
 	}
@@ -60,7 +60,7 @@ func TestResolveToolRefusesInsideEnclosingRepository(t *testing.T) {
 	bin := filepath.Join(top, "bin")
 	fakeTool(t, bin, "faketool")
 	t.Setenv("PATH", bin)
-	if _, err := resolveTool("faketool", root); !errors.Is(err, ErrToolRefused) {
+	if _, err := Tool("faketool", root); !errors.Is(err, ErrToolRefused) {
 		t.Errorf("err = %v, want ErrToolRefused", err)
 	}
 }
@@ -79,8 +79,8 @@ func TestResolveToolKeepsToolOutsideAHomeRepository(t *testing.T) {
 	bin := filepath.Join(home, "bin")
 	fakeTool(t, bin, "faketool")
 	t.Setenv("PATH", bin)
-	if _, err := resolveTool("faketool", root); err != nil {
-		t.Errorf("resolveTool = %v", err)
+	if _, err := Tool("faketool", root); err != nil {
+		t.Errorf("Tool = %v", err)
 	}
 }
 
@@ -89,27 +89,27 @@ func TestResolveToolOutsideProject(t *testing.T) {
 	bin := t.TempDir()
 	want := fakeTool(t, bin, "faketool")
 	t.Setenv("PATH", bin)
-	got, err := resolveTool("faketool", root)
+	got, err := Tool("faketool", root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !filepath.IsAbs(got) || !strings.EqualFold(filepath.Clean(got), filepath.Clean(want)) {
-		t.Errorf("resolveTool = %q, want %q", got, want)
+		t.Errorf("Tool = %q, want %q", got, want)
 	}
 }
 
 func TestResolveToolMissing(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	if _, err := resolveTool("faketool", t.TempDir()); !errors.Is(err, ErrToolNotFound) {
+	if _, err := Tool("faketool", t.TempDir()); !errors.Is(err, ErrToolNotFound) {
 		t.Errorf("err = %v, want ErrToolNotFound", err)
 	}
 }
 
 func TestResolveToolRefusesRelativePath(t *testing.T) {
-	old := lookPath
-	t.Cleanup(func() { lookPath = old })
-	lookPath = func(string) (string, error) { return "faketool", exec.ErrDot }
-	if _, err := resolveTool("faketool", t.TempDir()); !errors.Is(err, ErrToolRefused) {
+	old := LookPath
+	t.Cleanup(func() { LookPath = old })
+	LookPath = func(string) (string, error) { return "faketool", exec.ErrDot }
+	if _, err := Tool("faketool", t.TempDir()); !errors.Is(err, ErrToolRefused) {
 		t.Errorf("err = %v, want ErrToolRefused", err)
 	}
 }
@@ -125,7 +125,7 @@ func TestResolveToolRefusesLinkIntoProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin)
-	if _, err := resolveTool("faketool", root); !errors.Is(err, ErrToolRefused) {
+	if _, err := Tool("faketool", root); !errors.Is(err, ErrToolRefused) {
 		t.Errorf("err = %v, want ErrToolRefused", err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lictor-ai/stele/internal/gitexec"
 	"github.com/lictor-ai/stele/internal/safefile"
 )
 
@@ -156,28 +157,13 @@ func TestSyncCacheFetchesOnlyWhatItNeeds(t *testing.T) {
 	}
 }
 
-func TestTimeoutFor(t *testing.T) {
-	for _, args := range [][]string{
-		{"clone", "--bare"}, {"--git-dir=x", "fetch"}, {"--git-dir=x", "push"}, {"ls-remote", "--symref"},
-	} {
-		if got := timeoutFor(args); got != netTimeout {
-			t.Errorf("timeoutFor(%q) = %v, want %v", args, got, netTimeout)
-		}
-	}
-	for _, args := range [][]string{{"--git-dir=x", "write-tree"}, {"rev-parse", "HEAD"}, {"credential", "fill"}} {
-		if got := timeoutFor(args); got != gitTimeout {
-			t.Errorf("timeoutFor(%q) = %v, want %v", args, got, gitTimeout)
-		}
-	}
-}
-
 // The cache lock must outlive the longest run, or a second stele publish
 // takes it over midway: ls-remote, clone, fetch and push may each take
-// netTimeout.
+// gitexec.NetTimeout.
 func TestLockOutlivesARun(t *testing.T) {
 	const networkCalls = 4
-	if lockStale <= networkCalls*netTimeout+gitTimeout {
-		t.Errorf("lockStale %v is not above %d × %v + %v", lockStale, networkCalls, netTimeout, gitTimeout)
+	if lockStale <= networkCalls*gitexec.NetTimeout+gitexec.GitTimeout {
+		t.Errorf("lockStale %v is not above %d × %v + %v", lockStale, networkCalls, gitexec.NetTimeout, gitexec.GitTimeout)
 	}
 }
 

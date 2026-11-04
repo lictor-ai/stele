@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"unicode"
 
 	"github.com/lictor-ai/stele/internal/enforce"
+	"github.com/lictor-ai/stele/internal/gitexec"
 	"github.com/lictor-ai/stele/internal/safefile"
 )
 
@@ -80,66 +79,10 @@ func LoadConfig(root string) (Config, error) {
 	return cfg, nil
 }
 
-var (
-	hostname = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*$`)
-	port     = regexp.MustCompile(`^[0-9]{1,5}$`)
-	// scp is git's user@host:path form. The user is required, so a local
-	// path such as C:/x is never read as one.
-	scp = regexp.MustCompile(`^([A-Za-z0-9._-]+)@([A-Za-z0-9][A-Za-z0-9.-]*):([^/:\-].*)$`)
-)
-
-// validateRepo accepts https://host/path, ssh://host/path and user@host:path,
-// and nothing else: no local path, no file:// or ext::, no option, no
-// password.
+// validateRepo checks "repo" with gitexec.ValidateRepo.
 func validateRepo(repo string) error {
-	bad := func(why string) error {
-		return fmt.Errorf("%w: repo %q: %s; use https://host/path, ssh://host/path or user@host:path", ErrBadConfig, repo, why)
-	}
-	if repo == "" {
-		return fmt.Errorf("%w: repo is empty; use https://host/path, ssh://host/path or user@host:path", ErrBadConfig)
-	}
-	for _, r := range repo {
-		if unicode.IsSpace(r) || unicode.IsControl(r) {
-			return fmt.Errorf("%w: repo has a space or a control character", ErrBadConfig)
-		}
-	}
-	if strings.HasPrefix(repo, "-") {
-		return bad("it starts with -")
-	}
-	if !strings.Contains(repo, "://") {
-		if at := strings.Index(repo, "@"); at > 0 && strings.Contains(repo[:at], ":") {
-			return fmt.Errorf("%w: repo holds a password; remove it and let git's own login supply it", ErrBadConfig)
-		}
-		m := scp.FindStringSubmatch(repo)
-		if m == nil {
-			return bad("not a remote URL")
-		}
-		return nil
-	}
-	u, err := url.Parse(repo)
-	if err != nil {
-		if strings.Contains(repo, "@") {
-			return fmt.Errorf("%w: repo is not a valid URL", ErrBadConfig)
-		}
-		return bad("not a valid URL")
-	}
-	if _, has := u.User.Password(); has {
-		return fmt.Errorf("%w: repo holds a password; remove it and let git's own login supply it", ErrBadConfig)
-	}
-	if u.Scheme != "https" && u.Scheme != "ssh" {
-		return bad("only https and ssh are allowed")
-	}
-	if !hostname.MatchString(u.Hostname()) {
-		return bad("no valid host")
-	}
-	if p := u.Port(); p != "" && !port.MatchString(p) {
-		return bad("bad port")
-	}
-	if u.Path == "" || u.Path == "/" {
-		return bad("no repository path")
-	}
-	if u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
-		return bad("a query or fragment")
+	if err := gitexec.ValidateRepo(repo); err != nil {
+		return fmt.Errorf("%w: %w", ErrBadConfig, err)
 	}
 	return nil
 }
