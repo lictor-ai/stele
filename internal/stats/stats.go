@@ -80,6 +80,10 @@ type LogCounts struct {
 	Future       int `json:"future"` // dated after now
 }
 
+// skew is how far past Until a line may be dated and still count: the hook
+// can append between stats taking the time and reading the log.
+const skew = time.Minute
+
 var known = map[journal.Kind]bool{journal.Loaded: true, journal.Denied: true, journal.Checked: true, journal.Wrote: true, journal.CheckRun: true}
 
 // take decodes one signed line and says whether the report uses it,
@@ -96,7 +100,7 @@ func (c *LogCounts) take(in Input, body []byte) (Line, bool) {
 		c.UnknownKind++
 	case in.Project != "" && l.Project != in.Project:
 		c.OtherProject++
-	case l.TS.After(in.Until):
+	case l.TS.After(in.Until.Add(skew)):
 		c.Future++
 	case !in.Since.IsZero() && l.TS.Before(in.Since):
 		c.Before++
@@ -128,28 +132,40 @@ var relative = regexp.MustCompile(`^([1-9][0-9]*)([hdw])$`)
 // ErrSince is a --since stats cannot read.
 var ErrSince = errors.New("is like 30d, 12h, 2w, 2026-10-01 or all")
 
+// maxBack is how far back a window may start: farther is a typo, and an
+// hour count that large would overflow a time.Duration.
+const maxBack = 100 // years
+
 // ParseSince reads a window's start: Nh, Nd or Nw before now, a day (its
-// midnight in loc), or all, which is the zero time.
+// midnight in loc), or all, which is the zero time. A start in the future,
+// or more than maxBack years ago, is refused.
 func ParseSince(s string, now time.Time, loc *time.Location) (time.Time, error) {
 	if s == "all" {
 		return time.Time{}, nil
 	}
+	floor := now.AddDate(-maxBack, 0, 0)
 	if m := relative.FindStringSubmatch(s); m != nil {
 		n, err := strconv.Atoi(m[1])
-		if err != nil {
+		// Checked before computing: n hours past this overflow.
+		if err != nil || n > maxBack*366*24 {
 			return time.Time{}, ErrSince
 		}
+		var start time.Time
 		switch m[2] {
 		case "h":
-			return now.Add(-time.Duration(n) * time.Hour), nil
+			start = now.Add(-time.Duration(n) * time.Hour)
 		case "d":
-			return now.AddDate(0, 0, -n), nil
+			start = now.AddDate(0, 0, -n)
 		default:
-			return now.AddDate(0, 0, -7*n), nil
+			start = now.AddDate(0, 0, -7*n)
 		}
+		if start.Before(floor) {
+			return time.Time{}, ErrSince
+		}
+		return start, nil
 	}
 	day, err := time.ParseInLocation("2006-01-02", s, loc)
-	if err != nil {
+	if err != nil || day.Before(floor) {
 		return time.Time{}, ErrSince
 	}
 	if day.After(now) {
@@ -499,7 +515,7 @@ func ruleMap(in Input) map[string]Rule {
 // dead sorts each rule no write met into dead, not judged or new. A rule is
 // met by a write to a file its current scope applies to, or by its id on a
 // line: its scope may have changed since. Its turns count from the first
-// session that loaded it; with no session loading anything in the window,
+// session that loaded it; with no session loading any rule in the window,
 // from the window's start.
 func dead(in Input, n *Numbers, lines []Line, turnStart map[turnKey]time.Time) {
 	met := map[string]bool{}
@@ -509,7 +525,9 @@ func dead(in Input, n *Numbers, lines []Line, turnStart map[turnKey]time.Time) {
 	for _, l := range lines {
 		switch l.Kind {
 		case journal.Loaded:
-			anyLoaded = true
+			// A start with no rules (no rules file, or one edited by hand)
+			// says nothing about which rules are new.
+			anyLoaded = anyLoaded || len(l.Rules) > 0
 			for _, id := range l.Rules {
 				if t, ok := firstLoaded[id]; !ok || l.TS.Before(t) {
 					firstLoaded[id] = l.TS

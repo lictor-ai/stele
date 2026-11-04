@@ -12,8 +12,9 @@ import (
 )
 
 // record appends r to root's log (ADR-0010). Every failure, a panic
-// included, is dropped: the log must never change or hold up the answer, so
-// it runs after the answer is decided and saved, and its own recover keeps a
+// included, is dropped: the log must never change or hold up the answer. A
+// deny is logged after it is decided and saved, a write before its check
+// (D70); neither line feeds the answer, and record's own recover keeps a
 // logging bug from turning a deny into runHook's warning.
 func record(root string, key sign.Key, r journal.Record) {
 	defer func() { _ = recover() }()

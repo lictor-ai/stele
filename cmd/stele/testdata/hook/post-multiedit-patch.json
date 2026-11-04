@@ -1,5 +1,6 @@
 {
   "session_id": "abc123",
+  "prompt_id": "p1",
   "transcript_path": "/home/user/.claude/projects/proj/abc123.jsonl",
   "cwd": "/home/user/proj",
   "permission_mode": "default",

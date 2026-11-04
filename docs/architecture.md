@@ -628,8 +628,9 @@ func Compute(in Input, lines []Line, counts LogCounts) Report                   
 lines into turns, broken rules and what followed, dead rules and denies per local
 day, for all agents and for each. `cmd/stele/stats.go` gets the rules from
 `compile.Plan` with the built-in sources (the last valid index when `stele.md`
-does not compile), and prints. Nothing it imports reaches the network or a process
-(`TestStatsNeverReachesNetwork`).
+does not compile), and prints. Nothing it runs reaches the network or a process:
+`TestStatsNeverReachesNetwork` follows `runStats` through every `cmd/stele`
+declaration it uses, in any file, then through the packages those import.
 
 ### `internal/backstop` — the hook decision
 

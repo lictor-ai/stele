@@ -195,6 +195,24 @@ func TestHookLogsNoBinaryCheck(t *testing.T) {
 	}
 }
 
+// Claude Code sends the turn's prompt_id after a write too (recorded from
+// 2.1.317), so wrote and checked lines carry their turn: stele stats tells
+// a fix in the same turn from one later.
+func TestHookLogsPromptFromRecordedPayload(t *testing.T) {
+	root := project(t, checkRules)
+	const prompt = "4080d05a-547d-4069-8907-ae5bead8b91a"
+	hook(t, postPayload(t, root, "post-write-recorded", "internal/db.go", "package db\n\nvar password = 1\n"))
+	ls := readLog(t, root)
+	if kinds(ls) != "wrote checked" {
+		t.Fatalf("log = %s, want the write and its check", kinds(ls))
+	}
+	for _, l := range ls {
+		if l.Prompt != prompt || l.Session != "b0b02795-e920-4b5e-9d00-bdcd4332de07" {
+			t.Errorf("%s line: prompt %q, session %q; want the payload's", l.Kind, l.Prompt, l.Session)
+		}
+	}
+}
+
 // A write no checked rule covers is logged as written, with no check.
 func TestHookLogsNoCheck(t *testing.T) {
 	root := project(t, hookRules)

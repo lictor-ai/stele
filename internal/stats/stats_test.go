@@ -77,7 +77,8 @@ func TestParseSince(t *testing.T) {
 			t.Errorf("ParseSince(%q) = %v, %v; want %v", tt.in, got, err, tt.want)
 		}
 	}
-	for _, bad := range []string{"", "0d", "-1d", "3x", "d", "2026-11-04", "2026-13-01", "1.5d"} {
+	for _, bad := range []string{"", "0d", "-1d", "3x", "d", "2026-11-04", "2026-13-01", "1.5d",
+		"2562048h", "99999999999999999999d", "1000000w", "0001-01-01"} {
 		if _, err := ParseSince(bad, now, plusOne); err == nil {
 			t.Errorf("ParseSince(%q) took it", bad)
 		}
@@ -129,6 +130,19 @@ func TestCollect(t *testing.T) {
 	want := LogCounts{Lines: 6, Used: 2, Unverified: 1, OtherProject: 1, Before: 1, Future: 1}
 	if diff := cmp.Diff(want, counts); diff != "" {
 		t.Errorf("counts (-want +got):\n%s", diff)
+	}
+}
+
+// A line the hook appended between stats taking the time and reading the
+// log is used, not called dated in the future.
+func TestCollectAllowsSkew(t *testing.T) {
+	in := input()
+	var c LogCounts
+	if _, ok := c.take(in, []byte(`{"v":1,"kind":"wrote","project":"p1","ts":"`+until.Add(30*time.Second).Format(time.RFC3339Nano)+`"}`)); !ok {
+		t.Errorf("a line 30s after until was left out: %+v", c)
+	}
+	if _, ok := c.take(in, []byte(`{"v":1,"kind":"wrote","project":"p1","ts":"`+until.Add(2*time.Minute).Format(time.RFC3339Nano)+`"}`)); ok || c.Future != 1 {
+		t.Errorf("a line 2 minutes after until was used: %+v", c)
 	}
 }
 
@@ -212,6 +226,16 @@ func TestRuleNotLoadedYetIsNew(t *testing.T) {
 	}
 	if len(rep.All.New) != 2 || rep.All.New[0].RuleID != "r2" || rep.All.New[1].RuleID != "r3" {
 		t.Errorf("new = %+v, want r2 and r3", rep.All.New)
+	}
+}
+
+// A session that loaded no rules (no rules file, or one edited by hand)
+// says nothing about which rules are new: turns count from the window.
+func TestLoadedNothingIsNoStart(t *testing.T) {
+	ls := append([]Line{loaded(at(0), "s1")}, turns(MinTurns, "a.go")...)
+	rep := Compute(input(Rule{ID: "r1", Scope: []string{"x/**"}}), ls, LogCounts{})
+	if len(rep.All.Dead) != 1 || len(rep.All.New) != 0 {
+		t.Errorf("all = %+v, want r1 dead, not new", rep.All)
 	}
 }
 

@@ -44,7 +44,9 @@ stele stats [--since 30d] [--format text|json]
 ```
 
 `--since` takes `Nh`, `Nd` or `Nw` (N at least 1), a day `YYYY-MM-DD` (from its
-midnight, local time), or `all`. The default is `30d`.
+midnight, local time), or `all`. The default is `30d`. A start in the future
+or more than 100 years back is refused. A line dated up to a minute after now
+still counts: the hook can append while stats starts.
 
 It reads `.stele/log.jsonl` and `log.1.jsonl` through `journal.Read`, and the
 current rules through the built-in sources as `stele check` does, writing
@@ -57,8 +59,10 @@ read). It is not a gate, so never 1.
 ## Definitions
 
 **Turn.** A session and prompt pair among the `wrote`, `denied` and `checked`
-lines: a user turn in which stele saw a write. Before the first prompt a
-session's lines share one turn with no prompt id.
+lines: a user turn in which stele saw a write. Claude Code sends the turn's
+`prompt_id` before and after a write alike (recorded from 2.1.317,
+`cmd/stele/testdata/hook/*-recorded.json`). A line without one, before the
+first prompt, shares one turn with the session's other such lines.
 
 **Broken, and fixed.** A checked write that broke rule R is one broken write
 for R, however many lines broke it. stele then looks at the next `checked` line
@@ -81,9 +85,10 @@ touched a file its current scope applies to, or when its id is on such a line
 (its scope may have changed since). A rule not met is:
 
 - **new** when `stele.lock` does not have it yet, or when sessions loaded rules
-  in the window but none loaded this one;
+  in the window but none loaded this one (a start that loaded no rules, with
+  the rules file missing or edited by hand, does not count);
 - **dead** when 30 turns or more happened since a session first loaded it (or
-  since the window started, when no session in it loaded anything);
+  since the window started, when no session in it loaded any rule);
 - **not judged** otherwise.
 
 **Denied per day.** Denies counted by the local day of their time, write and

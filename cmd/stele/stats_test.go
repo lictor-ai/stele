@@ -89,7 +89,7 @@ func TestStatsNoLog(t *testing.T) {
 
 func TestStatsBadArgs(t *testing.T) {
 	compiled(t, rules)
-	for _, args := range [][]string{{"--format", "xml"}, {"--since", "3x"}, {"--since", "0d"}, {"extra"}} {
+	for _, args := range [][]string{{"--format", "xml"}, {"--since", "3x"}, {"--since", "0d"}, {"--since", "2562048h"}, {"--since", "2999-01-01"}, {"extra"}} {
 		code, _, errOut := runCmd(append([]string{"stats"}, args...)...)
 		if code != exitCantRun || !strings.HasPrefix(errOut, "stele stats: ") {
 			t.Errorf("stats %v = %d, %q; want 2", args, code, errOut)

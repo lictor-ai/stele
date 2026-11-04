@@ -1,0 +1,18 @@
+{
+  "session_id": "b0b02795-e920-4b5e-9d00-bdcd4332de07",
+  "transcript_path": "/home/user/.claude/projects/proj/b0b02795-e920-4b5e-9d00-bdcd4332de07.jsonl",
+  "cwd": "/home/user/proj",
+  "scratchpad_dir": "/tmp/claude/scratchpad",
+  "prompt_id": "4080d05a-547d-4069-8907-ae5bead8b91a",
+  "permission_mode": "acceptEdits",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/home/user/proj/a.txt",
+    "content": "hello"
+  },
+  "tool_use_id": "toolu_01UGi4drKCLLMWtPML1NbaQm"
+}
