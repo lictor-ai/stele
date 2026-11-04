@@ -250,6 +250,41 @@ func TestInitFetchesGitSource(t *testing.T) {
 	}
 }
 
+// A branch that moves a pin changes the enforced rules: --base says so, as
+// for a change to stele.md (#52). A stele.lock change that moves no pin
+// says nothing.
+func TestCheckBaseReportsAMovedPin(t *testing.T) {
+	bare, work, _ := sharedRemote(t)
+	root := rulesBranch(t, "")
+	gitT(t, root, "checkout", "-q", "main")
+	withGitSource(t, root, "main")
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile: %s", errOut)
+	}
+	commitAll(t, root, "shared rules")
+	gitT(t, root, "checkout", "-q", "feature")
+	gitT(t, root, "merge", "-q", "main")
+
+	writeAt(t, root, "stele.md", checkRules+"\n---\n\nKeep functions short.\n")
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile: %s", errOut)
+	}
+	commitAll(t, root, "a local rule")
+	if _, out, _ := runCmd("check", "--base", "main"); strings.Contains(out, "stele.lock:") {
+		t.Errorf("a lock change with no pin moved is reported:\n%s", out)
+	}
+
+	pushShared(t, work, bare, sharedRules+"\n---\n\nAnything goes.\n")
+	if code, _, errOut := runCmd("compile", "--update"); code != exitOK {
+		t.Fatalf("compile --update: %s", errOut)
+	}
+	commitAll(t, root, "move the pin")
+	code, out, errOut := runCmd("check", "--base", "main")
+	if code != exitOK || !strings.Contains(out, "stele.lock: modified on this branch: it pins the shared rules; review the change") {
+		t.Errorf("check --base main = %d, stdout %q, stderr %q; want the moved pin reported", code, out, errOut)
+	}
+}
+
 // A fresh clone has no index. The hook rebuilds from stele.md alone, and
 // must leave the committed stele.lock and rules file as they are: they hold
 // the shared rules and their pin, which the hook cannot read (D71).
