@@ -148,6 +148,30 @@ func TestFetcherEnsureFetches(t *testing.T) {
 	}
 }
 
+// A pin is good only on its ref: a commit the remote has elsewhere, such as
+// a fork's pull request GitHub serves from the parent, is refused, even
+// when it is in the cache.
+func TestFetcherEnsureRefusesACommitOffTheRef(t *testing.T) {
+	bare, work := guidelines(t)
+	gitT(t, work, "checkout", "--quiet", "-b", "weak")
+	writeFile(t, filepath.Join(work, "stele.md"), "Anything goes.\n")
+	gitT(t, work, "commit", "--quiet", "-am", "weaker rules")
+	gitT(t, work, "push", "--quiet", bare, "weak")
+	weak := gitT(t, work, "rev-parse", "HEAD")
+	f := fetcher(t, bare)
+	ctx := context.Background()
+	if got, err := f.Resolve(ctx, testRepo, "weak"); err != nil || got != weak {
+		t.Fatalf("Resolve(weak) = %q, %v", got, err)
+	}
+	err := f.Ensure(ctx, testRepo, "main", weak)
+	if !errors.Is(err, ErrPinGone) {
+		t.Errorf("Ensure of a commit off main = %v, want ErrPinGone", err)
+	}
+	if err := f.Ensure(ctx, testRepo, "weak", weak); err != nil {
+		t.Errorf("Ensure on its own ref = %v", err)
+	}
+}
+
 func TestFetcherEnsureMissingCommit(t *testing.T) {
 	bare, _ := guidelines(t)
 	err := fetcher(t, bare).Ensure(context.Background(), testRepo, "main", strings.Repeat("1", 40))

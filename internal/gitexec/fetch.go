@@ -18,9 +18,10 @@ import (
 	"github.com/lictor-ai/stele/internal/safefile"
 )
 
-// ErrPinGone is a pinned commit the remote no longer has on its ref, nor by
-// its id.
-var ErrPinGone = errors.New("no longer on the remote")
+// ErrPinGone is a pinned commit that is not on its ref: gone after a force
+// push, or never on it. A commit the remote serves by id but not on the ref,
+// such as a fork's pull request, is one: a pin is good only on its ref.
+var ErrPinGone = errors.New("not on its ref")
 
 // fetchFlags go on every git command the Fetcher runs: objects that come
 // from a remote are checked.
@@ -104,8 +105,10 @@ func (f *Fetcher) Resolve(ctx context.Context, repo, ref string) (string, error)
 	return f.resolve(ctx, g, dir, repo, url, ref)
 }
 
-// Ensure makes sure commit, pinned from ref on repo, is in the cache:
-// with no network call when it already is.
+// Ensure makes sure commit, pinned from ref on repo, is in the cache and on
+// the ref: the ref's tip or a commit before it. When the cache already holds
+// both, it makes no network call. Otherwise it fetches the ref, and a commit
+// still not on it is ErrPinGone: stele never fetches a commit by its id.
 func (f *Fetcher) Ensure(ctx context.Context, repo, ref, commit string) error {
 	if !commitHex.MatchString(commit) {
 		return fmt.Errorf("pinned commit %q is not a git commit id", commit)
@@ -125,18 +128,13 @@ func (f *Fetcher) Ensure(ctx context.Context, repo, ref, commit string) error {
 		return err
 	}
 	defer unlock()
-	if has(ctx, g, dir, commit) {
+	if onRef(ctx, g, dir, ref, commit) {
 		return nil
 	}
 	if _, err := f.resolve(ctx, g, dir, repo, url, ref); err != nil {
 		return err
 	}
-	if has(ctx, g, dir, commit) {
-		return nil
-	}
-	// Not on the ref any more: a force push. The remote may still serve it
-	// by id.
-	if _, err := bareRun(ctx, g, dir, "fetch", "--no-tags", "--no-recurse-submodules", "--quiet", "--", url, commit); err == nil && has(ctx, g, dir, commit) {
+	if onRef(ctx, g, dir, ref, commit) {
 		return nil
 	}
 	name := ref
@@ -214,7 +212,7 @@ func (f *Fetcher) resolve(ctx context.Context, g Cmd, dir, repo, url, ref string
 			return "", access(err, repo)
 		}
 	}
-	local := "refs/stele/" + strings.TrimPrefix(full, "refs/")
+	local := localRef(ref)
 	if _, err := bareRun(ctx, g, dir, "fetch", "--no-tags", "--no-recurse-submodules", "--quiet", "--", url, "+"+full+":"+local); err != nil {
 		return "", access(err, repo)
 	}
@@ -352,6 +350,25 @@ func bareRun(ctx context.Context, g Cmd, dir string, args ...string) (string, er
 func bareRepo(ctx context.Context, g Cmd, dir string) bool {
 	out, err := bareRun(ctx, g, dir, "rev-parse", "--is-bare-repository")
 	return err == nil && strings.TrimSpace(out) == "true"
+}
+
+// localRef is where the clone keeps what ref named at the last fetch: per
+// ref as stele.json spells it, "" being the default branch.
+func localRef(ref string) string {
+	if ref == "" {
+		return "refs/stele/default"
+	}
+	return "refs/stele/named/" + ref
+}
+
+// onRef reports whether the clone at dir holds commit, and holds it on ref
+// as last fetched: the ref's commit or one before it.
+func onRef(ctx context.Context, g Cmd, dir, ref, commit string) bool {
+	if !has(ctx, g, dir, commit) {
+		return false
+	}
+	_, err := bareRun(ctx, g, dir, "merge-base", "--is-ancestor", commit, localRef(ref))
+	return err == nil
 }
 
 // has reports whether the clone at dir holds commit.
