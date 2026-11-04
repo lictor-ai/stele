@@ -79,6 +79,14 @@ func TestStatsNeverReachesNetwork(t *testing.T) {
 	}
 }
 
+// git is a process that talks to remotes, wherever it is started from.
+func TestForbiddenNamesGitexec(t *testing.T) {
+	got := forbidden(map[string]bool{module + "/internal/gitexec": true, module + "/internal/index": true})
+	if len(got) != 1 || got[0] != module+"/internal/gitexec" {
+		t.Errorf("forbidden = %v, want internal/gitexec alone", got)
+	}
+}
+
 // The walk sees through files: a declaration's own imports count, its
 // file's others do not.
 func TestDeclReach(t *testing.T) {
@@ -209,12 +217,14 @@ func reached(t *testing.T, repo string, start []string) map[string]bool {
 	return seen
 }
 
-// forbidden are the packages in seen that reach the network or a process.
+// forbidden are the packages in seen that reach the network or a process:
+// internal/gitexec runs git, which talks to remotes (ADR-0011).
 func forbidden(seen map[string]bool) []string {
 	var out []string
 	for p := range seen {
 		switch {
 		case p == module+"/internal/publish",
+			p == module+"/internal/gitexec",
 			p == "net", strings.HasPrefix(p, "net/"),
 			p == "os/exec":
 			out = append(out, p)

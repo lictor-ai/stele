@@ -41,7 +41,7 @@ func (f fixture) commitRules(t *testing.T, rules string) {
 // tip returns the remote's commit for ref, or "" if it has none.
 func (f fixture) tip(t *testing.T, ref string) string {
 	t.Helper()
-	out, err := (gitCmd{bin: testGit(t).bin}).run(context.Background(), f.remote, nil, nil, "--git-dir="+f.remote, "rev-parse", "--verify", "-q", ref)
+	out, err := (gitCmd{Bin: testGit(t).Bin}).Run(context.Background(), f.remote, nil, nil, "--git-dir="+f.remote, "rev-parse", "--verify", "-q", ref)
 	if err != nil {
 		return ""
 	}

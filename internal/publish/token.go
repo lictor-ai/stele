@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lictor-ai/stele/internal/gitexec"
 	"github.com/lictor-ai/stele/internal/toolpath"
 )
 
@@ -66,7 +67,7 @@ func cliToken(ctx context.Context, root, dir string, argv []string) string {
 	cmd := exec.CommandContext(ctx, bin, argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = withoutTokens(toolpath.Env(os.Environ(), root))
-	out := &capped{max: maxOutput}
+	out := &gitexec.Capped{Max: maxOutput}
 	cmd.Stdout = out
 	if err := cmd.Run(); err != nil {
 		return ""
@@ -99,7 +100,7 @@ func withoutTokens(env []string) []string {
 func credentialToken(ctx context.Context, g gitCmd, dir, host string) string {
 	ctx, cancel := context.WithTimeout(ctx, tokenTimeout)
 	defer cancel()
-	out, err := g.run(ctx, dir, nil, []byte("protocol=https\nhost="+host+"\n\n"), "credential", "fill")
+	out, err := g.Run(ctx, dir, nil, []byte("protocol=https\nhost="+host+"\n\n"), "credential", "fill")
 	if err != nil {
 		return ""
 	}
