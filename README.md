@@ -319,7 +319,7 @@ A non-blocking violation prints `warning` instead of `error`. Lines and columns 
 
 On your machine, `stele check` adds one line to the [log](#what-stele-records). In CI it writes nothing: it only logs where stele already has its key and `.stele/`.
 
-With `--base`, `stele check` also says when the branch adds, changes or deletes a `stele.md` or `stele.json` (`stele.md: modified on this branch: ...`), so reviewers see a change to the rules. It doesn't change the exit code; in JSON it is `rule_files_changed`.
+With `--base`, `stele check` also says when the branch adds, changes or deletes a `stele.md` or `stele.json` (`stele.md: modified on this branch: ...`), or moves a pin of [shared rules](#shared-rules-from-another-repository) in `stele.lock` (`stele.lock: modified on this branch: it pins the shared rules; review the change`), so reviewers see a change to the rules. It doesn't change the exit code; in JSON it is `rule_files_changed`.
 
 | Exit | Meaning |
 |---|---|
@@ -448,7 +448,7 @@ stele needs read access to git@github.com:acme/guidelines.git: check that git ls
 
 | Key | Effect |
 |---|---|
-| `repo` | The repository: `https://host/path`, `ssh://host/path` or `user@host:path`. No local path, no other transport, no password in the URL. In the `user@host:path` form the path can't start with `/`: write `ssh://user@host/abs/path` instead. |
+| `repo` | The repository: `https://host/path`, `ssh://host/path` or `user@host:path`. No local path, no other transport, no password in the URL, and no user in an `https` URL: `stele.json` is committed, and a token there would be too. In the `user@host:path` form the path can't start with `/`: write `ssh://user@host/abs/path` instead. |
 | `path` | Where `stele.md` goes in it. Default `stele.md`. Letters, digits, `.`, `_`, `-` and `/`, ending in `.md`. |
 
 One repository per project needs only `repo`. Several projects can share one repository, each with its own `path`.
@@ -575,7 +575,9 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **A shared rule's `scope` matches paths in each project**, not in the guidelines repository.
 
-**A pin moves only with `stele compile --update` or a change in `stele.json`.** A commit that is gone from the remote (after a force push) can still be read where it is cached; elsewhere `stele check` exits 2 until you run `stele compile --update`.
+**A pin moves only with `stele compile --update` or a change in `stele.json`.** A pinned commit must be on its ref: its tip or a commit before it. One that isn't, such as a commit only on another branch or a fork's pull request, is refused, and so is one a force push removed, once stele fetches the ref again: `stele check` then exits 2 until you run `stele compile --update`.
+
+**After a pull that moves a pin, the hook doesn't enforce the new shared rules until you run `stele compile`.** It reads only the project's own rules: it keeps the shared rules your last `stele compile` read, and drops them once `stele.md` changes. It leaves the pulled `stele.lock` and `.claude/rules/stele-rules.md` as they are, so the agent still loads the new rules from that file at its next session.
 
 **Windows limits paths to 260 characters.** stele's clone of a guidelines repository is in your user cache directory, under a 64-character name; a very long user cache path can make the fetch fail with "Filename too long".
 

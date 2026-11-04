@@ -14,8 +14,9 @@ import (
 )
 
 // This file is the one in cmd/stele that reaches git for the git source
-// (ADR-0011). stele compile, stele check and stele init call it; stele hook
-// and stele stats never do (cmd/stele/hookreach_test.go).
+// (ADR-0011). runCompile, runCheck and init call sources; stele hook and
+// stele stats never do: TestHookCallsNeverReachGit and
+// TestStatsNeverReachesNetwork follow their calls.
 
 // gitCacheDir is where the git source keeps its clones: the user's cache
 // directory. Tests point it at a temp directory.
