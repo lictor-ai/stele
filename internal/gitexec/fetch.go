@@ -141,7 +141,7 @@ func (f *Fetcher) Ensure(ctx context.Context, repo, ref, commit string) error {
 	if name == "" {
 		name = "the default branch"
 	}
-	return fmt.Errorf("pinned commit %s of %s is %w as %s: run stele compile --update to pin its tip", short(commit), repo, ErrPinGone, name)
+	return fmt.Errorf("pinned commit %s of %s is %w as %s: run stele compile --update to pin its tip", short(commit), Redact(repo), ErrPinGone, name)
 }
 
 // File returns the file at path in commit, a plain file of at most max
@@ -290,6 +290,7 @@ func access(err error, repo string) error {
 	if !errors.Is(err, ErrGit) {
 		return err
 	}
+	repo = Redact(repo)
 	return fmt.Errorf("%w\nstele needs read access to %s: check that git ls-remote %s works here", err, repo, repo)
 }
 

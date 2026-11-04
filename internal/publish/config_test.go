@@ -88,7 +88,6 @@ func TestLoadConfigInvalid(t *testing.T) {
 func TestValidateRepo(t *testing.T) {
 	good := []string{
 		"https://github.com/me/g.git",
-		"https://user@github.com/me/g",
 		"ssh://git@gitlab.com/g/s/p.git",
 		"ssh://gitlab.com:2222/g/p",
 		"git@github.com:me/g.git",
@@ -128,6 +127,8 @@ func TestValidateRepo(t *testing.T) {
 		"https://user:secret@github.com/me/g.git",
 		"ssh://git:secret@gitlab.com/g/p.git",
 		"git:secret@github.com:me/g.git",
+		"https://user@github.com/me/g",
+		"https://ghp_token@github.com/me/g.git",
 	}
 	for _, repo := range bad {
 		err := validateRepo(repo)

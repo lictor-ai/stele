@@ -23,11 +23,12 @@ const repoForms = "use https://host/path, ssh://host/path or user@host:path"
 // ValidateRepo accepts https://host/path, ssh://host/path and user@host:path,
 // and nothing else: no local path, no file:// or ext::, no option, no
 // password. "repo" comes from stele.json, which a cloned repository chooses.
-// The error names repo but never a password; the caller says which setting
-// it is.
+// An https repo has no user either: stele.json is committed, and a token
+// there would be too. The error names repo, never a user or password in it;
+// the caller says which setting it is.
 func ValidateRepo(repo string) error {
 	bad := func(why string) error {
-		return fmt.Errorf("repo %q: %s; %s", repo, why, repoForms)
+		return fmt.Errorf("repo %q: %s; %s", Redact(repo), why, repoForms)
 	}
 	if repo == "" {
 		return errors.New("repo is empty; " + repoForms)
@@ -59,6 +60,9 @@ func ValidateRepo(repo string) error {
 	}
 	if _, has := u.User.Password(); has {
 		return errors.New("repo holds a password; remove it and let git's own login supply it")
+	}
+	if u.Scheme == "https" && u.User != nil {
+		return errors.New("repo has a user in an https URL; remove it and let git's own login supply it: stele.json is committed")
 	}
 	if strings.HasPrefix(u.User.Username(), "-") {
 		// ssh would read the user as an option: -oProxyCommand runs a command.
