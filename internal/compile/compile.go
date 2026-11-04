@@ -185,17 +185,12 @@ func writeGenerated(root string, files []File, replace func(string, []byte) erro
 }
 
 // generate renders each generated file from idx and compares it with the
-// one on disk. When pins names a source idx was not built from, idx lacks
-// that source's rules, so no file is changed: the committed one still holds
-// them (D71). That is the hook's index before the first stele compile on a
-// machine.
+// one on disk. When pins names a source idx was not built from at that
+// commit, idx lacks that source's rules as pinned, so no file is changed:
+// the committed one holds them (D71). That is the hook's index before the
+// first stele compile on a machine, or after a pull that moved a pin.
 func generate(root string, idx index.Index, pins []source.Pin, gens []Generated) []File {
-	partial := false
-	for _, p := range pins {
-		if _, ok := idx.Sources[p.Source]; !ok {
-			partial = true
-		}
-	}
+	partial := len(unreadPins(idx.Sources, pins)) > 0
 	files := make([]File, len(gens))
 	for i, g := range gens {
 		data := g.Render(idx)
@@ -346,9 +341,16 @@ func rebuild(ctx context.Context, root string, cur index.Index, ok bool, stale m
 	// Rules keep the order Plan gives them: builtins first, then the rest in
 	// index order.
 	var rules []source.Rule
+	// A pinned source the index holds at another commit than stele.lock pins,
+	// after a pull that moved the pin, is not carried over: its rules in the
+	// index are not the pinned ones. It counts as unread, so the plan keeps
+	// its lock entries and pin exactly, and changes no generated file.
+	moved := unreadPins(cur.Sources, lockPins(root))
 	fps := make(map[string]string, len(cur.Sources))
 	for name, fp := range cur.Sources {
-		fps[name] = fp
+		if !moved[name] {
+			fps[name] = fp
+		}
 	}
 	builtin := make(map[string]bool, len(builtins))
 	for _, b := range builtins {
@@ -365,7 +367,7 @@ func rebuild(ctx context.Context, root string, cur index.Index, ok bool, stale m
 		fps[b.Name()] = fp
 	}
 	for _, e := range cur.Rules {
-		if !builtin[e.Source] {
+		if !builtin[e.Source] && !moved[e.Source] {
 			rules = append(rules, rule(e))
 		}
 	}
@@ -443,6 +445,19 @@ func refresh(ctx context.Context, root string, builtins []source.Source, gens []
 		return // another process is rebuilding; it writes the files too
 	}
 	_ = writeGenerated(root, generate(root, cur, lockPins(root), gens), safefile.ReplaceNow)
+}
+
+// unreadPins are the pinned sources whose rules fps, a plan's or an index's
+// fingerprints, did not come from at the pinned commit. A pinned source's
+// fingerprint is its commit.
+func unreadPins(fps map[string]string, pins []source.Pin) map[string]bool {
+	out := map[string]bool{}
+	for _, p := range pins {
+		if fp, ok := fps[p.Source]; !ok || fp != p.Commit {
+			out[p.Source] = true
+		}
+	}
+	return out
 }
 
 // lockPins are the pins of stele.lock, or none when it cannot be read.

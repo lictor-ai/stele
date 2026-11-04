@@ -22,6 +22,7 @@ const (
 type pinnedFake struct {
 	commit string
 	body   string
+	more   []string // further rules, after body
 	got    []source.Pin
 	calls  int
 }
@@ -37,6 +38,9 @@ func (p *pinnedFake) ReadPinned(_ context.Context, _ string, pins []source.Pin) 
 	p.calls++
 	p.got = pins
 	rules := []source.Rule{{Source: p.Name(), Position: 0, Body: p.body}}
+	for i, b := range p.more {
+		rules = append(rules, source.Rule{Source: p.Name(), Position: i + 1, Body: b})
+	}
 	pin := source.Pin{Source: p.Name(), Repo: "git@example.com:g.git", Path: "stele.md", Commit: p.commit}
 	return rules, p.commit, pin, nil
 }
