@@ -235,11 +235,18 @@ func ExitCode(err error) int {
 	return -1
 }
 
+// firstWord is the git subcommand in args: the first word that is not an
+// option, nor the value of a -c.
 func firstWord(args []string) string {
-	if len(args) == 0 {
-		return ""
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "-c":
+			i++
+		case !strings.HasPrefix(a, "-"):
+			return a
+		}
 	}
-	return args[0]
+	return ""
 }
 
 // Message cleans what git wrote on stderr for printing. Lines the remote

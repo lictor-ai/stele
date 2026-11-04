@@ -32,6 +32,7 @@ github.com/lictor-ai/stele
 cmd/stele/            main, subcommand dispatch, exit codes
 internal/source/      the Source slot: Rule, the Source interface
   stelemd/            the built-in stele.md source: read, hash, parse
+  gitrepo/            the built-in git source: a shared stele.md at a pinned commit (D71) — pure, git behind an interface
 internal/lock/        stele.lock: identity, reconciliation
 internal/safefile/    crash-safe replace, create-if-absent, lock files, safe dirs and bounded reads (§7)
 internal/scope/       scope globs: which rules apply to a file
@@ -149,6 +150,14 @@ type Source interface {
 }
 
 func Hash(body string) string // pure, shared by every source
+
+// A pinned source reads at a commit stele.lock records (D72): the git source.
+type Pin struct{ Source, Repo, Ref, Path, Commit string } // JSON: source, repo, ref, path, commit
+type Pinned interface {
+    Source
+    ReadPinned(ctx context.Context, root string, pins []Pin) (rules []Rule, fingerprint string, pin Pin, err error)
+}
+var ErrUnpinned error // no pin for the source as stele.json sets it: stele check fails on it
 ```
 
 `Rule.ID` is empty for every built-in source. Identity is not a property of a
@@ -202,6 +211,36 @@ other sources.
 Because nothing here writes, the byte-preservation problem disappears entirely,
 and with it the CRLF concern that was open in §13.
 
+`ParseNamed(src, file)` is `Parse` for a file that is not the project's own
+`stele.md`: its rules and errors name `file`. The git source uses it.
+
+#### `internal/source/gitrepo` — the git source
+
+```go
+type Config struct{ Repo, Ref, Path string }      // one "git" entry of stele.json's sources
+type Mode int                                     // Pinned (compile, init), Frozen (check), Update (compile --update)
+type Git interface {                              // internal/gitexec.Fetcher
+    Remote(repo string) (label string, err error)
+    Resolve(ctx context.Context, repo, ref string) (commit string, err error)
+    Ensure(ctx context.Context, repo, ref, commit string) error
+    File(ctx context.Context, repo, commit, path string, max int) ([]byte, error)
+}
+func New(cfg Config, git Git, mode Mode) (*Source, error) // a source.Pinned
+```
+
+The source's name is `git:<host>/<path>/<file>`, stable when only the ref
+changes. `ReadPinned` finds its pin among the lock's: `Frozen` uses it and
+fails with `ErrUnpinned` when it is missing or was made with other settings;
+`Pinned` uses a matching pin and resolves the ref otherwise; `Update` always
+resolves. It reads the file at the commit, parses it with
+`stelemd.ParseNamed`, and takes the rules' ids from the guidelines
+repository's own `stele.lock` beside a shared `stele.md` (D52): same body and
+position, then same body; an id there that is not a lower-case UUID is an
+error, since it goes into the generated rules file. `Read` and `Fingerprint`
+take the pin from `stele.lock` and start nothing. The package imports no
+`os/exec`: the hook reaches it through `internal/plugin`, so git must stay
+behind `Git`.
+
 ### `internal/lock` — identity
 
 Owns `stele.lock`: committed, stele-written, never hand-edited.
@@ -215,9 +254,10 @@ type Entry struct {
 }
 
 type File struct {
-    Version int     `json:"version"`
-    Project string  `json:"project"` // this repository's UUID, minted once (D51)
-    Rules   []Entry `json:"rules"`
+    Version int          `json:"version"`           // 1, or 2 when Sources is not empty
+    Project string       `json:"project"`           // this repository's UUID, minted once (D51)
+    Sources []source.Pin `json:"sources,omitempty"` // each pinned source's commit (D72)
+    Rules   []Entry      `json:"rules"`
 }
 
 type Report struct {
@@ -229,7 +269,8 @@ type Report struct {
 type Rekey struct{ Old, New string }
 
 func Load(root string) (File, error)
-func Save(root string, f File) error
+func Decode(data []byte) (File, error) // a stele.lock's bytes, as Load reads them: the git source's guidelines lock
+func Save(root string, f File) error   // version 2 when there are pins
 func Validate(f File) error // ErrDuplicateID, ErrInvalid
 func Equal(a, b File) bool  // would save identically: a lock on disk not Equal to the planned one is out of date
 
@@ -266,7 +307,9 @@ that duplicated an entry. It runs on every load, because two rules silently
 sharing a history is worse than a loud failure. It also rejects an entry with no
 id and a lock with no `project` as `ErrInvalid`, as `Load` does for bad JSON or
 another version: only a hand edit produces them, and accepting them would let one
-rule claim two entries or mint a second project id.
+rule claim two entries or mint a second project id. A pin with no source, a
+commit that is not a git commit id, or a source pinned twice is `ErrInvalid`
+too.
 
 ### `internal/index` — the build artifact
 
@@ -338,6 +381,9 @@ type GeneratedError struct{ Path string; Err error }      // a file not written;
 // Plan reads every source and writes nothing.
 // It holds no key, so IndexChanged is always true: stele check never serves the index.
 func Plan(ctx context.Context, root string, srcs []source.Source, gens []Generated, newID func() string) (Result, error)
+// PlanLocal is Plan for stele stats: the builtins read, every other source carried over
+// from the index as EnsureFresh carries it; it starts no process and writes nothing.
+func PlanLocal(ctx context.Context, root string, builtins []source.Source, gens []Generated, newID func() string, key sign.Key) (Result, error)
 // Compile is stele compile: read every source, then Plan and Apply under the compile lock.
 func Compile(ctx context.Context, root string, srcs []source.Source, gens []Generated, newID func() string, key sign.Key) (Result, error)
 // Apply writes the lock, the index and the generated files, each only when it changed, in that order.
@@ -433,6 +479,14 @@ and every file it reads is replaced whole.
 `compile` never resolves plugins itself. `cmd/` asks `internal/plugin` for the
 sources and passes them in, which keeps `compile` free of `PATH`, executables and
 `stele.json`.
+
+**Pins** (D72). `Plan` and `Compile` give each `source.Pinned` the pins of the
+current `stele.lock` and save the pins they return in the lock's `Sources`.
+`EnsureFresh` reads no pinned source, so its rebuild keeps every pin, as it
+keeps the lock entries of sources it did not read. When `stele.lock` pins a
+source the index was not built from (a fresh clone before its first
+`stele compile`), no generated file is changed: the committed rules file still
+holds that source's rules, and an index without them must not overwrite it.
 
 ### `internal/session` — shared state between two processes
 
@@ -763,8 +817,8 @@ type Ref struct {
 
 func LoadConfig(root string) (Config, error) // reads stele.json; absent means empty
 
-func Sources(root string, c Config) ([]source.Source, error)  // built-ins first, then externals
-func Builtins() []source.Source                               // what EnsureFresh gets
+func Sources(root string, git gitrepo.Git, mode gitrepo.Mode) ([]source.Source, error) // built-ins, then stele.json's git sources (D71)
+func Builtins() []source.Source                               // what EnsureFresh gets; never the git source
 func Checkers(root string, c Config) (map[string]check.Checker, error)
 func Sinks(root string, c Config) ([]Sink, error)             // externals only
 ```
@@ -1864,6 +1918,7 @@ stele init         set stele up here: Claude Code hooks, stele.md, .stele/, then
                      [--remind=on|off] [--check=on|off]
 stele uninstall    remove exactly what init wrote
 stele compile      every source, then compile.Plan + compile.Apply (lock, index, .claude/rules/stele-rules.md); prints the reconcile report
+                     and each git source's pin [--update: pin every git source at its ref's tip] (D72)
 stele check        validate the rules, run checkers on changed files; writes nothing but a log line where stele already runs, nothing in CI (ADR-0010)
                      [--base <ref> | --all] [--format text|json] [path...]
 stele stats        how the rules are doing, from the local log; writes nothing, no network (D70)
@@ -1890,7 +1945,11 @@ Standard-library `flag` and a switch on `os.Args[1]`. Eight subcommands with a
 handful of flags does not justify a CLI framework.
 
 `compile`, `check`, `status` and `push` are the only commands that run external
-plugins. `mcp` and `hook` never do (D45).
+plugins. `mcp` and `hook` never do (D45). `compile`, `check` and `init` are the
+only ones that run the git source, through `cmd/stele/sources.go`; `hook` and
+`stats` never reach it (D71). `check` reads each git source at its pin and never
+moves it: a listed source with no matching pin is exit 1, a repository it cannot
+read is exit 2.
 
 `check` exits 0 when the rules are valid and nothing blocking was found, 1 for an
 invalid rule or a blocking violation, and 2 when stele or a plugin could not run

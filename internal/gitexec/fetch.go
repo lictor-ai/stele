@@ -292,7 +292,7 @@ func access(err error, repo string) error {
 	if !errors.Is(err, ErrGit) {
 		return err
 	}
-	return fmt.Errorf("%w; stele needs read access to %s: check that git ls-remote %s works here", err, repo, repo)
+	return fmt.Errorf("%w\nstele needs read access to %s: check that git ls-remote %s works here", err, repo, repo)
 }
 
 // cmd returns git, found once, and the URL it fetches repo from.

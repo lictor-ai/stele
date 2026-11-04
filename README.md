@@ -43,7 +43,7 @@ And it stays out of your way:
 
 - 📦 **One Go binary.** No daemon, no service, no config server.
 - 🧠 **No model.** Rules are chosen by path and checked by regex: same input, same answer.
-- 🔒 **No network calls**, except `stele publish`, which you run yourself.
+- 🔒 **No network calls**, except `stele publish`, which you run yourself, and fetching [shared rules](#shared-rules-from-another-repository) you list in `stele.json`.
 - ⚡ **About 0.1 s per write.** See the [measured times](#does-it-work).
 
 ## Quick start
@@ -292,7 +292,7 @@ Too little data to judge the rules: 6 turns with a write logged, stats need 30. 
 | `--since 30d` | The window: `12h`, `30d`, `2w`, a day like `2026-10-01`, or `all`. Default `30d` |
 | `--format json` | JSON, with `"v": 1` and the project id. It has every broken rule, and a fix rate once a rule has 10 broken writes |
 
-`stele stats` exits 0, or 2 when it can't run. It reads the log and `stele.md`, writes nothing, and makes no network call. Lines it can't use are counted at the end: lines not signed on this machine, lines from another project, lines in a newer format.
+`stele stats` exits 0, or 2 when it can't run. It reads the log, `stele.md` and, for [shared rules](#shared-rules-from-another-repository), the rules from your last `stele compile`; it writes nothing and makes no network call. Lines it can't use are counted at the end: lines not signed on this machine, lines from another project, lines in a newer format.
 
 ## CI: stele check
 
@@ -324,8 +324,8 @@ With `--base`, `stele check` also says when the branch adds, changes or deletes 
 | Exit | Meaning |
 |---|---|
 | 0 | Rules are valid (or there are none) and there is no blocking violation |
-| 1 | A rule is invalid, `stele.lock` or `.claude/rules/stele-rules.md` is out of date, or there is a blocking violation |
-| 2 | stele couldn't run: bad flags, no git, a git inside the project, unknown `--base` ref, no merge base |
+| 1 | A rule is invalid, `stele.lock` or `.claude/rules/stele-rules.md` is out of date (`stele.lock` also when `stele.json` lists a shared rules source it has no pin for), or there is a blocking violation |
+| 2 | stele couldn't run: bad flags, no git, a git inside the project, unknown `--base` ref, no merge base, a bad `sources` in `stele.json`, a [shared rules](#shared-rules-from-another-repository) repository it can't read |
 
 GitHub Actions:
 
@@ -348,7 +348,7 @@ jobs:
       - run: stele check --base origin/${{ github.base_ref }}
 ```
 
-Pin a version instead of `@latest` once one is tagged.
+Pin a version instead of `@latest` once one is tagged. With [shared rules](#shared-rules-from-another-repository), the job also needs read access to the guidelines repository.
 
 ## stele.json
 
@@ -360,6 +360,7 @@ Optional, committed next to `stele.md`. This is the default:
 
 | Key | Effect |
 |---|---|
+| `sources` | Rules from another git repository: see [Shared rules](#shared-rules-from-another-repository). |
 | `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. It applies only to a part of the hook that is on: with `--remind=off` or `--check=off`, that part's failures only warn. |
 
 `backstop` is no longer read: use `stele init --remind=off`. `stele init` says so when `stele.json` still sets it, and leaves the file as it is:
@@ -371,6 +372,70 @@ stele init: kept the existing stele.md
 stele init: stele.json: backstop is no longer read; use stele init --remind=off
 up to date, nothing written
 hooks: remind on, check on
+```
+
+## Shared rules from another repository
+
+Keep your guidelines in one repository and use them in all your projects. In each project, name that repository in `stele.json`:
+
+```json
+{
+  "sources": [
+    { "name": "git", "config": { "repo": "git@github.com:acme/guidelines.git", "ref": "main" } }
+  ]
+}
+```
+
+`stele compile` reads `stele.md` from it, adds its rules after the project's own, and pins the commit it read in `stele.lock`:
+
+```
+$ stele compile
+github.com/acme/guidelines/stele.md: pinned main at 8611d48
+3 rules: 0 matched by text, 0 by position, 1 new, 0 dropped, 2 supplied by their source
+wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
+```
+
+Commit `stele.lock` and `.claude/rules/stele-rules.md`: every developer and every CI run then uses the same commit. A new commit in the guidelines changes nothing until you move the pin on purpose:
+
+```
+$ stele compile
+3 rules: 1 matched by text, 0 by position, 0 new, 0 dropped, 2 supplied by their source
+up to date, nothing written
+
+$ stele compile --update
+github.com/acme/guidelines/stele.md: main 8611d48 -> 1dca9c3
+4 rules: 1 matched by text, 0 by position, 0 new, 0 dropped, 3 supplied by their source
+wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
+```
+
+Review the `stele.lock` and rules file diff, then commit them. Changing `repo`, `ref` or `path` in `stele.json` pins again at the next `stele compile`. Until then `stele check` fails:
+
+```
+$ stele check
+stele check: stele.lock is out of date with stele.json: run stele compile and commit stele.lock
+```
+
+| Key | Effect |
+|---|---|
+| `repo` | The repository: `https://host/path`, `ssh://host/path` or `user@host:path`, as for `stele publish`. |
+| `ref` | A branch or tag. Default: the repository's default branch. A name that is both a branch and a tag needs `refs/heads/...` or `refs/tags/...`. |
+| `path` | The rules file in it. Default `stele.md`. Letters, digits, `.`, `_`, `-` and `/`, ending in `.md`. |
+
+- **Several sources add up.** List up to 16; their rules come after the project's, in the order listed. Nothing wins over anything: every rule applies.
+- **Ids come from the guidelines.** When the guidelines repository has its own `stele.lock` next to its `stele.md`, its rules keep those ids in every project ("supplied by their source"). Run `stele compile` there and commit its `stele.lock`.
+- **It uses your git login.** stele runs `git` on `PATH`, outside the project, and never asks for a password or holds a token: ssh keys and credential helpers work as they do for `git clone`.
+- **It needs the network only for a new pin.** stele keeps a bare clone of each repository in your user cache directory (`stele/sources/` in it), never in the project. A commit it already has is read offline.
+- **The hook never fetches.** It uses the rules from the last `stele compile`, `stele check` or `stele init` on your machine.
+
+In CI, `stele check` reads the pinned commit, so the job needs read access to the guidelines repository. GitHub's default `GITHUB_TOKEN` reads only the repository the job runs in: give the job a deploy key for the guidelines repository, or a read token set in git's own config, never in `stele.json`. With no access, `stele check` exits 2:
+
+```
+$ stele check
+stele check: source git:github.com/acme/guidelines/stele.md: git failed: git ls-remote: ERROR: Repository not found.
+fatal: Could not read from remote repository.
+Please make sure you have the correct access rights
+and the repository exists.
+stele needs read access to git@github.com:acme/guidelines.git: check that git ls-remote git@github.com:acme/guidelines.git works here
 ```
 
 ## Publish the rules: stele publish
@@ -498,6 +563,22 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
 
+### Shared rules
+
+**A shared rule can't be switched off or changed in a project.** It applies as written, next to the project's own rules.
+
+**Before the first `stele compile`, `stele check` or `stele init` on a machine, the hook knows only the project's own rules.** A fresh clone has no index yet, and the hook never fetches. The agent still loads the shared rules from the committed `.claude/rules/stele-rules.md`, but no write is denied or checked against them until then.
+
+**A cloned project chooses where `stele compile`, `stele check` and `stele init` connect.** Its `stele.json` names the host, and ssh offers your keys to it, as `git clone` of a project with submodules would. Look at a `sources` entry before running stele in a project you don't trust.
+
+**The guidelines repository writes what your agent reads.** A pin moved with `stele compile --update` brings in whatever its rules say: review the diff of `.claude/rules/stele-rules.md` before you commit it.
+
+**A shared rule's `scope` matches paths in each project**, not in the guidelines repository.
+
+**A pin moves only with `stele compile --update` or a change in `stele.json`.** A commit that is gone from the remote (after a force push) can still be read where it is cached; elsewhere `stele check` exits 2 until you run `stele compile --update`.
+
+**Windows limits paths to 260 characters.** stele's clone of a guidelines repository is in your user cache directory, under a 64-character name; a very long user cache path can make the fetch fail with "Filename too long".
+
 ### Projects
 
 **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too.
@@ -526,6 +607,8 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 ### Upgrades
 
+**A stele from before shared rules refuses a `stele.lock` that pins one.** Such a lock is `"version": 2`. The older stele says to restore it or delete it: do neither, upgrade stele instead.
+
 **The reminder to re-run `stele init` compares tagged releases only.** A build from a commit, or with local changes, stamps `devel` and is never warned about.
 
 > [!WARNING]
@@ -533,7 +616,9 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 ### Network and publishing
 
-**Only `stele publish` sends anything, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com. stele makes no other network call, and never sends the log. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
+**Only `stele publish` sends anything, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com. stele never sends the log.
+
+**Shared rules are fetched, never sent.** `stele compile`, `stele check` and `stele init` connect to each `repo` under `sources` when they need a commit they don't have. git sends what a fetch sends: the refs and commits it wants and has of that repository, and your login for that host through your own git setup. Nothing of the project goes with it. The hook and `stele stats` never connect. stele makes no other network call. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 
 **`stele publish` opens merge requests on github.com and gitlab.com only.** Any other host, a self-hosted GitHub or GitLab included, gets the branch pushed and is told to open the request by hand, with no link.
 
@@ -541,11 +626,11 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **`stele publish` needs a repository with at least one commit, and git access to it.** git and Git Credential Manager are never allowed to prompt. ssh still can: a key's passphrase or an unknown host key is asked by ssh itself.
 
-**`stele check` and `stele publish` guard against programs a project brings with it, and only in these ways.**
+**`stele check`, `stele publish` and shared rules guard against programs a project brings with it, and only in these ways.**
 
-- **Programs refused.** `stele check` refuses a git, and `stele publish` a git, gh, glab or browser opener, found on `PATH` inside the project or inside the git repository that holds it, or through a relative `PATH` entry. That counts one that links to somewhere else, as a nix `result/bin` does. Links and junctions are followed, and directories compared by identity, so another spelling of the path counts too. `stele check` then exits 2; `stele check <paths>` needs no git.
+- **Programs refused.** `stele check` and shared rules refuse a git, and `stele publish` a git, gh, glab or browser opener, found on `PATH` inside the project or inside the git repository that holds it, or through a relative `PATH` entry. That counts one that links to somewhere else, as a nix `result/bin` does. Links and junctions are followed, and directories compared by identity, so another spelling of the path counts too. `stele check` then exits 2; `stele check <paths>` needs no git.
 - **`PATH` entries removed.** What they start doesn't get `PATH` entries that are empty, relative or inside those same directories. On Windows, a quoted entry goes whole if any `;`-separated part of it would.
-- **git config overridden.** Every git command they run is given `core.fsmonitor=false` and `safe.bareRepository=explicit`, so git won't use a folder laid out as a bare repository unless told to: `stele check` in one exits 2. `stele publish` also gives `credential.interactive=never`, the `protocol` settings that allow only https and ssh, and `submodule.recurse=false`, `fetch.recurseSubmodules=false` and `push.recurseSubmodules=no`. `stele check` doesn't: a partial clone still fetches what it needs from where it was cloned.
+- **git config overridden.** Every git command they run is given `core.fsmonitor=false` and `safe.bareRepository=explicit`, so git won't use a folder laid out as a bare repository unless told to: `stele check` in one exits 2. `stele publish` and shared rules also give `credential.interactive=never`, the `protocol` settings that allow only https and ssh, and `submodule.recurse=false`, `fetch.recurseSubmodules=false` and `push.recurseSubmodules=no`; shared rules add `transfer.fsckObjects=true`. `stele check` doesn't: a partial clone still fetches what it needs from where it was cloned.
 
 Not covered:
 

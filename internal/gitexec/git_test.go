@@ -126,6 +126,14 @@ func TestTimeoutFor(t *testing.T) {
 	}
 }
 
+func TestErrorNamesTheSubcommand(t *testing.T) {
+	g := testGit(t)
+	_, err := g.Run(context.Background(), t.TempDir(), nil, nil, "-c", "x.y=z", "--git-dir="+t.TempDir(), "cat-file", "-e", "HEAD")
+	if err == nil || !strings.Contains(err.Error(), "git cat-file:") {
+		t.Errorf("err = %v, want it to name git cat-file", err)
+	}
+}
+
 func TestCleanLines(t *testing.T) {
 	in := "fatal: \x1b[31mone\ntwo\tthree\nfour‮"
 	if got, want := CleanLines(in), "fatal: one\ntwo three\nfour"; got != want {

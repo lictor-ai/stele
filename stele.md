@@ -20,7 +20,8 @@ edit or rewrite them, not even to fix or migrate them. Only source plugins
 rules from the compiled index (index.Load, compile.EnsureFresh). The one
 exception: internal/publish reads stele.md from git (git cat-file, the
 committed blob) to copy it to the publish repository, and never parses it
-(D64).
+(D64). The git source (internal/source/gitrepo) reads a shared rule file
+through internal/gitexec, at the commit stele.lock pins (D71, D72).
 
 ---
 
