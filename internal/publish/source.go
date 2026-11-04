@@ -45,26 +45,26 @@ type committed struct {
 // it: the one read of a rule file outside a source plugin (D40, D64).
 func readCommitted(ctx context.Context, g gitCmd, root string) (committed, error) {
 	var c committed
-	top, err := g.run(ctx, root, nil, nil, "rev-parse", "--show-toplevel")
+	top, err := g.Run(ctx, root, nil, nil, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return c, ErrNotRepo
 	}
-	gitDir, err := g.run(ctx, root, nil, nil, "rev-parse", "--absolute-git-dir")
+	gitDir, err := g.Run(ctx, root, nil, nil, "rev-parse", "--absolute-git-dir")
 	if err != nil {
 		return c, ErrNotRepo
 	}
 	if err := checkGitDir(strings.TrimSpace(top), strings.TrimSpace(gitDir)); err != nil {
 		return c, err
 	}
-	if _, err := g.run(ctx, root, nil, nil, "rev-parse", "--verify", "-q", "HEAD^{commit}"); err != nil {
+	if _, err := g.Run(ctx, root, nil, nil, "rev-parse", "--verify", "-q", "HEAD^{commit}"); err != nil {
 		return c, fmt.Errorf("%w: the repository has no commit yet", ErrUntracked)
 	}
-	prefix, err := g.run(ctx, root, nil, nil, "rev-parse", "--show-prefix")
+	prefix, err := g.Run(ctx, root, nil, nil, "rev-parse", "--show-prefix")
 	if err != nil {
 		return c, err
 	}
 	path := strings.TrimSpace(prefix) + rulesFile
-	tree, err := g.run(ctx, root, nil, nil, "ls-tree", "HEAD", "--", rulesFile)
+	tree, err := g.Run(ctx, root, nil, nil, "ls-tree", "HEAD", "--", rulesFile)
 	if err != nil {
 		return c, err
 	}
@@ -76,30 +76,30 @@ func readCommitted(ctx context.Context, g gitCmd, root string) (committed, error
 	default:
 		return c, fmt.Errorf("%w: it is committed as something other than a plain file (mode %s)", ErrUntracked, mode)
 	}
-	if _, err := g.run(ctx, root, nil, nil, "diff", "--quiet", "HEAD", "--", rulesFile); err != nil {
+	if _, err := g.Run(ctx, root, nil, nil, "diff", "--quiet", "HEAD", "--", rulesFile); err != nil {
 		if exitCode(err) == 1 {
 			return c, ErrEdited
 		}
 		return c, err
 	}
-	size, err := g.run(ctx, root, nil, nil, "cat-file", "-s", "HEAD:"+path)
+	size, err := g.Run(ctx, root, nil, nil, "cat-file", "-s", "HEAD:"+path)
 	if err != nil {
 		return c, err
 	}
 	if n, err := strconv.ParseInt(strings.TrimSpace(size), 10, 64); err != nil || n > maxRules {
 		return c, fmt.Errorf("stele.md is over %d bytes", maxRules)
 	}
-	blob, err := g.runLimit(ctx, root, nil, nil, maxRules, "cat-file", "blob", "HEAD:"+path)
+	blob, err := g.RunLimit(ctx, root, nil, nil, maxRules, "cat-file", "blob", "HEAD:"+path)
 	if err != nil {
 		return c, err
 	}
 	c.Blob = []byte(blob)
-	head, err := g.run(ctx, root, nil, nil, "rev-parse", "HEAD")
+	head, err := g.Run(ctx, root, nil, nil, "rev-parse", "HEAD")
 	if err != nil {
 		return c, err
 	}
 	c.Head = strings.TrimSpace(head)
-	ident, err := g.run(ctx, root, nil, nil, "var", "GIT_AUTHOR_IDENT")
+	ident, err := g.Run(ctx, root, nil, nil, "var", "GIT_AUTHOR_IDENT")
 	if err != nil {
 		return c, err
 	}

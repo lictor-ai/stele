@@ -31,7 +31,7 @@ var lockWait = 5 * time.Second
 
 // lockStale is the age at which a cache lock was left by a crash. It is
 // longer than the longest run: four git calls that talk to the remote, each
-// up to netTimeout, and the local ones.
+// up to gitexec.NetTimeout, and the local ones.
 const lockStale = 3 * time.Hour
 
 // cacheRoot is the directory that holds every publish cache.
@@ -75,7 +75,7 @@ type remoteState struct {
 // lsRemote reads the repository's default branch and the tip of branchRef
 // before anything is cloned, so an empty repository leaves no cache behind.
 func lsRemote(ctx context.Context, g gitCmd, dir, url, branchRef string) (remoteState, error) {
-	out, err := g.run(ctx, dir, nil, nil, "ls-remote", "--symref", "--", url, "HEAD", branchRef)
+	out, err := g.Run(ctx, dir, nil, nil, "ls-remote", "--symref", "--", url, "HEAD", branchRef)
 	if err != nil {
 		return remoteState{}, err
 	}
@@ -101,7 +101,7 @@ func lsRemote(ctx context.Context, g gitCmd, dir, url, branchRef string) (remote
 // bare runs git on the bare clone at dir, naming it with --git-dir so git
 // never looks for a repository above it.
 func bare(ctx context.Context, g gitCmd, dir string, env []string, stdin []byte, args ...string) (string, error) {
-	return g.run(ctx, dir, env, stdin, append([]string{"--git-dir=" + dir}, args...)...)
+	return g.Run(ctx, dir, env, stdin, append([]string{"--git-dir=" + dir}, args...)...)
 }
 
 // syncCache makes dir a bare clone of url holding base, and branchRef when
@@ -114,7 +114,7 @@ func syncCache(ctx context.Context, g gitCmd, dir, url string, s remoteState, br
 		}
 		// Only the default branch: the publish branch comes with the fetch
 		// below. clone, unlike init, takes the remote's object format.
-		if _, err := g.run(ctx, filepath.Dir(dir), nil, nil, "clone", "--bare", "--single-branch", "--branch", s.Base, "--no-tags", "--quiet", "--", url, dir); err != nil {
+		if _, err := g.Run(ctx, filepath.Dir(dir), nil, nil, "clone", "--bare", "--single-branch", "--branch", s.Base, "--no-tags", "--quiet", "--", url, dir); err != nil {
 			return err
 		}
 	}

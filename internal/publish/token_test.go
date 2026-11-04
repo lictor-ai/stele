@@ -24,7 +24,7 @@ func TestTokenSourcesGitHub(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "env-token")
 	t.Setenv("GH_TOKEN", "must-not-reach-gh")
 	t.Setenv("GITLAB_TOKEN", "gitlab-only")
-	g := gitCmd{bin: filepath.Join(bin, "git")}
+	g := gitCmd{Bin: filepath.Join(bin, "git")}
 
 	got := tokens(defaultTokenSources(g, root, dir, parseRemote("git@github.com:me/g.git")))
 	want := []string{"gh=gh-token", "git credential=cred-token", "GITHUB_TOKEN=env-token"}
@@ -64,7 +64,7 @@ func TestTokenSourcesGitLab(t *testing.T) {
 	t.Setenv("FAKE_GIT_EXIT", "128")
 	t.Setenv("GITLAB_TOKEN", "env-token")
 	t.Setenv("GITHUB_TOKEN", "github-only")
-	g := gitCmd{bin: filepath.Join(bin, "git")}
+	g := gitCmd{Bin: filepath.Join(bin, "git")}
 
 	got := tokens(defaultTokenSources(g, t.TempDir(), t.TempDir(), parseRemote("git@gitlab.com:a/b.git")))
 	want := []string{"glab=glab-token", "git credential=", "GITLAB_TOKEN=env-token"}
@@ -78,7 +78,7 @@ func TestTokenSourcesGitLab(t *testing.T) {
 
 func TestTokenSourcesMissingCLI(t *testing.T) {
 	bin, _ := fakeTools(t, "git")
-	g := gitCmd{bin: filepath.Join(bin, "git")}
+	g := gitCmd{Bin: filepath.Join(bin, "git")}
 	got := tokens(defaultTokenSources(g, t.TempDir(), t.TempDir(), parseRemote("git@github.com:me/g.git")))
 	if got[0] != "gh=" {
 		t.Errorf("missing gh: %q", got)
@@ -88,7 +88,7 @@ func TestTokenSourcesMissingCLI(t *testing.T) {
 func TestTokenSourcesRefuseCLIInProject(t *testing.T) {
 	bin, log := fakeTools(t, "gh", "git")
 	t.Setenv("FAKE_GH_OUT", "gh-token\n")
-	g := gitCmd{bin: filepath.Join(bin, "git")}
+	g := gitCmd{Bin: filepath.Join(bin, "git")}
 	srcs := defaultTokenSources(g, filepath.Dir(bin), t.TempDir(), parseRemote("git@github.com:me/g.git"))
 	if tok := srcs[0].get(context.Background()); tok != "" {
 		t.Errorf("gh inside the project gave %q", tok)
@@ -103,7 +103,7 @@ func TestTokenSourcesOtherHost(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "x")
 	t.Setenv("GITLAB_TOKEN", "x")
 	for _, repo := range []string{"git@gitlab.attacker.example:x/y.git", "https://GitHub.com/x/y", "https://github.com.evil.example/x/y"} {
-		if srcs := defaultTokenSources(gitCmd{bin: "git"}, t.TempDir(), t.TempDir(), parseRemote(repo)); len(srcs) != 0 {
+		if srcs := defaultTokenSources(gitCmd{Bin: "git"}, t.TempDir(), t.TempDir(), parseRemote(repo)); len(srcs) != 0 {
 			t.Errorf("%s: %d token sources, want none", repo, len(srcs))
 		}
 	}

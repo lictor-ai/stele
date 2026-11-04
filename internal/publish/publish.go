@@ -71,7 +71,7 @@ func Run(ctx context.Context, root string) (Result, error) {
 	}
 	defer unlock()
 	parent := filepath.Dir(dir)
-	if _, err := g.run(ctx, parent, nil, nil, "check-ref-format", branchRef); err != nil {
+	if _, err := g.Run(ctx, parent, nil, nil, "check-ref-format", branchRef); err != nil {
 		return Result{}, fmt.Errorf("%w: path %q does not make a valid branch name", ErrBadConfig, cfg.Path)
 	}
 
