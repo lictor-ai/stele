@@ -1,0 +1,10 @@
+{
+  "session_id": "01a1a883-dc24-7932-8abd-64e03740d9f7",
+  "turn_id": "01a1a883-dd1d-7e10-82d1-682ab3c8c0fe",
+  "transcript_path": "C:\\Users\\user\\.codex\\sessions\\2026\\11\\04\\rollout-2026-11-04T22-42-56-01a1a883-dc24-7932-8abd-64e03740d9f7.jsonl",
+  "cwd": "C:\\Users\\user\\proj",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Do these steps, each as its own separate tool call, no other tool calls: 1) apply_patch: create a.txt containing one. 2) apply_patch: in existing.txt change hello to hello world. 3) ONE apply_patch call that adds b.txt containing two, updates other.txt changing second to second line, and deletes deleteme.txt. 4) shell: run exactly: Set-Content -Path c.txt -Value three . Then reply done."
+}

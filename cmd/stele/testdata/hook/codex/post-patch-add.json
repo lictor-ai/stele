@@ -1,0 +1,15 @@
+{
+  "session_id": "01a1a883-dc24-7932-8abd-64e03740d9f7",
+  "turn_id": "01a1a883-dd1d-7e10-82d1-682ab3c8c0fe",
+  "transcript_path": "C:\\Users\\user\\.codex\\sessions\\2026\\11\\04\\rollout-2026-11-04T22-42-56-01a1a883-dc24-7932-8abd-64e03740d9f7.jsonl",
+  "cwd": "C:\\Users\\user\\proj",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Add File: a.txt\n+one\n*** End Patch"
+  },
+  "tool_response": "Exit code: 0\nWall time: 6.4 seconds\nOutput:\nSuccess. Updated the following files:\nA a.txt\n",
+  "tool_use_id": "exec-04c14d87-cd9c-4500-8c63-af8055f01deb"
+}
