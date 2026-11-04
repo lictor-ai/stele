@@ -59,7 +59,7 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 		return exitOK
 	}
 	ev, err := agent.Parse(data)
-	if err != nil || (ev.File == "" && ev.Command == "" && !ev.Kind.Starts()) {
+	if err != nil || (len(ev.Edits) == 0 && ev.Command == "" && !ev.Kind.Starts()) {
 		return exitOK
 	}
 	// Go exits 2 on a panic, which would block the write: a bug in stele
@@ -77,16 +77,16 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 	switch {
 	case ev.Kind == adapter.PreShell:
 		a = beforeBash(ev, sw)
-	case ev.Kind == adapter.PreTool:
+	case ev.Kind == adapter.PreTool && len(ev.Edits) > 0:
 		a = beforeWrite(ev, sw)
-		a.Warning = joinLines(a.Warning, versionWarning(ev, installed))
-	case ev.Kind == adapter.PostTool && ev.Writes:
-		a = afterWrite(ev, sw)
+		a.Warning = joinLines(a.Warning, versionWarning(ev, ev.Edits[0].File, installed))
+	case ev.Kind == adapter.PostTool && len(writes(ev)) > 0:
+		a = afterWrites(ev, sw)
 		room := install.MaxMessage
 		if a.Context != "" {
 			room -= len(a.Context) + len("\n\n") // joinNotes' separator
 		}
-		w, c := invalidRules(ev, room)
+		w, c := invalidRules(ev, rulesEdit(ev).File, room)
 		a.Warning = joinLines(a.Warning, w)
 		a.Context = joinNotes(a.Context, c)
 	case ev.Kind.Starts():
@@ -117,20 +117,59 @@ func target(file string) (root, rel string, ok bool) {
 }
 
 // beforeWrite decides a PreTool call. With --remind=off only the asks
-// for stele's own files and settings are left.
+// for stele's own files and settings are left. A call that writes several
+// files, a patch, gets one answer: an ask for any of stele's own files, else
+// one decision per project for the rules of all its files, any deny winning
+// (ADR-0012).
 func beforeWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
-	root, rel, ok := target(ev.File)
-	if !ok {
-		return askOutside(ev)
+	var asks, roots []string
+	rels := map[string][]string{}
+	for _, e := range ev.Edits {
+		touches := e.Writes || e.Removes
+		root, rel, ok := target(e.File)
+		if !ok {
+			if a := askOutside(ev, e); a.Ask != "" {
+				asks = append(asks, a.Ask)
+			}
+			continue
+		}
+		// Before stele.json is read: it is one of the files that would change.
+		if touches && (guarded(root, rel, e.File) || loadsSettings(ev, e.File)) {
+			asks = append(asks, install.AskMessage(agent.Words(), showPath(rel)))
+			continue
+		}
+		if e.Removes && !e.Writes {
+			continue // a removal shows no rules: nothing is written
+		}
+		if _, seen := rels[root]; !seen {
+			roots = append(roots, root)
+		}
+		rels[root] = append(rels[root], rel)
 	}
-	// Before stele.json is read: it is one of the files that would change.
-	if ev.Writes && (guarded(root, rel, ev.File) || loadsSettings(ev, ev.File)) {
-		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(rel))}
+	if len(asks) > 0 {
+		return adapter.Answer{Ask: joinNotes(asks...)}
 	}
 	if sw.RemindOff {
 		return adapter.Answer{}
 	}
+	var a adapter.Answer
+	budget := install.MaxMessage
+	for _, root := range roots {
+		r := beforeRoot(ev, root, rels[root], budget)
+		if r.Deny {
+			a.Deny, a.Reason = true, joinNotes(a.Reason, r.Reason)
+			budget -= len(r.Reason) + len("\n\n")
+		}
+		a.Context = joinNotes(a.Context, r.Context)
+		a.Warning = joinLines(a.Warning, r.Warning)
+	}
+	return a
+}
 
+// beforeRoot decides the files, relative to root, that one tool call writes
+// in one project: the rules of every file, each once, in the index's order.
+// Its deny reason fits in budget bytes.
+func beforeRoot(ev adapter.Event, root string, rels []string, budget int) adapter.Answer {
 	policy, perr := enforce.Load(root)
 	fail := func(err error) adapter.Answer { return failure(policy, ev.Kind, err) }
 	if perr != nil {
@@ -148,25 +187,38 @@ func beforeWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 
 	var rules []backstop.Rule
 	for _, e := range idx.Rules {
-		if scope.Applies(e.Scope, rel) {
-			rules = append(rules, backstopRule(e))
+		for _, rel := range rels {
+			if scope.Applies(e.Scope, rel) {
+				rules = append(rules, backstopRule(e))
+				break
+			}
 		}
 	}
 	if len(rules) == 0 {
 		return adapter.Answer{Context: note}
+	}
+	// One file is named as it is; several, as a list. The backstop knows a
+	// retry by its key: the same files again.
+	shown, file := rels[0], rels[0]
+	if len(rels) > 1 {
+		shown, file = strings.Join(rels, ", "), strings.Join(rels, "\n")
 	}
 
 	// Decide inside the update, so the rules shown are saved before the deny
 	// is answered: a deny that was not recorded would repeat forever.
 	var d backstop.Decision
 	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
-		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, File: rel, Rules: rules, Now: now(),
+		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, File: file, Rules: rules, Now: now(),
 			Fit: func(rs []backstop.Rule) int {
-				// At least one: a rule too long for any message would
-				// otherwise be denied forever.
-				return max(1, install.FitRules(len(rs), install.MaxMessage, func(k int) string {
-					return install.BlockMessageMore(agent.Words(), rel, blockRules(rs[:k]), len(rs)-k, note)
-				}))
+				k := install.FitRules(len(rs), budget, func(k int) string {
+					return install.BlockMessageMore(agent.Words(), shown, blockRules(rs[:k]), len(rs)-k, note)
+				})
+				// At least one in the first message: a rule too long for
+				// any would otherwise be denied forever.
+				if budget == install.MaxMessage {
+					k = max(k, 1)
+				}
+				return k
 			}}
 		d, *st = backstop.Decide(in, *st)
 		return nil
@@ -178,8 +230,8 @@ func beforeWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 		return adapter.Answer{Context: note}
 	}
 	record(root, key, &journal.DeniedRecord{Header: logHeader(idx.Project, ev, ev.AgentID), Prompt: ev.PromptID,
-		Via: "write", Files: []string{rel}, Rules: ruleIDs(d.Rules), More: d.More})
-	return adapter.Answer{Deny: true, Reason: install.BlockMessageMore(agent.Words(), rel, blockRules(d.Rules), d.More, note)}
+		Via: "write", Files: rels, Rules: ruleIDs(d.Rules), More: d.More})
+	return adapter.Answer{Deny: true, Reason: install.BlockMessageMore(agent.Words(), shown, blockRules(d.Rules), d.More, note)}
 }
 
 // blockRules is rules as a message shows them.
@@ -225,11 +277,56 @@ func freshIndex(root string, key []byte) (idx index.Index, note string, err erro
 	return last, fmt.Sprintf("%v. The last valid rules still apply; fix stele.md for your changes to it to take effect.", err), nil
 }
 
-// afterWrite decides a PostTool call: it checks the lines the agent just
-// wrote against the rules with a built-in check (D45). It keeps no session
-// state, so parallel writes cannot race.
-func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
-	root, rel, ok := target(ev.File)
+// writes are the edits of ev that write a file's content.
+func writes(ev adapter.Event) []adapter.Edit {
+	var out []adapter.Edit
+	for _, e := range ev.Edits {
+		if e.Writes {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// rulesEdit is the written edit invalidRules reads: a write to a root's
+// stele.md if there is one, so the agent hears about the rule it wrote, else
+// the first.
+func rulesEdit(ev adapter.Event) adapter.Edit {
+	ws := writes(ev)
+	for _, e := range ws {
+		if _, rel, ok := target(e.File); ok && rel == "stele.md" {
+			return e
+		}
+	}
+	return ws[0]
+}
+
+// afterWrites decides a PostTool call: each file written is checked, and
+// the answers are one, any block winning. Their messages share one budget.
+func afterWrites(ev adapter.Event, sw adapter.Switches) adapter.Answer {
+	var a adapter.Answer
+	budget := install.MaxMessage
+	for _, e := range writes(ev) {
+		r := afterWrite(ev, e, sw, budget)
+		if r.Deny {
+			a.Deny, a.Reason = true, joinNotes(a.Reason, r.Reason)
+			budget -= len(r.Reason) + len("\n\n")
+		}
+		a.Context = joinNotes(a.Context, r.Context)
+		a.Warning = joinLines(a.Warning, r.Warning)
+		if budget <= 0 {
+			break
+		}
+	}
+	return a
+}
+
+// afterWrite decides one file a PostTool call wrote: it checks the lines the
+// agent just wrote against the rules with a built-in check (D45), in a
+// message of at most budget bytes. It keeps no session state, so parallel
+// writes cannot race.
+func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, budget int) adapter.Answer {
+	root, rel, ok := target(e.File)
 	if !ok {
 		return adapter.Answer{}
 	}
@@ -254,7 +351,7 @@ func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 
 	// The file is read back, not taken from the payload: an Edit carries only
 	// its new text, and what is on disk is what stele check will see.
-	content, err := safefile.ReadRegular(ev.File, maxChecked)
+	content, err := safefile.ReadRegular(e.File, maxChecked)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return adapter.Answer{Context: note} // removed since: nothing to check
@@ -268,8 +365,8 @@ func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 
 	// Only the agent's lines count: older violations are left to stele check.
 	var keep func(int) bool
-	if !ev.Whole {
-		spans := written(ev, content)
+	if !e.Whole {
+		spans := written(e, content)
 		if len(spans) == 0 {
 			return adapter.Answer{Context: note} // a deletion, or text not found
 		}
@@ -319,10 +416,10 @@ func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	// notes and the non-blocking ones, which share its budget.
 	var a adapter.Answer
 	if len(hard) > 0 {
-		a.Deny, a.Reason = true, message(hard, true, install.MaxMessage)
+		a.Deny, a.Reason = true, message(hard, true, budget)
 	}
-	budget := install.MaxMessage - len(joinNotes(notes...))
-	softMsg := message(soft, false, budget-4)
+	room := budget - len(joinNotes(notes...))
+	softMsg := message(soft, false, room-4)
 	a.Context = joinNotes(append([]string{softMsg}, notes...)...)
 	return a
 }
@@ -350,17 +447,17 @@ func refreshOnly(root, rel string, ev adapter.Event) adapter.Answer {
 
 // written returns the lines an Edit or MultiEdit wrote: exactly, from
 // the agent's patch, or else from where its new text is in the file.
-func written(ev adapter.Event, content []byte) []check.Span {
-	if ev.Patched {
-		spans := make([]check.Span, len(ev.Added))
-		for i, l := range ev.Added {
+func written(e adapter.Edit, content []byte) []check.Span {
+	if e.Patched {
+		spans := make([]check.Span, len(e.Added))
+		for i, l := range e.Added {
 			spans[i] = check.Span{First: l.First, Last: l.Last}
 		}
 		return check.Merge(spans)
 	}
-	fs := make([]check.Fragment, len(ev.NewText))
-	for i, t := range ev.NewText {
-		fs[i] = check.Fragment{Text: t, ReplaceAll: i < len(ev.ReplaceAll) && ev.ReplaceAll[i]}
+	fs := make([]check.Fragment, len(e.NewText))
+	for i, t := range e.NewText {
+		fs[i] = check.Fragment{Text: t, ReplaceAll: i < len(e.ReplaceAll) && e.ReplaceAll[i]}
 	}
 	return check.Spans(content, fs)
 }
@@ -369,14 +466,15 @@ func written(ev adapter.Event, content []byte) []check.Span {
 // installed by another stele than the one running (spec §6). Every write
 // passes through PreTool, so the post-write path does not repeat it. A
 // matching version costs a string compare; only a mismatch reads anything.
-func versionWarning(ev adapter.Event, installed string) string {
+// file is a file the call touches, which finds the project.
+func versionWarning(ev adapter.Event, file, installed string) string {
 	// Only two different releases warn: a build from a commit, or with local
 	// changes, stamps devel and is never told to re-run init (#41).
 	running := binaryVersion()
 	if installed == running || !install.Released(installed) || !install.Released(running) {
 		return ""
 	}
-	root, _, ok := target(ev.File)
+	root, _, ok := target(file)
 	if !ok {
 		return ""
 	}

@@ -23,7 +23,8 @@ const maxProblemsShown = 5
 // invalidRules says which rules the post-write check cannot use (#54): once
 // a session per set of problems to the user (warning), and to the agent
 // (context) when the write it answers was to stele.md itself, so the agent
-// knows whether the rule it wrote works. The context fits in room bytes, what
+// knows whether the rule it wrote works. file is the file written. The
+// context fits in room bytes, what
 // the post-write check's own context leaves of install.MaxMessage.
 //
 // It checks the rules again rather than reading problems from the index:
@@ -31,8 +32,8 @@ const maxProblemsShown = 5
 // already pays. Only the built-in checkers run (D45). Once checkers come from
 // stele.json (#14), a rule naming one would show as "not a checker" here:
 // leave those out then.
-func invalidRules(ev adapter.Event, room int) (warning, context string) {
-	root, rel, ok := target(ev.File)
+func invalidRules(ev adapter.Event, file string, room int) (warning, context string) {
+	root, rel, ok := target(file)
 	if !ok {
 		return "", ""
 	}

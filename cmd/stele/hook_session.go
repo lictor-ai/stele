@@ -46,8 +46,13 @@ const maxPrimed = 32
 // Every error leaves the deny to show the rules, as before; none is
 // reported.
 func prime(ev adapter.Event, root string) {
-	id, launch, ok := agent.Loaded(ev, root)
-	if !ok {
+	l := agent.Loaded(ev, root)
+	id, launch := l.Agent, l.Launch
+	if l.Forget {
+		forget(ev, root, id)
+		return
+	}
+	if !l.Read {
 		return
 	}
 	key, err := loadKey()
@@ -87,6 +92,23 @@ func prime(ev adapter.Event, root string) {
 		project = lf.Project
 	}
 	record(root, key, &journal.LoadedRecord{Header: logHeader(project, ev, id), Rules: loadedIDs(loaded)})
+}
+
+// forget drops what agent id had loaded, for an agent whose context no
+// longer surely holds the rules file: its writes are shown their rules again.
+// A session with no state yet has nothing to drop, and none is made.
+func forget(ev adapter.Event, root, id string) {
+	key, err := loadKey()
+	if err != nil {
+		return
+	}
+	if st, err := session.Load(root, ev.SessionID, key); err != nil || st.Primed[id] == nil {
+		return
+	}
+	_, _ = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
+		st.Primed = withPrimed(st.Primed, id, nil)
+		return nil
+	})
 }
 
 // withPrimed returns a copy of m in which agent id's record is loaded,

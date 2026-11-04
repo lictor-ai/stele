@@ -170,18 +170,18 @@ func below(dir, file string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
-// askOutside answers a write to file outside every stele project: ask when
+// askOutside answers a write to e's file outside every stele project: ask when
 // it is a settings file the session loads, or a link leads it to one of a
 // project's own files (#52, #56), else nothing.
-func askOutside(ev adapter.Event) adapter.Answer {
-	if !ev.Writes {
+func askOutside(ev adapter.Event, e adapter.Edit) adapter.Answer {
+	if !e.Writes && !e.Removes {
 		return adapter.Answer{}
 	}
-	if loadsSettings(ev, ev.File) {
-		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(filepath.ToSlash(ev.File)))}
+	if loadsSettings(ev, e.File) {
+		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(filepath.ToSlash(e.File)))}
 	}
-	r, ok := safefile.Resolve(ev.File)
-	if !ok || r == ev.File {
+	r, ok := safefile.Resolve(e.File)
+	if !ok || r == e.File {
 		return adapter.Answer{}
 	}
 	if root, rel, ok := target(r); ok && guarded(root, rel, r) {

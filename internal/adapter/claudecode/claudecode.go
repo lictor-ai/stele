@@ -155,8 +155,6 @@ func Parse(stdin []byte) (adapter.Event, error) {
 	}
 	e := adapter.Event{
 		Kind:      kind(p.HookEventName, p.ToolName),
-		Writes:    writeTool[p.ToolName],
-		Whole:     p.ToolName == "Write",
 		SessionID: p.SessionID,
 		PromptID:  p.PromptID,
 		AgentID:   p.AgentID,
@@ -168,29 +166,33 @@ func Parse(stdin []byte) (adapter.Event, error) {
 	if p.ToolName == "Bash" {
 		e.Command, e.Background = p.ToolInput.Command, p.ToolInput.RunInBackground
 	}
-	if f := p.ToolInput.FilePath; f != "" {
-		if !filepath.IsAbs(f) && p.Cwd != "" {
-			f = filepath.Join(p.Cwd, f)
-		}
-		e.File = filepath.Clean(f)
+	f := p.ToolInput.FilePath
+	if f == "" {
+		return e, nil
 	}
+	if !filepath.IsAbs(f) && p.Cwd != "" {
+		f = filepath.Join(p.Cwd, f)
+	}
+	// One tool, one file.
+	ed := adapter.Edit{File: filepath.Clean(f), Writes: writeTool[p.ToolName], Whole: p.ToolName == "Write"}
 	switch {
 	case p.ToolInput.Content != "":
-		e.NewText = []string{p.ToolInput.Content}
+		ed.NewText = []string{p.ToolInput.Content}
 	case p.ToolInput.NewString != "":
-		e.NewText = []string{p.ToolInput.NewString}
-		e.ReplaceAll = []bool{p.ToolInput.ReplaceAll}
+		ed.NewText = []string{p.ToolInput.NewString}
+		ed.ReplaceAll = []bool{p.ToolInput.ReplaceAll}
 	}
-	for _, ed := range p.ToolInput.Edits {
-		e.NewText = append(e.NewText, ed.NewString)
-		e.ReplaceAll = append(e.ReplaceAll, ed.ReplaceAll)
+	for _, x := range p.ToolInput.Edits {
+		ed.NewText = append(ed.NewText, x.NewString)
+		ed.ReplaceAll = append(ed.ReplaceAll, x.ReplaceAll)
 	}
 	var resp struct {
 		StructuredPatch *[]hunk `json:"structuredPatch"`
 	}
 	if json.Unmarshal(p.ToolResponse, &resp) == nil && resp.StructuredPatch != nil {
-		e.Added, e.Patched = added(*resp.StructuredPatch)
+		ed.Added, ed.Patched = added(*resp.StructuredPatch)
 	}
+	e.Edits = []adapter.Edit{ed}
 	return e, nil
 }
 

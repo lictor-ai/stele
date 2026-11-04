@@ -34,7 +34,10 @@ func (Adapter) HookArgs(args []string) (string, adapter.Switches) {
 	return InstalledVersion(args), HookSwitches(args)
 }
 
-func (Adapter) Loaded(ev adapter.Event, root string) (string, bool, bool) { return Loaded(ev, root) }
+func (Adapter) Loaded(ev adapter.Event, root string) adapter.Load {
+	id, launch, ok := Loaded(ev, root)
+	return adapter.Load{Agent: id, Read: ok, Launch: launch}
+}
 
 func (Adapter) SettingsFile() string { return SettingsFile }
 func (Adapter) Hooks() []string      { return Events() }

@@ -6,9 +6,9 @@ type Kind int
 const (
 	// Other is a call stele does not handle.
 	Other Kind = iota
-	// PreTool: a tool is about to run on File. Writes says whether it writes.
+	// PreTool: a tool is about to run on the files of Edits.
 	PreTool
-	// PostTool: a tool has run on File.
+	// PostTool: a tool has run on the files of Edits.
 	PostTool
 	// PreShell: a shell command is about to run: Command.
 	PreShell
@@ -29,20 +29,33 @@ type Event struct {
 	PromptID  string // the user turn; empty before the first prompt
 	AgentID   string // empty for the main agent
 	Cwd       string // the directory the agent runs in
-	// Writes is whether the tool of a PreTool or PostTool call writes File;
-	// a read does not.
+	// Edits are the files a PreTool or PostTool call touches, one each, in
+	// the tool's order. A tool that names no file stele knows how to find
+	// has none. One call may touch several files, such as a patch (ADR-0012).
+	Edits []Edit
+	// Command is a shell command line, which stele reads for the files it
+	// writes (#57), never runs; Background is whether it runs in the
+	// background, and Dialect which shell reads it.
+	Command    string
+	Background bool
+	Dialect    Dialect
+	// Native is the adapter's own reading of the call, read only by its
+	// methods.
+	Native any
+}
+
+// Edit is what a tool does to one file.
+type Edit struct {
+	// File is the absolute path of the file, cleaned.
+	File string
+	// Writes is whether the tool writes the file's content; a read does not,
+	// nor does a removal.
 	Writes bool
 	// Whole is whether the tool replaced the whole file, so every line of it
 	// counts as written.
 	Whole bool
-	// File is the absolute path of the file the tool touches, or "" when the
-	// tool names no file stele knows how to find.
-	File string
-	// Command is a shell command line, which stele reads for the files it
-	// writes (#57), never runs; Background is whether it runs in the
-	// background.
-	Command    string
-	Background bool
+	// Removes is whether the tool deletes the file, or moves it away.
+	Removes bool
 	// NewText is what the tool puts in the file: the whole content, or the
 	// new text of each edit.
 	NewText []string
@@ -54,9 +67,31 @@ type Event struct {
 	// can trust; Added then means nothing.
 	Added   []Lines
 	Patched bool
-	// Native is the adapter's own reading of the call, read only by its
-	// methods.
-	Native any
+}
+
+// Dialect is the shell language a command is written in.
+type Dialect int
+
+const (
+	// Bash is a POSIX shell's language, bash's own forms included.
+	Bash Dialect = iota
+	// PowerShell is Windows PowerShell's.
+	PowerShell
+)
+
+// Load is what an agent starting now did with a root's rules file.
+type Load struct {
+	// Agent is which agent: its id, "" for the main agent.
+	Agent string
+	// Read: it loaded the file, so its rules count as seen.
+	Read bool
+	// Launch: this start launches or resumes the session, so root becomes
+	// its launch root.
+	Launch bool
+	// Forget: what it had loaded is no longer known to be in its context,
+	// such as after a compaction no one measured; its record is dropped,
+	// which costs denies, never a missed rule.
+	Forget bool
 }
 
 // Lines is lines First to Last of a file, 1-based and inclusive.
@@ -133,11 +168,9 @@ type Adapter interface {
 	// installed hook, "" when there is none, and the switches.
 	HookArgs(args []string) (version string, sw Switches)
 
-	// Loaded says, for a start event and the root found from its Cwd,
-	// whether the agent starting now loaded root's rules file (ok), as which
-	// agent (its id, "" for the main agent), and whether this start launches
-	// or resumes the session, so root becomes its launch root.
-	Loaded(ev Event, root string) (agent string, launch, ok bool)
+	// Loaded says, for a start event and the root found from its Cwd, what
+	// the agent starting now did with root's rules file.
+	Loaded(ev Event, root string) Load
 
 	// SettingsFile is where init writes the hooks, relative to the root,
 	// with the OS's separators.
