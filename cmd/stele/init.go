@@ -14,6 +14,7 @@ import (
 	"github.com/lictor-ai/stele/internal/compile"
 	"github.com/lictor-ai/stele/internal/install"
 	"github.com/lictor-ai/stele/internal/lock"
+	"github.com/lictor-ai/stele/internal/source/gitrepo"
 )
 
 // runInit sets stele up in the current directory: the agent's hooks,
@@ -76,7 +77,11 @@ func initCompile(root string) (changes, notes []string) {
 	if err != nil {
 		return nil, []string{fmt.Sprintf("%v: %s", err, later)}
 	}
-	r, err := compile.Compile(context.Background(), root, sources(), generated(), uuid.NewString, key)
+	srcs, err := sources(root, gitrepo.Pinned)
+	if err != nil {
+		return nil, []string{fmt.Sprintf("%v: fix it and %s", err, later)}
+	}
+	r, err := compile.Compile(context.Background(), root, srcs, generated(), uuid.NewString, key)
 	var ge *compile.GeneratedError
 	if err != nil && !errors.As(err, &ge) {
 		return nil, []string{fmt.Sprintf("%v: fix it and %s", err, later)}

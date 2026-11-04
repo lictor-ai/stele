@@ -28,6 +28,7 @@ import (
 	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/source"
+	"github.com/lictor-ai/stele/internal/source/gitrepo"
 	"github.com/lictor-ai/stele/internal/toolpath"
 )
 
@@ -71,7 +72,16 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	// 1. The rules.
 	var r compile.Result
 	if !none {
-		r, err = compile.Plan(context.Background(), root, sources(), generated(), uuid.NewString)
+		// The git sources read their pinned commits and never move them (D72).
+		srcs, err := sources(root, gitrepo.Frozen)
+		if err != nil {
+			return cantRun("%v", err)
+		}
+		r, err = compile.Plan(context.Background(), root, srcs, generated(), uuid.NewString)
+		if errors.Is(err, source.ErrUnpinned) {
+			return ruleFileProblem(root, *format, fmt.Sprintf("%s is out of date with %s: run stele compile and commit %s",
+				lock.FileName, enforce.FileName, lock.FileName), stdout, stderr)
+		}
 		if err != nil {
 			var pe *source.ParseError
 			if !errors.As(err, &pe) && !errors.Is(err, lock.ErrDuplicateID) && !errors.Is(err, lock.ErrInvalid) {
