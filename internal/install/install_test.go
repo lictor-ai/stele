@@ -240,7 +240,7 @@ func TestInitRefusesMalformedSettings(t *testing.T) {
 	if read(t, settings) != bad || exists(filepath.Join(root, "stele.md")) || exists(filepath.Join(root, ".stele")) {
 		t.Errorf("Init wrote something after refusing")
 	}
-	if _, _, err := Uninstall(cc, root); err == nil {
+	if _, _, err := Uninstall(cc, root, nil); err == nil {
 		t.Errorf("Uninstall over malformed settings succeeded")
 	}
 }
@@ -352,7 +352,7 @@ func TestUninstallRefusesALinkedClaudeDir(t *testing.T) {
 	theirs := filepath.Join(elsewhere, ".claude")
 	dirLink(t, filepath.Join(root, ".claude"), theirs)
 	before := read(t, filepath.Join(theirs, "settings.json"))
-	_, _, err := Uninstall(cc, root)
+	_, _, err := Uninstall(cc, root, nil)
 	if err == nil || !strings.Contains(err.Error(), ".claude") {
 		t.Errorf("Uninstall = %v, want a refusal naming .claude", err)
 	}
@@ -364,7 +364,7 @@ func TestUninstallRefusesALinkedClaudeDir(t *testing.T) {
 func TestUninstallLeavesARegularSteleFile(t *testing.T) {
 	root := t.TempDir()
 	write(t, filepath.Join(root, ".stele"), "mine")
-	changes, notes, err := Uninstall(cc, root)
+	changes, notes, err := Uninstall(cc, root, nil)
 	if err != nil || len(changes) != 0 || len(notes) != 1 {
 		t.Errorf("Uninstall = %q, %q, %v", changes, notes, err)
 	}
@@ -385,7 +385,7 @@ func TestUninstall(t *testing.T) {
 	write(t, filepath.Join(root, "stele.json"), "{}")
 	write(t, filepath.Join(root, ".stele", "state", "s.json"), "x")
 
-	changes, _, err := Uninstall(cc, root)
+	changes, _, err := Uninstall(cc, root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func TestUninstall(t *testing.T) {
 	}
 
 	// Nothing left to remove.
-	changes, _, err = Uninstall(cc, root)
+	changes, _, err = Uninstall(cc, root, nil)
 	if err != nil || len(changes) != 0 {
 		t.Errorf("Uninstall again = %q, %v", changes, err)
 	}
@@ -417,7 +417,7 @@ func TestUninstallRemovesSettingsLeftEmpty(t *testing.T) {
 	if _, _, err := Init(cc, root, "v1.0.0", Set{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Uninstall(cc, root); err != nil {
+	if _, _, err := Uninstall(cc, root, nil); err != nil {
 		t.Fatal(err)
 	}
 	if exists(filepath.Join(root, ".claude")) {
@@ -445,7 +445,7 @@ func TestUninstallNeverFollowsJunctions(t *testing.T) {
 
 	root := t.TempDir()
 	junction(filepath.Join(root, ".stele"))
-	if _, _, err := Uninstall(cc, root); err != nil {
+	if _, _, err := Uninstall(cc, root, nil); err != nil {
 		t.Fatal(err)
 	}
 	if exists(filepath.Join(root, ".stele")) || !exists(keep) {
@@ -455,7 +455,7 @@ func TestUninstallNeverFollowsJunctions(t *testing.T) {
 	root = t.TempDir()
 	os.MkdirAll(filepath.Join(root, ".stele"), 0o755)
 	junction(filepath.Join(root, ".stele", "out"))
-	if _, _, err := Uninstall(cc, root); err != nil {
+	if _, _, err := Uninstall(cc, root, nil); err != nil {
 		t.Fatal(err)
 	}
 	if exists(filepath.Join(root, ".stele")) || !exists(keep) {
@@ -473,7 +473,7 @@ func TestUninstallNeverFollowsLinks(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, ".stele")); err != nil {
 		t.Skipf("cannot make symlinks here: %v", err)
 	}
-	if _, _, err := Uninstall(cc, root); err != nil {
+	if _, _, err := Uninstall(cc, root, nil); err != nil {
 		t.Fatal(err)
 	}
 	if exists(filepath.Join(root, ".stele")) || !exists(keep) {
@@ -486,7 +486,7 @@ func TestUninstallNeverFollowsLinks(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, ".stele", "out")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Uninstall(cc, root); err != nil {
+	if _, _, err := Uninstall(cc, root, nil); err != nil {
 		t.Fatal(err)
 	}
 	if exists(filepath.Join(root, ".stele")) || !exists(keep) {

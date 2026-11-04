@@ -71,7 +71,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	// 1. The rules.
 	var r compile.Result
 	if !none {
-		r, err = compile.Plan(context.Background(), root, sources(), generated(), uuid.NewString)
+		r, err = compile.Plan(context.Background(), root, sources(), generated(root), uuid.NewString)
 		if err != nil {
 			var pe *source.ParseError
 			if !errors.As(err, &pe) && !errors.Is(err, lock.ErrDuplicateID) && !errors.Is(err, lock.ErrInvalid) {
@@ -94,7 +94,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 					f.Path, f.Path), stdout, stderr)
 			}
 		}
-		for _, n := range generatedNotes(r.Files) {
+		for _, n := range generatedNotes(root, r.Files) {
 			fmt.Fprintf(stderr, "stele check: %s\n", n)
 		}
 	}

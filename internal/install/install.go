@@ -256,10 +256,11 @@ func InstalledSwitches(a adapter.Adapter, root string) (sw adapter.Switches, ok 
 }
 
 // Uninstall removes what Init and stele compile wrote for agent a: stele's
-// hooks, the rules file the agent loads (#68), and .stele/ with everything
+// hooks, the rules file the agent loads (#68), or stele's part of it, and,
+// when none of others has stele's hooks under root, .stele/ with everything
 // stele keeps there. It leaves stele.md, stele.lock, stele.json and every
 // other file, and a settings file it cannot read entirely alone.
-func Uninstall(a adapter.Adapter, root string) (changes, notes []string, err error) {
+func Uninstall(a adapter.Adapter, root string, others []adapter.Adapter) (changes, notes []string, err error) {
 	settings := filepath.Join(root, a.SettingsFile())
 	rulesFile := filepath.Join(root, filepath.FromSlash(a.RulesFile()))
 	for _, dir := range []string{filepath.Dir(settings), filepath.Dir(rulesFile)} {
@@ -297,24 +298,42 @@ func Uninstall(a adapter.Adapter, root string) (changes, notes []string, err err
 
 	// The rules file goes when stele wrote it, by its header, and so does a
 	// link a clone committed there: only the link, never what it points to.
-	// A file without the header is the user's.
+	// A file without the header is the user's. A file of the user's that
+	// stele writes a part of loses only that part.
 	if info, err := os.Lstat(rulesFile); err == nil {
-		ours := info.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0
+		link := info.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0
+		ours, remove := link && !a.SharedRulesFile(), true
+		var out []byte
 		if info.Mode().IsRegular() {
 			data, err := safefile.ReadRegular(rulesFile, a.MaxRulesFile())
-			ours = err == nil && a.OwnedRules(data)
+			if err == nil {
+				out, remove, ours = a.UnspliceRules(data)
+			}
 		}
-		if !ours {
+		switch {
+		case !ours:
 			notes = append(notes, a.RulesFile()+" is not stele's: left it")
-		} else if err := os.Remove(rulesFile); err != nil {
-			return changes, notes, err
-		} else {
+		case remove:
+			if err := os.Remove(rulesFile); err != nil {
+				return changes, notes, err
+			}
 			changes = append(changes, "removed "+a.RulesFile())
+		default:
+			if err := safefile.ReplacePerm(rulesFile, out, info.Mode().Perm()); err != nil {
+				return changes, notes, err
+			}
+			changes = append(changes, "removed stele's rules from "+a.RulesFile())
 		}
 	}
 	os.Remove(filepath.Dir(rulesFile)) // only when nothing else is in it
 	os.Remove(filepath.Dir(settings))
 
+	// Another agent's hooks still use .stele/.
+	for _, o := range others {
+		if _, ok := InstalledSwitches(o, root); ok {
+			return changes, notes, nil
+		}
+	}
 	dir := filepath.Join(root, index.Dir)
 	info, err := os.Lstat(dir)
 	switch {

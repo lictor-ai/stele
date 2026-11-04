@@ -33,13 +33,13 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "stele compile: %v\n", err)
 		return exitCantRun
 	}
-	r, err := compile.Compile(context.Background(), root, sources(), generated(), uuid.NewString, key)
+	r, err := compile.Compile(context.Background(), root, sources(), generated(root), uuid.NewString, key)
 	if err != nil {
 		fmt.Fprintf(stderr, "stele compile: %v\n", err)
 		return exitCantRun
 	}
 	printCompile(stdout, r)
-	for _, n := range generatedNotes(r.Files) {
+	for _, n := range generatedNotes(root, r.Files) {
 		fmt.Fprintf(stderr, "stele compile: %s\n", n)
 	}
 	ps := check.Validate(r.Index, plugin.BuiltinCheckers())

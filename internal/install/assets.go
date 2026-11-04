@@ -85,11 +85,25 @@ var askMessage string
 
 var askTemplate = template.Must(template.New("ask-message").Parse(askMessage))
 
+// refuseMessage is what the agent reads instead when it cannot ask the user
+// from a hook (Words.NoAsk): the write is refused, and the agent told to
+// leave the change to the user.
+//
+//go:embed assets/refuse-message.tmpl
+var refuseMessage string
+
+var refuseTemplate = template.Must(template.New("refuse-message").Parse(refuseMessage))
+
 // AskMessage renders the prompt for a write to path, one of stele's own
-// files, w naming the agent.
+// files, w naming the agent. For an agent that cannot ask, it is the
+// refusal the agent reads.
 func AskMessage(w adapter.Words, path string) string {
+	t := askTemplate
+	if w.NoAsk {
+		t = refuseTemplate
+	}
 	var b strings.Builder
-	if err := askTemplate.Execute(&b, struct {
+	if err := t.Execute(&b, struct {
 		Words adapter.Words
 		Path  string
 	}{w, path}); err != nil {

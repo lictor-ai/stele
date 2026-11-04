@@ -150,6 +150,9 @@ type Words struct {
 	// WriteInstead completes "Write it with …:": "the Write or Edit tool
 	// instead (MultiEdit too)".
 	WriteInstead string
+	// NoAsk says the agent cannot ask the user from a hook: an Ask is
+	// refused instead, and its message tells the agent so.
+	NoAsk bool
 }
 
 // Adapter is everything stele knows about one agent (ADR-0009).
@@ -218,6 +221,28 @@ type Adapter interface {
 	// SameRules reports whether the file on disk gives the agent the same
 	// rules, in the same order, as want.
 	SameRules(disk, want []byte) bool
+	// SharedRulesFile reports whether RulesFile is the user's file, which
+	// stele writes a marked section of, rather than stele's own: such a file
+	// is not one of stele's own files, and a write to it asks no one.
+	SharedRulesFile() bool
+	// SpliceRules returns the file on disk with rendered, what RenderRules
+	// wrote, in place of stele's part of it. ok is false when disk is not
+	// stele's to change.
+	SpliceRules(disk, rendered []byte) (out []byte, ok bool)
+	// UnspliceRules returns the file on disk without stele's part; remove
+	// says nothing else is left, so the file goes. ok is false when disk is
+	// not stele's to change.
+	UnspliceRules(disk []byte) (out []byte, remove, ok bool)
+	// RulesNotes says what the user should know about how the agent will
+	// read the rules file under root, beyond its size.
+	RulesNotes(root string) []string
+
+	// VersionProbe is the command line whose output VersionNotes reads, nil
+	// for none. Only stele init runs it, never the hook.
+	VersionProbe() []string
+	// VersionNotes says what the user should know about the agent's version
+	// from VersionProbe's output, or its error.
+	VersionNotes(out []byte, err error) []string
 
 	// Words names the agent and its tools in stele's messages.
 	Words() Words

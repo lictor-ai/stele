@@ -54,6 +54,12 @@ const maxShown = 20
 // would block the write whatever the JSON says, and a hook that cannot make
 // sense of its input must never stop the agent.
 func runHook(args []string, stdout, _ io.Writer) (code int) {
+	who, ok := hookAgent(args)
+	if !ok {
+		return exitOK
+	}
+	defer func(prev adapter.Adapter) { agent = prev }(agent)
+	agent = who
 	data, err := io.ReadAll(io.LimitReader(stdin, maxPayload))
 	if err != nil {
 		return exitOK
@@ -261,7 +267,7 @@ func usesStele(root string) bool {
 // fixed (ADR-0004). A rules file that cannot be written is no failure: the
 // index is saved and the hook still shows every rule.
 func freshIndex(root string, key []byte) (idx index.Index, note string, err error) {
-	idx, _, err = compile.EnsureFresh(context.Background(), root, plugin.Builtins(), generated(), uuid.NewString, key)
+	idx, _, err = compile.EnsureFresh(context.Background(), root, plugin.Builtins(), generated(root), uuid.NewString, key)
 	var ge *compile.GeneratedError
 	if errors.As(err, &ge) {
 		return idx, "", nil

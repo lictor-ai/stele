@@ -113,6 +113,21 @@ func TestAskMessage(t *testing.T) {
 	}
 }
 
+// An agent that cannot ask the user reads a refusal addressed to it.
+func TestAskMessageNoAsk(t *testing.T) {
+	w := ccWords
+	w.Agent, w.NoAsk = "Agent X", true
+	got := AskMessage(w, "stele.md")
+	for _, want := range []string{"stele.md", "stele's own files", "does not let Agent X change it", "Tell the user"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("refusal lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "only if you asked") || strings.Contains(got, "{{") || strings.Contains(refuseMessage, "\r") {
+		t.Errorf("refusal reads as an ask, or is not clean:\n%s", got)
+	}
+}
+
 func TestViolationMessage(t *testing.T) {
 	vs := []Violation{
 		{Line: 3, Column: 7, RuleID: "r1", Excerpt: "Never put credentials in code.", Message: "Never put credentials in code."},

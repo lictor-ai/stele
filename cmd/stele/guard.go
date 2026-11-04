@@ -21,13 +21,39 @@ import (
 // there changes the rules it reads.
 var ownNames = append([]string{"stele.md", enforce.FileName, "stele.lock", ".stele", "**/.stele/"}, agentNames()...)
 
-// agentNames are the agent's settings files and rules file, at any depth.
+// agentNames are every agent's settings files and rules file, at any depth:
+// whichever agent writes, a change to another's can switch stele off for it.
+// A rules file that is the user's own, which stele writes a section of, is
+// not: it holds the user's text too, and stele rewrites its section when it
+// changes.
 func agentNames() []string {
 	var names []string
-	for _, p := range append(agent.Settings(), agent.RulesFile()) {
+	for _, p := range agentFiles() {
 		names = append(names, "**/"+p)
 	}
 	return names
+}
+
+// agentFiles are every agent's settings files and the rules files that are
+// stele's own, as slash paths relative to a root.
+func agentFiles() []string {
+	var files []string
+	for _, a := range agents {
+		files = append(files, a.Settings()...)
+		if !a.SharedRulesFile() {
+			files = append(files, a.RulesFile())
+		}
+	}
+	return files
+}
+
+// allSettings are every agent's project settings files.
+func allSettings() []string {
+	var files []string
+	for _, a := range agents {
+		files = append(files, a.Settings()...)
+	}
+	return files
 }
 
 // guarded reports whether a write to file, rel to root, changes one of
@@ -61,7 +87,7 @@ func guarded(root, rel, file string) bool {
 	// name.
 	if info, err := os.Stat(filepath.Dir(file)); err == nil {
 		base := cleanRel(filepath.Base(file))
-		for _, p := range agent.Settings() {
+		for _, p := range allSettings() {
 			dir, err := os.Stat(filepath.Join(root, filepath.FromSlash(path.Dir(p))))
 			if err == nil && os.SameFile(info, dir) && strings.EqualFold(base, path.Base(p)) {
 				return true
@@ -75,7 +101,7 @@ func guarded(root, rel, file string) bool {
 		return false
 	}
 	names := []string{"stele.md", enforce.FileName, "stele.lock"}
-	for _, p := range append(agent.Settings(), agent.RulesFile()) {
+	for _, p := range agentFiles() {
 		names = append(names, filepath.FromSlash(p))
 	}
 	for _, name := range names {
@@ -132,7 +158,7 @@ func sessionSettings(cwd, file string) bool {
 	for d := filepath.Clean(cwd); ; d = filepath.Dir(d) {
 		if rel, ok := below(d, file); ok {
 			clean := cleanRel(rel)
-			for _, p := range agent.Settings() {
+			for _, p := range allSettings() {
 				if scope.Match("/"+p, clean) {
 					return true
 				}
@@ -142,7 +168,11 @@ func sessionSettings(cwd, file string) bool {
 			break
 		}
 	}
-	for _, u := range agent.UserSettings() {
+	var users []string
+	for _, a := range agents {
+		users = append(users, a.UserSettings()...)
+	}
+	for _, u := range users {
 		if rel, ok := below(filepath.Dir(u), file); ok && scope.Match("/"+filepath.Base(u), cleanRel(rel)) {
 			return true
 		}

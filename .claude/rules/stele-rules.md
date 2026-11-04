@@ -69,15 +69,16 @@ internal/publish, the only package that imports net/http; every other
 package imports no net package.
 
 <!-- stele rule 14d7dcd8-809c-41ca-abb2-2c2454af24f4 -->
-scope: cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go, internal/{adapter,backstop,check,compile,enforce,index,journal,lock,plugin,safefile,scope,session,sign,source}/**/*.go, internal/install/{assets,install,doc}.go
+scope: cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go, internal/{adapter,backstop,check,compile,enforce,index,journal,jsonedit,lock,plugin,rulesblock,safefile,scope,session,sign,source}/**/*.go, internal/install/{assets,install,doc}.go
 stele hook runs on every write, so nothing it reaches may start a process:
 external plugins never run on the hot path (D45), and only plugins listed in
 stele.json and found on PATH ever run, never one inside the repository
-(D43). os/exec belongs to stele check (cmd/stele/check.go) and stele
-publish (internal/publish) only; stele hook never reaches either.
+(D43). os/exec belongs to stele check (cmd/stele/check.go), stele init's
+agent version probe (cmd/stele/agentversion.go) and stele publish
+(internal/publish) only; stele hook never reaches any of them.
 
 <!-- stele rule e4949be3-548c-4bc9-9929-2d410e483f23 -->
-scope: cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go, internal/{adapter,backstop,check,compile,enforce,index,journal,lock,plugin,safefile,scope,session,sign,source}/**/*.go, internal/install/{assets,install,doc}.go
+scope: cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go, internal/{adapter,backstop,check,compile,enforce,index,journal,jsonedit,lock,plugin,rulesblock,safefile,scope,session,sign,source}/**/*.go, internal/install/{assets,install,doc}.go
 stele publish talks to the network and starts processes, so nothing on the
 hook's path imports it. cmd/stele/hookreach_test.go checks the whole import
 graph of stele hook.

@@ -107,7 +107,7 @@ func statsRules(root string, committed lock.File, key []byte, stderr io.Writer) 
 	for _, e := range committed.Rules {
 		inLock[e.ID] = true
 	}
-	r, err := compile.Plan(context.Background(), root, sources(), generated(), uuid.NewString)
+	r, err := compile.Plan(context.Background(), root, sources(), generated(root), uuid.NewString)
 	idx := r.Index
 	switch {
 	case err != nil:
