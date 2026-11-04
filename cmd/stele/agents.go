@@ -5,11 +5,12 @@ import (
 
 	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/adapter/claudecode"
+	"github.com/lictor-ai/stele/internal/adapter/codex"
 )
 
 // agents are the agents stele knows, the default first. This is the only
 // file in cmd/stele that names one (ADR-0009).
-var agents = []adapter.Adapter{claudecode.Adapter{}}
+var agents = []adapter.Adapter{claudecode.Adapter{}, codex.Adapter{}}
 
 // agent is the agent this run answers: stele hook sets it from the command's
 // --agent, which init writes (ADR-0012); every other command works for each

@@ -87,14 +87,21 @@ func agentRule(e index.Entry) adapter.Rule {
 // those check.Own names, and the files compile generates for the agent, such
 // as the rules file it loads, which holds every rule's text (#68). A rule is
 // never checked against them.
-func own(rel string) bool {
+// A rules file that is the user's own, which stele writes a section of, is
+// one only while it holds that section.
+func own(root, rel string) bool {
 	if check.Own(rel) {
 		return true
 	}
 	for _, a := range agents {
-		if scope.Match("/"+a.RulesFile(), rel) {
+		if !scope.Match("/"+a.RulesFile(), rel) {
+			continue
+		}
+		if !a.SharedRulesFile() {
 			return true
 		}
+		data, err := safefile.ReadRegular(filepath.Join(root, filepath.FromSlash(rel)), a.MaxRulesFile())
+		return err == nil && a.OwnedRules(data)
 	}
 	return false
 }

@@ -381,7 +381,7 @@ func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, budget in
 	// A file stele generated for the agent holds every rule's text: it is
 	// never checked, as check.RunFileLines skips stele's other files.
 	var r check.Report
-	if !own(rel) {
+	if !own(root, rel) {
 		var ids []string
 		r, ids = check.RunFileChecked(idx, rel, content, plugin.BuiltinCheckers(), keep)
 		if len(ids) > 0 {
