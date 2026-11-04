@@ -100,8 +100,8 @@ func TestHookLogsDeny(t *testing.T) {
 	}
 }
 
-// A write let through, the retry of a denied one or one with no rules, is
-// not logged: only what stele did.
+// Before a write, only a deny is logged: a write let through is logged by
+// the post-write call, once it happened (D70).
 func TestHookLogsNoAllow(t *testing.T) {
 	root := project(t, hookRules)
 	advance := clock(t, time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC))
@@ -148,10 +148,10 @@ func TestHookLogsCheckedViolation(t *testing.T) {
 		t.Fatalf("decision %q, want block", o.Decision)
 	}
 	ls := readLog(t, root)
-	if len(ls) != 1 || ls[0].Kind != journal.Checked {
-		t.Fatalf("log = %s, want one checked line", kinds(ls))
+	if kinds(ls) != "wrote checked" {
+		t.Fatalf("log = %s, want the write, then its check", kinds(ls))
 	}
-	l := ls[0]
+	l := ls[1]
 	if l.File != "internal/db.go" || l.Session != "abc123" || l.Agent != agent.Name() || len(l.Rules) == 0 {
 		t.Errorf("line = %+v", l)
 	}
@@ -172,16 +172,16 @@ func TestHookLogsCheckedClean(t *testing.T) {
 		t.Fatalf("stdout %q, want nothing", out)
 	}
 	ls := readLog(t, root)
-	if len(ls) != 1 || ls[0].Kind != journal.Checked || ls[0].Violations == nil || len(ls[0].Violations) != 0 {
-		t.Errorf("log = %+v, want one clean checked line", ls)
+	if kinds(ls) != "wrote checked" || ls[1].Violations == nil || len(ls[1].Violations) != 0 {
+		t.Fatalf("log = %+v, want the write and one clean checked line", ls)
 	}
-	if len(ls[0].Rules) != 2 {
-		t.Errorf("rules = %v, want both checked rules on a .go file", ls[0].Rules)
+	if len(ls[1].Rules) != 2 {
+		t.Errorf("rules = %v, want both checked rules on a .go file", ls[1].Rules)
 	}
 	// A README is checked against the unscoped rule only.
 	postHook(t, root, "post-write", "README.md", "hello\n")
-	if ls := readLog(t, root); len(ls) != 2 || len(ls[1].Rules) != 1 {
-		t.Errorf("log = %+v, want a second line with one rule", ls)
+	if ls := readLog(t, root); len(ls) != 4 || len(ls[3].Rules) != 1 {
+		t.Errorf("log = %+v, want a second check with one rule", ls)
 	}
 }
 
@@ -190,17 +190,55 @@ func TestHookLogsCheckedClean(t *testing.T) {
 func TestHookLogsNoBinaryCheck(t *testing.T) {
 	root := project(t, checkRules)
 	postHook(t, root, "post-write", "internal/db.go", "package db\x00\nvar password = 1\n")
-	if ls := readLog(t, root); len(ls) != 0 {
-		t.Errorf("log = %+v, want nothing for a skipped binary file", ls)
+	if ls := readLog(t, root); kinds(ls) != "wrote" {
+		t.Errorf("log = %s, want only the write for a skipped binary file", kinds(ls))
 	}
 }
 
-// A write no checked rule covers is not logged: nothing was checked.
+// Claude Code sends the turn's prompt_id after a write too (recorded from
+// 2.1.317), so wrote and checked lines carry their turn: stele stats tells
+// a fix in the same turn from one later.
+func TestHookLogsPromptFromRecordedPayload(t *testing.T) {
+	root := project(t, checkRules)
+	const prompt = "4080d05a-547d-4069-8907-ae5bead8b91a"
+	hook(t, postPayload(t, root, "post-write-recorded", "internal/db.go", "package db\n\nvar password = 1\n"))
+	ls := readLog(t, root)
+	if kinds(ls) != "wrote checked" {
+		t.Fatalf("log = %s, want the write and its check", kinds(ls))
+	}
+	for _, l := range ls {
+		if l.Prompt != prompt || l.Session != "b0b02795-e920-4b5e-9d00-bdcd4332de07" {
+			t.Errorf("%s line: prompt %q, session %q; want the payload's", l.Kind, l.Prompt, l.Session)
+		}
+	}
+}
+
+// A write no checked rule covers is logged as written, with no check.
 func TestHookLogsNoCheck(t *testing.T) {
 	root := project(t, hookRules)
 	postHook(t, root, "post-write", "a.go", "package a\n")
-	if ls := readLog(t, root); len(ls) != 0 {
-		t.Errorf("log = %s, want nothing: no rule has a check", kinds(ls))
+	if ls := readLog(t, root); kinds(ls) != "wrote" {
+		t.Errorf("log = %s, want only the write: no rule has a check", kinds(ls))
+	}
+}
+
+// A write is logged with every rule that applies to the file, checked or
+// not, so stele stats can tell a rule no write ever met (D70).
+func TestHookLogsWrote(t *testing.T) {
+	root := project(t, hookRules)
+	postHook(t, root, "post-write", "internal/q.go", "package q\n")
+	postHook(t, root, "post-write", "notes.txt", "hi\n")
+	ls := readLog(t, root)
+	if kinds(ls) != "wrote wrote" {
+		t.Fatalf("log = %s, want two writes", kinds(ls))
+	}
+	l := ls[0]
+	if l.File != "internal/q.go" || l.Session != "abc123" || l.Agent != agent.Name() || l.Project != projectID(t, root) || len(l.Rules) != 2 {
+		t.Errorf("line = %+v, want internal/q.go with both rules", l)
+	}
+	// Only the unscoped rule applies to a text file.
+	if ls[1].File != "notes.txt" || len(ls[1].Rules) != 1 {
+		t.Errorf("line = %+v, want notes.txt with the unscoped rule", ls[1])
 	}
 }
 
@@ -269,12 +307,12 @@ func TestHookLogsNothingOutsideStele(t *testing.T) {
 	}
 }
 
-// With --check=off nothing is checked, so nothing is logged after a write.
+// With --check=off nothing is checked, so only the write is logged.
 func TestHookLogSwitchesOff(t *testing.T) {
 	root := project(t, checkRules)
 	p := postPayload(t, root, "post-write", "internal/db.go", "package db\n\nvar password = 1\n")
 	hook(t, p, checkOff...)
-	if ls := readLog(t, root); len(ls) != 0 {
-		t.Errorf("log = %s with --check=off, want nothing", kinds(ls))
+	if ls := readLog(t, root); kinds(ls) != "wrote" || len(ls[0].Rules) != 3 {
+		t.Errorf("log = %+v with --check=off, want only the write, with its rules", ls)
 	}
 }

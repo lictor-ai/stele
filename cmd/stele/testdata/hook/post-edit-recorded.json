@@ -1,0 +1,43 @@
+{
+  "session_id": "b0b02795-e920-4b5e-9d00-bdcd4332de07",
+  "transcript_path": "/home/user/.claude/projects/proj/b0b02795-e920-4b5e-9d00-bdcd4332de07.jsonl",
+  "cwd": "/home/user/proj",
+  "scratchpad_dir": "/tmp/claude/scratchpad",
+  "prompt_id": "4080d05a-547d-4069-8907-ae5bead8b91a",
+  "permission_mode": "acceptEdits",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/home/user/proj/a.txt",
+    "old_string": "hello",
+    "new_string": "hello world",
+    "replace_all": false
+  },
+  "tool_response": {
+    "filePath": "/home/user/proj/a.txt",
+    "oldString": "hello",
+    "newString": "hello world",
+    "originalFile": "hello",
+    "structuredPatch": [
+      {
+        "oldStart": 1,
+        "oldLines": 1,
+        "newStart": 1,
+        "newLines": 1,
+        "lines": [
+          "-hello",
+          "\\ No newline at end of file",
+          "+hello world",
+          "\\ No newline at end of file"
+        ]
+      }
+    ],
+    "userModified": false,
+    "replaceAll": false
+  },
+  "tool_use_id": "toolu_01PL3Us6gHFtosNhqQfJxxNE",
+  "duration_ms": 14
+}

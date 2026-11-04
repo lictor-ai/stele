@@ -626,6 +626,10 @@ spawn story changes for them.
 > holding rule ids, paths and counts, signed per line, rotated at 32 MiB. The
 > `fetch` record below stays with the team milestone's MCP server.
 
+> **Amended by D70.** A fifth kind, `wrote`, records each write that went
+> through with the ids of every rule that applies to the file, and
+> `stele stats` reads the log to say how the rules are doing.
+
 `.stele/log.jsonl`. Append-only, local, gitignored. It never leaves the machine
 unless the user lists a sink and runs `stele push` (§2.4).
 
@@ -823,6 +827,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D67 | **Amends D16 and D63.** `backstop` is removed from `stele.json`: `--remind` decides whether the hook may deny a write to show rules, `--check` whether a blocking violation after a write is sent back as a block. `block_on_error` stays and applies to whatever part runs. stele does not edit a `stele.json` that still sets `backstop`; `init` notes that it is no longer read (ADR-0008). | #71 |
 | D68 | Everything specific to one coding agent is behind the `adapter.Adapter` interface, in `internal/adapter/<agent>`: the hook protocol, install, the rules file the agent loads, what it loaded at a session start, the files that configure it, and the words that name its tools. Only those packages, the registry `cmd/stele/agents.go` and the install tests' `internal/install/agent_test.go` import an adapter (ADR-0009). | — |
 | D69 | **Amends D58 and §7, §8.** stele keeps a local log, `.stele/log.jsonl`: one line per session start that recorded its loaded rules (`loaded`), write or Bash command denied to show rules (`denied`), check after a write (`checked`, clean ones too) and `stele check` run (`check`). Each line has `v`, `kind`, `project`, `ts`, `session` and `agent` (the adapter's `Name()`), and holds rule ids, paths and counts only. Each line carries an HMAC with this machine's key; lines that do not verify are skipped. Lines are appended under a lock, only where `.stele/` already exists; a line that cannot be written in 100 ms is dropped, and the hook's answer never depends on it. `stele check` logs only where the key and `.stele/` exist, so not in CI. The log rotates at 32 MiB to `log.1.jsonl`, a soft cap: where the rename fails, lines are still added up to 64 MiB. The reader holds the writers' lock. stele never sends the log (ADR-0010). | #11 |
+| D70 | **Amends D69's list of kinds.** The post-write hook logs every write that went through as a `wrote` line: `file` and the ids of every rule whose scope applies to it, loaded or not, checked or not, also with `--check=off`. `stele stats [--since 30d] [--format text|json]` reads only the log and the current rules (built-in sources, writing nothing) and reports: sessions and turns (a turn is a session and prompt pair with a write); rules broken after a write and whether the agent's next check of that file in the same turn was clean (fixed), broke it again, or never came (left); dead rules, which no logged write met by current scope or by id, judged only 30 turns after a session first loaded them, and never for a rule `stele.lock` does not have yet; writes denied per local day; the same per agent. Below 30 turns it says so and judges no rule; a fix rate needs 10 broken writes. `--format json` carries `v: 1` and `project`. It exits 0, or 2 when it could not run, and writes nothing. See `2026-11-03-stele-stats-design.md`. | #98 |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 
@@ -973,7 +978,7 @@ is the point.
 | `O-REARM` | New-directory signal | Re-arm frequency vs. whether the second selection differed |
 | D39 | **Team milestone, not v1 (D58).** Circuit breaker at 3 blocks | How often it trips, and whether real failures are caught sooner |
 | `O-CORPUS` | Full corpus | The corpus size where match quality falls off |
-| `O-LOG-VOLUME` | Nothing acts on the logs | Enough turns for the counts to mean something |
+| `O-LOG-VOLUME` | `stele stats` judges nothing below 30 turns, and gives no fix rate below 10 broken writes (D70). Nothing acts on the logs | Whether stats' verdicts at those counts match what a developer sees |
 | `O-BASH-DIFF` | Bash writes found by reading the command (D61) | Claude Code's `bashEditDiff`, listing the files a Bash command changed, leaving beta and being recorded outside auto mode |
 
 One cheap piece of evidence is unassigned and worth gathering before v2 reopens

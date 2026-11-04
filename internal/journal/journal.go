@@ -44,6 +44,8 @@ const (
 	Denied Kind = "denied"
 	// Checked: a file was checked after a write.
 	Checked Kind = "checked"
+	// Wrote: an agent wrote a file, with the rules that apply to it (D70).
+	Wrote Kind = "wrote"
 	// CheckRun: stele check ran.
 	CheckRun Kind = "check"
 )
@@ -95,6 +97,15 @@ type Violation struct {
 	Blocking bool   `json:"blocking"`
 }
 
+// WroteRecord: a write that went through, with every rule whose scope
+// applies to the file, shown or loaded, checked or not (D70).
+type WroteRecord struct {
+	Header
+	Prompt string   `json:"prompt,omitempty"`
+	File   string   `json:"file"`  // relative to the root, / separators
+	Rules  []string `json:"rules"` // the ids that apply
+}
+
 // CheckRunRecord: one stele check run and its counts. A count is never named
 // as a list of another kind is, so one struct can read every kind.
 type CheckRunRecord struct {
@@ -123,11 +134,13 @@ type Record interface {
 func (r *LoadedRecord) header() *Header   { return &r.Header }
 func (r *DeniedRecord) header() *Header   { return &r.Header }
 func (r *CheckedRecord) header() *Header  { return &r.Header }
+func (r *WroteRecord) header() *Header    { return &r.Header }
 func (r *CheckRunRecord) header() *Header { return &r.Header }
 
 func (*LoadedRecord) kind() Kind   { return Loaded }
 func (*DeniedRecord) kind() Kind   { return Denied }
 func (*CheckedRecord) kind() Kind  { return Checked }
+func (*WroteRecord) kind() Kind    { return Wrote }
 func (*CheckRunRecord) kind() Kind { return CheckRun }
 
 func (r *LoadedRecord) fill() { r.Rules = sorted(r.Rules) }
@@ -138,6 +151,7 @@ func (r *CheckedRecord) fill() {
 		r.Violations = []Violation{}
 	}
 }
+func (r *WroteRecord) fill() { r.Rules = sorted(r.Rules) }
 func (r *CheckRunRecord) fill() {
 	if r.Broken == nil {
 		r.Broken = map[string]int{}

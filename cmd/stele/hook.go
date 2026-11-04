@@ -234,7 +234,7 @@ func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 		return adapter.Answer{}
 	}
 	if sw.CheckOff {
-		return refreshOnly(root)
+		return refreshOnly(root, rel, ev)
 	}
 
 	policy, perr := enforce.Load(root)
@@ -250,6 +250,7 @@ func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	if err != nil {
 		return fail(err)
 	}
+	recordWrote(root, key, idx, ev, rel)
 
 	// The file is read back, not taken from the payload: an Edit carries only
 	// its new text, and what is on disk is what stele check will see.
@@ -331,7 +332,7 @@ func afterWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 // this hook compiles an agent's edit to stele.md, whose write asks before it
 // runs (ADR-0006). A failure only warns: no check was asked for, so there is
 // nothing for block_on_error to stand in for.
-func refreshOnly(root string) adapter.Answer {
+func refreshOnly(root, rel string, ev adapter.Event) adapter.Answer {
 	warn := func(err error) adapter.Answer {
 		return adapter.Answer{Warning: fmt.Sprintf("stele: rules not refreshed after this write: %v", err)}
 	}
@@ -339,10 +340,11 @@ func refreshOnly(root string) adapter.Answer {
 	if err != nil {
 		return warn(err)
 	}
-	_, note, err := freshIndex(root, key)
+	idx, note, err := freshIndex(root, key)
 	if err != nil {
 		return warn(err)
 	}
+	recordWrote(root, key, idx, ev, rel)
 	return adapter.Answer{Context: note}
 }
 

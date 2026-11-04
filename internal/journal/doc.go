@@ -1,6 +1,7 @@
 // Package journal keeps .stele/log.jsonl, the local record of what stele
 // does (ADR-0010): the rules a session loaded, the writes it denied and the
-// rules they showed, the checks after a write and what they found, and each
+// rules they showed, the writes that went through and the rules that apply
+// to them (D70), the checks after a write and what they found, and each
 // stele check run. It is what stele stats reads.
 //
 // A line holds rule ids, paths and counts, never code. It stays on the

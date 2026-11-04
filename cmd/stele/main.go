@@ -8,8 +8,8 @@ import (
 	"sort"
 )
 
-// Exit codes. check and publish use all three (spec §8); the other commands
-// use 0 and 2.
+// Exit codes. check and publish use all three (spec §8); the other commands,
+// stats among them, use 0 and 2.
 const (
 	exitOK      = 0
 	exitFailed  = 1
@@ -26,6 +26,7 @@ var commands = map[string]command{
 	"uninstall": {"remove exactly what init wrote", runUninstall},
 	"compile":   {"compile every source into the index", runCompile},
 	"check":     {"validate the rules and run checkers on changed files", runCheck},
+	"stats":     {"how the rules are doing, from the local log", runStats},
 	"status":    {"describe the install", notImplemented("status")},
 	"push":      {"send new log entries to every listed sink", notImplemented("push")},
 	"publish":   {"send stele.md to the repository in stele.json as a merge request", runPublish},
