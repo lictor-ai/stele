@@ -24,7 +24,7 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "PreToolUse", "session_id": "s1", "prompt_id": "p1",
 				"tool_name": "Write", "tool_input": map[string]any{"file_path": abs, "content": "package db"},
 			},
-			want: adapter.Event{Kind: adapter.PreTool, Writes: true, Whole: true, SessionID: "s1", PromptID: "p1", File: abs, NewText: []string{"package db"}},
+			want: adapter.Event{Kind: adapter.PreTool, SessionID: "s1", PromptID: "p1", Edits: []adapter.Edit{{Writes: true, Whole: true, File: abs, NewText: []string{"package db"}}}},
 		},
 		{
 			name: "edit from a subagent, path relative to cwd",
@@ -32,7 +32,7 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "PostToolUse", "session_id": "s1", "agent_id": "a1", "cwd": cwd,
 				"tool_name": "Edit", "tool_input": map[string]any{"file_path": "internal/db.go", "old_string": "x", "new_string": "y"},
 			},
-			want: adapter.Event{Kind: adapter.PostTool, Writes: true, SessionID: "s1", AgentID: "a1", Cwd: cwd, File: abs, NewText: []string{"y"}, ReplaceAll: []bool{false}},
+			want: adapter.Event{Kind: adapter.PostTool, SessionID: "s1", AgentID: "a1", Cwd: cwd, Edits: []adapter.Edit{{Writes: true, File: abs, NewText: []string{"y"}, ReplaceAll: []bool{false}}}},
 		},
 		{
 			name: "bash",
@@ -48,7 +48,7 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "PreToolUse", "tool_name": "MultiEdit",
 				"tool_input": map[string]any{"file_path": abs, "edits": []map[string]any{{"new_string": "a"}, {"new_string": "b", "replace_all": true}}},
 			},
-			want: adapter.Event{Kind: adapter.PreTool, Writes: true, File: abs, NewText: []string{"a", "b"}, ReplaceAll: []bool{false, true}},
+			want: adapter.Event{Kind: adapter.PreTool, Edits: []adapter.Edit{{Writes: true, File: abs, NewText: []string{"a", "b"}, ReplaceAll: []bool{false, true}}}},
 		},
 		{
 			name: "post-write, with the tool's response",
@@ -58,7 +58,7 @@ func TestParse(t *testing.T) {
 				"tool_input":    map[string]any{"file_path": abs, "content": "package db"},
 				"tool_response": map[string]any{"filePath": abs, "type": "create"},
 			},
-			want: adapter.Event{Kind: adapter.PostTool, Writes: true, Whole: true, SessionID: "s1", Cwd: cwd, File: abs, NewText: []string{"package db"}},
+			want: adapter.Event{Kind: adapter.PostTool, SessionID: "s1", Cwd: cwd, Edits: []adapter.Edit{{Writes: true, Whole: true, File: abs, NewText: []string{"package db"}}}},
 		},
 		{
 			name: "edit that deletes text",
@@ -66,7 +66,7 @@ func TestParse(t *testing.T) {
 				"hook_event_name": "PostToolUse", "tool_name": "Edit",
 				"tool_input": map[string]any{"file_path": abs, "old_string": "x", "new_string": ""},
 			},
-			want: adapter.Event{Kind: adapter.PostTool, Writes: true, File: abs},
+			want: adapter.Event{Kind: adapter.PostTool, Edits: []adapter.Edit{{Writes: true, File: abs}}},
 		},
 		{
 			name: "edit with replace_all and Claude Code's patch",
@@ -78,10 +78,7 @@ func TestParse(t *testing.T) {
 					{"oldStart": 20, "oldLines": 1, "newStart": 21, "newLines": 2, "lines": []string{" g", "+h", `\ No newline at end of file`}},
 				}},
 			},
-			want: adapter.Event{
-				Kind: adapter.PostTool, Writes: true, File: abs, NewText: []string{"C\nD"}, ReplaceAll: []bool{true},
-				Added: []adapter.Lines{{First: 5, Last: 6}, {First: 22, Last: 22}}, Patched: true,
-			},
+			want: adapter.Event{Kind: adapter.PostTool, Edits: []adapter.Edit{{Writes: true, File: abs, NewText: []string{"C\nD"}, ReplaceAll: []bool{true}, Added: []adapter.Lines{{First: 5, Last: 6}, {First: 22, Last: 22}}, Patched: true}}},
 		},
 		{
 			name: "a patch that only removes lines",
@@ -92,7 +89,7 @@ func TestParse(t *testing.T) {
 					{"oldStart": 1, "oldLines": 2, "newStart": 1, "newLines": 1, "lines": []string{" a", "-b"}},
 				}},
 			},
-			want: adapter.Event{Kind: adapter.PostTool, Writes: true, File: abs, NewText: []string{""}, ReplaceAll: []bool{false}, Patched: true},
+			want: adapter.Event{Kind: adapter.PostTool, Edits: []adapter.Edit{{Writes: true, File: abs, NewText: []string{""}, ReplaceAll: []bool{false}, Patched: true}}},
 		},
 		{
 			name: "a patch whose counts are wrong is not used",
@@ -103,7 +100,7 @@ func TestParse(t *testing.T) {
 					{"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 5, "lines": []string{"-a", "+x"}},
 				}},
 			},
-			want: adapter.Event{Kind: adapter.PostTool, Writes: true, File: abs, NewText: []string{"x"}, ReplaceAll: []bool{false}},
+			want: adapter.Event{Kind: adapter.PostTool, Edits: []adapter.Edit{{Writes: true, File: abs, NewText: []string{"x"}, ReplaceAll: []bool{false}}}},
 		},
 		{
 			name: "a response that is not an object",
@@ -112,7 +109,7 @@ func TestParse(t *testing.T) {
 				"tool_input":    map[string]any{"file_path": abs, "new_string": "x"},
 				"tool_response": "edited",
 			},
-			want: adapter.Event{Kind: adapter.PostTool, Writes: true, File: abs, NewText: []string{"x"}, ReplaceAll: []bool{false}},
+			want: adapter.Event{Kind: adapter.PostTool, Edits: []adapter.Edit{{Writes: true, File: abs, NewText: []string{"x"}, ReplaceAll: []bool{false}}}},
 		},
 		{
 			name: "a tool with no file",

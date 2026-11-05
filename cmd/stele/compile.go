@@ -48,7 +48,7 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 		return exitCantRun
 	}
 	prev := committedPins(root)
-	r, err := compile.Compile(context.Background(), root, srcs, generated(), uuid.NewString, key)
+	r, err := compile.Compile(context.Background(), root, srcs, generated(root), uuid.NewString, key)
 	if err != nil {
 		fmt.Fprintf(stderr, "stele compile: %v\n", err)
 		return exitCantRun
@@ -58,7 +58,7 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 	}
 	printPins(stdout, prev, r.Lock.Sources, update)
 	printCompile(stdout, r)
-	for _, n := range generatedNotes(r.Files) {
+	for _, n := range generatedNotes(root, r.Files) {
 		fmt.Fprintf(stderr, "stele compile: %s\n", n)
 	}
 	ps := check.Validate(r.Index, plugin.BuiltinCheckers())

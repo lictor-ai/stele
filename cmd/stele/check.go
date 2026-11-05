@@ -77,7 +77,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return cantRun("%v", err)
 		}
-		r, err = compile.Plan(context.Background(), root, srcs, generated(), uuid.NewString)
+		r, err = compile.Plan(context.Background(), root, srcs, generated(root), uuid.NewString)
 		if errors.Is(err, source.ErrUnpinned) {
 			return ruleFileProblem(root, *format, fmt.Sprintf("%s is out of date with %s: run stele compile and commit %s",
 				lock.FileName, enforce.FileName, lock.FileName), stdout, stderr)
@@ -104,7 +104,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 					f.Path, f.Path), stdout, stderr)
 			}
 		}
-		for _, n := range generatedNotes(r.Files) {
+		for _, n := range generatedNotes(root, r.Files) {
 			fmt.Fprintf(stderr, "stele check: %s\n", n)
 		}
 	}

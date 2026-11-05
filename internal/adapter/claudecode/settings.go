@@ -1,9 +1,7 @@
 package claudecode
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -11,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/lictor-ai/stele/internal/adapter"
+	"github.com/lictor-ai/stele/internal/jsonedit"
 )
 
 // SettingsFile is where init registers the hooks, relative to the root: the
@@ -184,7 +183,7 @@ func Install(settings []byte, version string, sw adapter.Switches) (out []byte, 
 	}
 	f.removeStele()
 	for _, r := range registrations {
-		fresh, err := marshal(struct {
+		fresh, err := jsonedit.Marshal(struct {
 			Matcher string `json:"matcher,omitempty"`
 			Hooks   []any  `json:"hooks"`
 		}{r.Matcher, []any{struct {
@@ -295,178 +294,48 @@ func HookSwitches(args []string) adapter.Switches {
 	return sw
 }
 
-// member is one key of a JSON object, its key and value kept exactly as
-// written. Raw is empty for a key stele adds.
-type member struct {
-	Key   string
-	Value json.RawMessage
-	Raw   []byte
-}
-
-// object is a JSON object in its written order. stele edits only "hooks" and
-// two of its events; every other value is written back byte for byte, so
-// number literals, escapes and key order survive.
-type object []member
-
-func (o object) get(key string) (json.RawMessage, bool) {
-	for _, m := range o {
-		if m.Key == key {
-			return m.Value, true
-		}
-	}
-	return nil, false
-}
-
-// set replaces key's value, or appends key when it is missing.
-func (o *object) set(key string, v json.RawMessage) {
-	for i := range *o {
-		if (*o)[i].Key == key {
-			(*o)[i].Value = v
-			return
-		}
-	}
-	*o = append(*o, member{Key: key, Value: v})
-}
-
-func (o *object) remove(key string) {
-	for i := range *o {
-		if (*o)[i].Key == key {
-			*o = append((*o)[:i], (*o)[i+1:]...)
-			return
-		}
-	}
-}
-
-func (o object) marshal() ([]byte, error) {
-	var b bytes.Buffer
-	b.WriteByte('{')
-	for i, m := range o {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		k := m.Raw
-		if k == nil {
-			var err error
-			if k, err = marshal(m.Key); err != nil {
-				return nil, err
-			}
-		}
-		b.Write(k)
-		b.WriteByte(':')
-		b.Write(m.Value)
-	}
-	b.WriteByte('}')
-	return b.Bytes(), nil
-}
-
-// marshal encodes v without escaping <, > and &, as Claude Code writes them.
-func marshal(v any) ([]byte, error) {
-	var b bytes.Buffer
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return nil, err
-	}
-	return bytes.TrimRight(b.Bytes(), "\n"), nil
-}
-
-// array joins values already encoded into a JSON array. json.Marshal would
-// re-escape them.
-func array(vs []json.RawMessage) json.RawMessage {
-	b := []byte{'['}
-	for i, v := range vs {
-		if i > 0 {
-			b = append(b, ',')
-		}
-		b = append(b, v...)
-	}
-	return append(b, ']')
-}
-
-// parseObject reads a JSON object. what names it in errors. A key that
-// appears twice is an error: which one Claude Code keeps is not stele's to
-// guess.
-func parseObject(data []byte, what string) (object, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
-		return nil, fmt.Errorf("%s is not a JSON object", what)
-	}
-	var o object
-	seen := map[string]bool{}
-	for dec.More() {
-		start := dec.InputOffset()
-		t, err := dec.Token()
-		if err != nil {
-			return nil, err
-		}
-		key := t.(string) // an object's tokens alternate key, value
-		// The key's bytes as written, escapes and all, without the comma
-		// and space before it.
-		raw := bytes.TrimLeft(data[start:dec.InputOffset()], ", \t\r\n")
-		if seen[key] {
-			return nil, fmt.Errorf("%q appears twice in %s", key, what)
-		}
-		seen[key] = true
-		var v json.RawMessage
-		if err := dec.Decode(&v); err != nil {
-			return nil, err
-		}
-		o = append(o, member{Key: key, Value: v, Raw: raw})
-	}
-	return o, nil
-}
-
 // group is one matcher group of an event, decoded only as far as finding
 // stele's handlers in it.
 type group struct {
 	raw      json.RawMessage // as written, or rebuilt after a removal
-	fields   object
+	fields   jsonedit.Object
 	hooks    []json.RawMessage
 	handlers []handler // hooks, decoded
 }
 
 // settingsFile is a parsed settings file.
 type settingsFile struct {
-	bom, crlf bool
-	top       object
-	hooks     object
+	doc       jsonedit.Doc
+	top       jsonedit.Object
+	hooks     jsonedit.Object
 	groups    map[string][]*group // the events stele edits
 	present   map[string]bool     // events the file has
 }
 
-var bom = []byte("\xef\xbb\xbf")
-
 func parseSettings(data []byte) (*settingsFile, error) {
 	f := &settingsFile{groups: map[string][]*group{}, present: map[string]bool{}}
-	body, hasBOM := bytes.CutPrefix(data, bom)
-	f.bom = hasBOM
-	f.crlf = bytes.Contains(body, []byte("\r\n"))
-	if len(bytes.TrimSpace(body)) == 0 {
+	doc, empty := jsonedit.Split(data)
+	f.doc = doc
+	if empty {
 		return f, nil
 	}
-	var v any
-	if err := json.Unmarshal(body, &v); err != nil {
-		var se *json.SyntaxError
-		if errors.As(err, &se) {
-			line, col := position(body, se.Offset)
-			return nil, fmt.Errorf("invalid JSON at line %d, column %d: %v", line, col, err)
-		}
-		return nil, fmt.Errorf("invalid JSON: %v", err)
+	if err := doc.Valid(); err != nil {
+		return nil, err
 	}
-	top, err := parseObject(body, "the settings file")
+	top, err := jsonedit.ParseObject(doc.Body, "the settings file")
 	if err != nil {
 		return nil, err
 	}
 	f.top = top
-	raw, ok := top.get("hooks")
+	raw, ok := top.Get("hooks")
 	if !ok {
 		return f, nil
 	}
-	if f.hooks, err = parseObject(raw, `"hooks"`); err != nil {
+	if f.hooks, err = jsonedit.ParseObject(raw, `"hooks"`); err != nil {
 		return nil, err
 	}
 	for _, ev := range events {
-		raw, ok := f.hooks.get(ev)
+		raw, ok := f.hooks.Get(ev)
 		if !ok {
 			continue
 		}
@@ -489,7 +358,7 @@ func parseSettings(data []byte) (*settingsFile, error) {
 // matcher returns the group's matcher, "" when it has none or it is not a
 // string.
 func (g *group) matcher() string {
-	raw, ok := g.fields.get("matcher")
+	raw, ok := g.fields.Get("matcher")
 	if !ok {
 		return ""
 	}
@@ -502,12 +371,12 @@ func (g *group) matcher() string {
 // as it is: it holds no handler stele could have written.
 func parseGroup(raw json.RawMessage, ev string) (*group, error) {
 	g := &group{raw: raw}
-	fields, err := parseObject(raw, "a "+ev+" group")
+	fields, err := jsonedit.ParseObject(raw, "a "+ev+" group")
 	if err != nil {
 		return g, nil
 	}
 	g.fields = fields
-	hooks, ok := fields.get("hooks")
+	hooks, ok := fields.Get("hooks")
 	if !ok {
 		return g, nil
 	}
@@ -545,8 +414,8 @@ func (f *settingsFile) removeStele() int {
 			if len(hooks) == 0 {
 				continue // stele emptied it
 			}
-			g.fields.set("hooks", array(hooks))
-			g.raw, _ = g.fields.marshal()
+			g.fields.Set("hooks", jsonedit.Array(hooks))
+			g.raw, _ = g.fields.Marshal()
 			g.hooks, g.handlers = hooks, handlers
 			kept = append(kept, g)
 		}
@@ -562,7 +431,7 @@ func (f *settingsFile) render() ([]byte, error) {
 		gs := f.groups[ev]
 		if len(gs) == 0 {
 			if f.present[ev] {
-				f.hooks.remove(ev)
+				f.hooks.Remove(ev)
 			}
 			continue
 		}
@@ -570,40 +439,20 @@ func (f *settingsFile) render() ([]byte, error) {
 		for i, g := range gs {
 			raws[i] = g.raw
 		}
-		f.hooks.set(ev, array(raws))
+		f.hooks.Set(ev, jsonedit.Array(raws))
 	}
 	if len(f.hooks) == 0 {
-		f.top.remove("hooks")
+		f.top.Remove("hooks")
 	} else {
-		h, err := f.hooks.marshal()
+		h, err := f.hooks.Marshal()
 		if err != nil {
 			return nil, err
 		}
-		f.top.set("hooks", h)
+		f.top.Set("hooks", h)
 	}
-	compact, err := f.top.marshal()
+	compact, err := f.top.Marshal()
 	if err != nil {
 		return nil, err
 	}
-	var b bytes.Buffer
-	if err := json.Indent(&b, compact, "", "  "); err != nil {
-		return nil, err
-	}
-	b.WriteByte('\n')
-	out := b.Bytes()
-	if f.crlf {
-		out = bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n"))
-	}
-	if f.bom {
-		out = append(append([]byte{}, bom...), out...)
-	}
-	return out, nil
-}
-
-// position turns a byte offset into a 1-based line and column.
-func position(data []byte, offset int64) (line, col int) {
-	before := data[:min(int(offset), len(data))]
-	line = bytes.Count(before, []byte("\n")) + 1
-	col = len(before) - bytes.LastIndexByte(before, '\n')
-	return line, col
+	return f.doc.Render(compact)
 }

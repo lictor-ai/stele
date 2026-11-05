@@ -34,7 +34,10 @@ func (Adapter) HookArgs(args []string) (string, adapter.Switches) {
 	return InstalledVersion(args), HookSwitches(args)
 }
 
-func (Adapter) Loaded(ev adapter.Event, root string) (string, bool, bool) { return Loaded(ev, root) }
+func (Adapter) Loaded(ev adapter.Event, root string) adapter.Load {
+	id, launch, ok := Loaded(ev, root)
+	return adapter.Load{Agent: id, Read: ok, Launch: launch}
+}
 
 func (Adapter) SettingsFile() string { return SettingsFile }
 func (Adapter) Hooks() []string      { return Events() }
@@ -87,3 +90,20 @@ func (Adapter) OwnedRules(data []byte) bool             { return OwnedRules(data
 func (Adapter) SameRules(disk, want []byte) bool        { return SameRules(disk, want) }
 func (Adapter) Words() adapter.Words                    { return words }
 func (Adapter) SessionContext() string                  { return SessionContext() }
+
+// The rules file is stele's own, whole: splicing is replacing it.
+func (Adapter) SharedRulesFile() bool { return false }
+
+func (Adapter) SpliceRules(disk, rendered []byte) ([]byte, bool) {
+	return rendered, disk == nil || OwnedRules(disk)
+}
+
+func (Adapter) UnspliceRules(disk []byte) ([]byte, bool, bool) {
+	return nil, true, OwnedRules(disk)
+}
+
+func (Adapter) RulesNotes(string) []string { return nil }
+
+// stele asks nothing of Claude Code's version.
+func (Adapter) VersionProbe() []string                 { return nil }
+func (Adapter) VersionNotes([]byte, error) []string    { return nil }

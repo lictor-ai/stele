@@ -89,7 +89,7 @@ imports net/url only to check a remote's URL: git does the network
 
 ---
 
-scope: ["cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,journal,lock,plugin,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
+scope: ["cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,journal,jsonedit,lock,plugin,rulesblock,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
 check: regex
 pattern: (?m)^\s*(import\s+)?([\w.]+\s+)?"os/exec"\s*$
 message: no subprocess on the hook's path (D45)
@@ -97,7 +97,8 @@ message: no subprocess on the hook's path (D45)
 stele hook runs on every write, so nothing it reaches may start a process:
 external plugins never run on the hot path (D45), and only plugins listed in
 stele.json and found on PATH ever run, never one inside the repository
-(D43). os/exec belongs to stele check (cmd/stele/check.go), stele publish
+(D43). os/exec belongs to stele check (cmd/stele/check.go), stele init's
+agent version probe (cmd/stele/agentversion.go), stele publish
 (internal/publish) and internal/gitexec, which runs git for stele publish
 and the git source (ADR-0011). Only cmd/stele/sources.go hands gitexec to
 the git source, and only runCompile, runCheck and init call it: a file the
@@ -107,7 +108,7 @@ cmd/stele/hookreach_test.go follows their calls to check it.
 
 ---
 
-scope: ["cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,journal,lock,plugin,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
+scope: ["cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,journal,jsonedit,lock,plugin,rulesblock,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
 check: regex
 pattern: "github\.com/lictor-ai/stele/internal/(publish|gitexec)"
 message: stele hook never reaches stele publish or git (D45, D66, ADR-0011)

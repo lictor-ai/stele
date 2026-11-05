@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/compile"
 	"github.com/lictor-ai/stele/internal/install"
 	"github.com/lictor-ai/stele/internal/lock"
@@ -36,6 +37,7 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 	if err == nil {
 		c, n := initCompile(root)
 		changes, notes = append(changes, c...), append(notes, n...)
+		notes = append(notes, probeVersion(agent, root)...)
 	}
 	code := report("init", changes, notes, err, stdout, stderr)
 	if code == exitOK {
@@ -81,7 +83,7 @@ func initCompile(root string) (changes, notes []string) {
 	if err != nil {
 		return nil, []string{fmt.Sprintf("%v: fix it and %s", err, later)}
 	}
-	r, err := compile.Compile(context.Background(), root, srcs, generated(), uuid.NewString, key)
+	r, err := compile.Compile(context.Background(), root, srcs, generated(root), uuid.NewString, key)
 	var ge *compile.GeneratedError
 	if err != nil && !errors.As(err, &ge) {
 		return nil, []string{fmt.Sprintf("%v: fix it and %s", err, later)}
@@ -94,7 +96,7 @@ func initCompile(root string) (changes, notes []string) {
 			changes = append(changes, "wrote "+f.Path)
 		}
 	}
-	notes = generatedNotes(r.Files)
+	notes = generatedNotes(root, r.Files)
 	if ge != nil {
 		notes = append(notes, fmt.Sprintf("%v: %s", ge, later))
 	}
@@ -107,7 +109,14 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return exitCantRun
 	}
-	changes, notes, err := install.Uninstall(agent, root)
+	// .stele/ stays while another agent's hooks use it.
+	var others []adapter.Adapter
+	for _, o := range agents {
+		if o.Name() != agent.Name() {
+			others = append(others, o)
+		}
+	}
+	changes, notes, err := install.Uninstall(agent, root, others)
 	return report("uninstall", changes, notes, err, stdout, stderr)
 }
 

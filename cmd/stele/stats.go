@@ -110,7 +110,7 @@ func statsRules(root string, committed lock.File, key []byte, stderr io.Writer) 
 	}
 	// The builtins only, with the rest carried over from the index: stats
 	// starts no process, so never the git source (D70, D71).
-	r, err := compile.PlanLocal(context.Background(), root, plugin.Builtins(), generated(), uuid.NewString, key)
+	r, err := compile.PlanLocal(context.Background(), root, plugin.Builtins(), generated(root), uuid.NewString, key)
 	idx := r.Index
 	switch {
 	case err != nil:

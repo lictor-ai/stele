@@ -71,11 +71,12 @@ imports net/url only to check a remote's URL: git does the network
 (ADR-0011). Every other package imports no net package.
 
 <!-- stele rule 14d7dcd8-809c-41ca-abb2-2c2454af24f4 -->
-scope: cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go, internal/{adapter,backstop,check,compile,enforce,index,journal,lock,plugin,safefile,scope,session,sign,source}/**/*.go, internal/install/{assets,install,doc}.go
+scope: cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go, internal/{adapter,backstop,check,compile,enforce,index,journal,jsonedit,lock,plugin,rulesblock,safefile,scope,session,sign,source}/**/*.go, internal/install/{assets,install,doc}.go
 stele hook runs on every write, so nothing it reaches may start a process:
 external plugins never run on the hot path (D45), and only plugins listed in
 stele.json and found on PATH ever run, never one inside the repository
-(D43). os/exec belongs to stele check (cmd/stele/check.go), stele publish
+(D43). os/exec belongs to stele check (cmd/stele/check.go), stele init's
+agent version probe (cmd/stele/agentversion.go), stele publish
 (internal/publish) and internal/gitexec, which runs git for stele publish
 and the git source (ADR-0011). Only cmd/stele/sources.go hands gitexec to
 the git source, and only runCompile, runCheck and init call it: a file the
@@ -84,7 +85,7 @@ neither os/exec nor gitexec. stele hook and stele stats never call it;
 cmd/stele/hookreach_test.go follows their calls to check it.
 
 <!-- stele rule e4949be3-548c-4bc9-9929-2d410e483f23 -->
-scope: cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go, internal/{adapter,backstop,check,compile,enforce,index,journal,lock,plugin,safefile,scope,session,sign,source}/**/*.go, internal/install/{assets,install,doc}.go
+scope: cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go, internal/{adapter,backstop,check,compile,enforce,index,journal,jsonedit,lock,plugin,rulesblock,safefile,scope,session,sign,source}/**/*.go, internal/install/{assets,install,doc}.go
 stele publish and internal/gitexec talk to the network and start processes,
 so nothing on the hook's path imports them. cmd/stele/hookreach_test.go
 checks the whole import graph of stele hook, and what runHook calls.
