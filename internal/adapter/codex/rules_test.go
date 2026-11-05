@@ -117,26 +117,69 @@ func TestUnsplice(t *testing.T) {
 	}
 }
 
+// The bytes around the section come back exactly, mixed line ends included.
 func FuzzSpliceRoundTrip(f *testing.F) {
 	f.Add("# x\n")
 	f.Add("a\r\nb\r\n")
+	f.Add("a\nb\r\nc\n")
+	f.Add("\xef\xbb\xbfa\r\n\nb\n")
 	f.Add("")
 	f.Fuzz(func(t *testing.T, s string) {
 		if s != "" && !strings.HasSuffix(s, "\n") {
 			s += "\n"
 		}
-		if strings.Contains(s, beginPrefix) || strings.Contains(s, endLine) || strings.TrimSpace(strings.TrimPrefix(s, "\xef\xbb\xbf")) == "" {
+		if strings.Contains(s, beginPrefix) || strings.Contains(s, endLine) || strings.TrimSpace(strings.TrimPrefix(s, "\xef\xbb\xbf")) == "" || utf16([]byte(s)) {
 			return
 		}
 		in, ok := SpliceRules([]byte(s), RenderRules(testRules))
 		if !ok {
 			t.Fatalf("refused %q", s)
 		}
+		// A new section replaces the old one and leaves the rest as it was.
+		again, ok := SpliceRules(in, RenderRules(testRules[:1]))
+		if !ok || !strings.HasPrefix(string(again), s) {
+			t.Fatalf("re-splice of %q gave %q", s, again)
+		}
 		out, remove, ok := UnspliceRules(in)
-		if !ok || remove || strings.ReplaceAll(string(out), "\r\n", "\n") != strings.ReplaceAll(s, "\r\n", "\n") {
+		if !ok || remove || string(out) != s {
 			t.Fatalf("round trip of %q gave %q (remove %v, ok %v)", s, out, remove, ok)
 		}
 	})
+}
+
+func TestSpliceKeepsMixedLineEnds(t *testing.T) {
+	disk := "a\nb\r\n\r\n" + strings.ReplaceAll(string(RenderRules(testRules[:1])), "\n", "\r\n") + "c\nd"
+	out, ok := SpliceRules([]byte(disk), RenderRules(testRules))
+	if !ok {
+		t.Fatal("refused")
+	}
+	s := string(out)
+	if !strings.HasPrefix(s, "a\nb\r\n\r\n<!-- stele:begin") || !strings.HasSuffix(s, endLine+"\r\nc\nd") || strings.Contains(strings.ReplaceAll(s[7:len(s)-4], "\r\n", ""), "\n") {
+		t.Errorf("got %q", s)
+	}
+}
+
+func TestSpliceRefusesUTF16(t *testing.T) {
+	for _, disk := range [][]byte{{0xff, 0xfe, 'a', 0}, {0xfe, 0xff, 0, 'a'}, []byte("a\x00b\n")} {
+		if _, ok := SpliceRules(disk, RenderRules(testRules)); ok {
+			t.Errorf("spliced %q", disk)
+		}
+		if _, _, ok := UnspliceRules(disk); ok {
+			t.Errorf("unspliced %q", disk)
+		}
+	}
+}
+
+// Only stele's begin line opens the section, not any line starting so.
+func TestBeginMarkerExact(t *testing.T) {
+	if b, _ := fence("<!-- stele:beginning of my notes -->"); b {
+		t.Error("a line that only starts like the marker opened the section")
+	}
+	for _, l := range []string{"<!-- stele:begin -->", "<!-- stele:begin: any words -->", "  " + strings.TrimSpace(strings.SplitN(rulesSection, "\n", 2)[0]) + "\r\n"} {
+		if b, _ := fence(l); !b {
+			t.Errorf("%q is not a begin line", l)
+		}
+	}
 }
 
 func TestReadRulesOnlyInsideSection(t *testing.T) {
@@ -161,6 +204,12 @@ func TestRulesNotesOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n := (Adapter{}).RulesNotes(root); len(n) != 1 || !strings.Contains(n[0], overrideFile) {
+		t.Errorf("notes %v", n)
+	}
+	if err := os.WriteFile(filepath.Join(root, RulesFile), []byte{0xff, 0xfe, '#', 0}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n := (Adapter{}).RulesNotes(root); len(n) != 2 || !strings.Contains(n[1], "UTF-16") {
 		t.Errorf("notes %v", n)
 	}
 }

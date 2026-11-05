@@ -32,6 +32,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -331,7 +332,7 @@ func Render(event string, a adapter.Answer) []byte {
 			}
 			out.HookSpecificOutput = &specific{HookEventName: event, PermissionDecision: "deny", PermissionDecisionReason: reason}
 		} else if a.Context != "" {
-			out.HookSpecificOutput = &specific{HookEventName: event, AdditionalContext: a.Context}
+			out.HookSpecificOutput = &specific{HookEventName: event, AdditionalContext: fitContext(a.Context)}
 		}
 	case "PostToolUse":
 		if a.Deny {
@@ -341,11 +342,11 @@ func Render(event string, a adapter.Answer) []byte {
 			}
 		}
 		if a.Context != "" {
-			out.HookSpecificOutput = &specific{HookEventName: event, AdditionalContext: a.Context}
+			out.HookSpecificOutput = &specific{HookEventName: event, AdditionalContext: fitContext(a.Context)}
 		}
 	case "SessionStart":
 		if a.Context != "" {
-			out.HookSpecificOutput = &specific{HookEventName: event, AdditionalContext: a.Context}
+			out.HookSpecificOutput = &specific{HookEventName: event, AdditionalContext: fitContext(a.Context)}
 		}
 	default:
 		return nil
@@ -359,6 +360,23 @@ func Render(event string, a adapter.Answer) []byte {
 		return nil // only strings: cannot happen
 	}
 	return append(data, '\n')
+}
+
+// maxContext caps additionalContext: Codex moves a hook's context longer
+// than its additionalContextLimit, 2,500 tokens by default, into a file the
+// model must open, so stele keeps it well under, at about 1,500 tokens.
+const maxContext = 6000
+
+// fitContext cuts s to maxContext bytes, at a line end, and says so.
+func fitContext(s string) string {
+	if len(s) <= maxContext {
+		return s
+	}
+	cut := s[:maxContext-200]
+	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
+		cut = cut[:i]
+	}
+	return cut + fmt.Sprintf("\n\n(stele cut the last %d bytes of this note to keep it in your context: run stele check for everything.)", len(s)-len(cut))
 }
 
 // join joins two texts with a blank line, either may be empty.

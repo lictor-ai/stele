@@ -6,6 +6,7 @@ import (
 	"runtime"
 
 	"github.com/lictor-ai/stele/internal/adapter"
+	"github.com/lictor-ai/stele/internal/safefile"
 )
 
 // Adapter is Codex behind the adapter interface (ADR-0009, ADR-0012). Its
@@ -83,11 +84,15 @@ func (Adapter) UnspliceRules(disk []byte) ([]byte, bool, bool) { return Unsplice
 // RulesNotes says when Codex will start without the rules: an override file
 // in root, which it reads instead.
 func (Adapter) RulesNotes(root string) []string {
+	var notes []string
 	if _, err := os.Lstat(filepath.Join(root, overrideFile)); err == nil {
-		return []string{overrideFile + " is here: Codex reads it instead of " + RulesFile +
-			", so its sessions start without stele's rules; the deny before a write still shows them"}
+		notes = append(notes, overrideFile+" is here: Codex reads it instead of "+RulesFile+
+			", so its sessions start without stele's rules; the deny before a write still shows them")
 	}
-	return nil
+	if data, err := safefile.ReadRegular(filepath.Join(root, RulesFile), MaxRulesFile); err == nil && utf16(data) {
+		notes = append(notes, RulesFile+" is UTF-16: stele writes only into UTF-8 text; save it as UTF-8, then run stele compile")
+	}
+	return notes
 }
 
 func (Adapter) VersionProbe() []string { return append([]string(nil), versionProbe...) }

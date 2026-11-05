@@ -352,6 +352,17 @@ func TestRender(t *testing.T) {
 			t.Errorf("got %+v", o.HookSpecificOutput)
 		}
 	})
+	t.Run("a long context is cut to stay inline", func(t *testing.T) {
+		long := strings.Repeat("a line of a long note\n", 600)
+		o := decode(t, Render("PostToolUse", adapter.Answer{Context: long}))
+		got := o.HookSpecificOutput.AdditionalContext
+		if len(got) > maxContext || !strings.Contains(got, "stele cut the last") || !strings.HasPrefix(long, strings.SplitN(got, "\n\n(stele", 2)[0]) {
+			t.Errorf("context of %d bytes: %.80q…", len(got), got)
+		}
+		if short := decode(t, Render("SessionStart", adapter.Answer{Context: "x"})); short.HookSpecificOutput.AdditionalContext != "x" {
+			t.Error("a short context changed")
+		}
+	})
 	t.Run("nothing to say", func(t *testing.T) {
 		for _, ev := range []string{"PreToolUse", "PostToolUse", "SessionStart", "Stop", ""} {
 			if out := Render(ev, adapter.Answer{}); out != nil {
