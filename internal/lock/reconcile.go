@@ -68,20 +68,16 @@ func Reconcile(rules []source.Rule, prev File, newID func() string) (ids []strin
 		rep.Supplied++
 	}
 	// A supplied id the lock holds for a rule of another source that is still
-	// there, by body, or by place when reworded, would leave that rule a new
-	// id and no history. It is a clash, as two sources supplying one id are.
-	known := make(map[string]bool, len(prev.Rules))
-	for _, e := range prev.Rules {
-		known[e.Hash] = true
-	}
+	// there, the same body, would leave that rule a new id and no history. It
+	// is a clash, as two sources supplying one id are. A rule that moved to
+	// the supplying source is not there any more, and keeps its id.
 	for id, i := range owner {
 		for _, e := range prev.Rules {
 			if e.ID != id || e.Source == rules[i].Source {
 				continue
 			}
 			for j, r := range rules {
-				reworded := r.Position == e.Position && !known[hashes[j]]
-				if r.ID == "" && r.Source == e.Source && (hashes[j] == e.Hash || reworded) {
+				if r.ID == "" && r.Source == e.Source && hashes[j] == e.Hash {
 					return nil, File{}, Report{}, fmt.Errorf("%w %s: supplied by %s, and the id of %s in %s",
 						ErrDuplicateID, id, where(rules[i]), where(r), FileName)
 				}

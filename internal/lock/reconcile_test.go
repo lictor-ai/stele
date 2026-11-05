@@ -234,21 +234,32 @@ func TestReconcileDuplicateSuppliedID(t *testing.T) {
 }
 
 // A source may not supply the id stele.lock holds for a rule of another
-// source that is still there, same body or same place: that rule would
-// silently get a new id and lose its history.
+// source that is still there, with the same body: that rule would silently
+// get a new id and lose its history.
 func TestReconcileSuppliedIDOfARuleStillThere(t *testing.T) {
 	ab := lockOf([]string{"a", "b"}, md(0, sql), md(1, http))
-	for name, rules := range map[string][]source.Rule{
-		"same body": {md(0, sql), md(1, http), {Source: "org", Position: 0, Body: creds, ID: "a"}},
-		"reworded":  {md(0, sql2), md(1, http), {Source: "org", Position: 0, Body: creds, ID: "a"}},
-	} {
-		_, _, _, err := Reconcile(rules, ab, ids())
-		if !errors.Is(err, ErrDuplicateID) || !strings.Contains(err.Error(), "stelemd") {
-			t.Errorf("%s: err = %v, want ErrDuplicateID naming the stelemd rule", name, err)
-		}
+	rules := []source.Rule{md(0, sql), md(1, http), {Source: "org", Position: 0, Body: creds, ID: "a"}}
+	_, _, _, err := Reconcile(rules, ab, ids())
+	if !errors.Is(err, ErrDuplicateID) || !strings.Contains(err.Error(), "stelemd") {
+		t.Errorf("err = %v, want ErrDuplicateID naming the stelemd rule", err)
 	}
 	// The rule moved to the source that now supplies its id: no clash.
 	if _, _, _, err := Reconcile([]source.Rule{md(0, http), {Source: "org", Position: 0, Body: sql, ID: "a"}}, ab, ids()); err != nil {
 		t.Errorf("a rule that moved: %v", err)
+	}
+}
+
+// The review's scenario: rule b moves from stele.md to the guidelines,
+// whose lock supplies "b", and a new local rule takes its place. b goes to
+// the shared rule; the new local rule gets a new id, not b by position.
+func TestReconcileMovedRuleAndANewOneInItsPlace(t *testing.T) {
+	ab := lockOf([]string{"a", "b"}, md(0, sql), md(1, http))
+	rules := []source.Rule{md(0, sql), md(1, creds), {Source: "git", Position: 0, Body: http, ID: "b"}}
+	got, _, _, err := Reconcile(rules, ab, ids())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if want := []string{"a", "new-1", "b"}; !cmp.Equal(got, want) {
+		t.Errorf("ids = %v, want %v", got, want)
 	}
 }
