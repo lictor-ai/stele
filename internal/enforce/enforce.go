@@ -76,6 +76,11 @@ func SetsBackstop(root string) bool {
 	return ok
 }
 
+// Read returns stele.json under root as Text returns it, for the keys other
+// packages own, such as "sources" (internal/plugin). No stele.json is an
+// fs.ErrNotExist error.
+func Read(root string) ([]byte, error) { return read(root) }
+
 // read returns stele.json under root as Text returns it.
 //
 // A symlink is followed, since a user may share one policy between projects,

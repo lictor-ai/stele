@@ -17,6 +17,7 @@ import (
 	"github.com/lictor-ai/stele/internal/compile"
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/lock"
+	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/stats"
 )
 
@@ -98,8 +99,8 @@ func errText(err error) string {
 	return "must not be in the future"
 }
 
-// statsRules are the current rules, read through the sources as stele check
-// reads them, writing nothing. A rule stele.lock does not have yet is new:
+// statsRules are the current rules: the built-in sources read as stele check
+// reads them, the others as the index holds them, writing nothing. A rule stele.lock does not have yet is new:
 // its id is not settled. When stele.md does not compile, the last good
 // index stands in, as it does in the hook; with neither, no rule is judged.
 func statsRules(root string, committed lock.File, key []byte, stderr io.Writer) ([]stats.Rule, bool) {
@@ -107,7 +108,9 @@ func statsRules(root string, committed lock.File, key []byte, stderr io.Writer) 
 	for _, e := range committed.Rules {
 		inLock[e.ID] = true
 	}
-	r, err := compile.Plan(context.Background(), root, sources(), generated(root), uuid.NewString)
+	// The builtins only, with the rest carried over from the index: stats
+	// starts no process, so never the git source (D70, D71).
+	r, err := compile.PlanLocal(context.Background(), root, plugin.Builtins(), generated(root), uuid.NewString, key)
 	idx := r.Index
 	switch {
 	case err != nil:

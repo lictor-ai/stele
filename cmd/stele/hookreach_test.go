@@ -60,23 +60,39 @@ func TestHookNeverReachesPublish(t *testing.T) {
 // showPath in check.go, which imports os/exec for git, and must not count
 // as running git.
 func TestStatsNeverReachesNetwork(t *testing.T) {
+	for _, p := range callReach(t, "runStats") {
+		t.Errorf("stele stats reaches %s", p)
+	}
+}
+
+// TestHookCallsNeverReachGit is TestHookNeverReachesPublish through the
+// calls, not the files: runHook calls loadKey and generated in compile.go
+// and rulesfile.go, whose files also hold runCompile, which reaches git
+// through sources (ADR-0011). What the hook calls must not.
+func TestHookCallsNeverReachGit(t *testing.T) {
+	for _, p := range callReach(t, "runHook") {
+		t.Errorf("stele hook reaches %s", p)
+	}
+}
+
+// callReach returns the forbidden packages entry, a declaration of
+// cmd/stele, reaches: through the declarations it uses (declReach), then
+// through the imports of the repository's packages those use.
+func callReach(t *testing.T, entry string) []string {
+	t.Helper()
 	repo, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	imports := declReach(t, "runStats")
-	for _, p := range forbidden(imports) {
-		t.Errorf("stele stats uses %s", p)
-	}
+	imports := declReach(t, entry)
+	out := forbidden(imports)
 	var start []string
 	for p := range imports {
 		if strings.HasPrefix(p, module+"/") {
 			start = append(start, packageFiles(t, filepath.Join(repo, filepath.FromSlash(strings.TrimPrefix(p, module+"/"))))...)
 		}
 	}
-	for _, p := range forbidden(reached(t, repo, start)) {
-		t.Errorf("stele stats reaches %s", p)
-	}
+	return append(out, forbidden(reached(t, repo, start))...)
 }
 
 // git is a process that talks to remotes, wherever it is started from.
@@ -96,6 +112,9 @@ func TestDeclReach(t *testing.T) {
 	}
 	if imports := declReach(t, "showPath"); imports["os/exec"] {
 		t.Errorf("showPath reaches %v, want no os/exec", imports)
+	}
+	if got := callReach(t, "runCompile"); len(got) == 0 {
+		t.Error("runCompile reaches nothing forbidden: the walk would miss git through sources")
 	}
 }
 

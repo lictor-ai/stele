@@ -28,6 +28,7 @@ import (
 	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/source"
+	"github.com/lictor-ai/stele/internal/source/gitrepo"
 	"github.com/lictor-ai/stele/internal/toolpath"
 )
 
@@ -71,7 +72,16 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	// 1. The rules.
 	var r compile.Result
 	if !none {
-		r, err = compile.Plan(context.Background(), root, sources(), generated(root), uuid.NewString)
+		// The git sources read their pinned commits and never move them (D72).
+		srcs, err := sources(root, gitrepo.Frozen)
+		if err != nil {
+			return cantRun("%v", err)
+		}
+		r, err = compile.Plan(context.Background(), root, srcs, generated(root), uuid.NewString)
+		if errors.Is(err, source.ErrUnpinned) {
+			return ruleFileProblem(root, *format, fmt.Sprintf("%s is out of date with %s: run stele compile and commit %s",
+				lock.FileName, enforce.FileName, lock.FileName), stdout, stderr)
+		}
 		if err != nil {
 			var pe *source.ParseError
 			if !errors.As(err, &pe) && !errors.Is(err, lock.ErrDuplicateID) && !errors.Is(err, lock.ErrInvalid) {
@@ -361,17 +371,55 @@ func ruleFileChanges(g gitTool, base string) ([]check.RuleFileChange, error) {
 	var cs []check.RuleFileChange
 	for i := 0; i+1 < len(out); i += 2 {
 		status, file := out[i], out[i+1]
-		// Case is ignored only where stele ignores it (scope.Match): on Linux
-		// stele never reads a STELE.md.
-		if !scope.Match("stele.md", file) && !scope.Match(enforce.FileName, file) {
+		c, ok := changes[status]
+		if !ok {
 			continue
 		}
-		if c, ok := changes[status]; ok {
-			cs = append(cs, check.RuleFileChange{File: file, Change: c})
+		// Case is ignored only where stele ignores it (scope.Match): on Linux
+		// stele never reads a STELE.md.
+		switch {
+		case scope.Match("stele.md", file), scope.Match(enforce.FileName, file):
+		case scope.Match(lock.FileName, file):
+			// A moved pin changes the shared rules (D72); ids alone do not.
+			if !pinsChanged(g, base, file) {
+				continue
+			}
+		default:
+			continue
 		}
+		cs = append(cs, check.RuleFileChange{File: file, Change: c})
 	}
 	sort.Slice(cs, func(i, j int) bool { return cs[i].File < cs[j].File })
 	return cs, nil
+}
+
+// pinsChanged reports whether the stele.lock at file pins other commits at
+// HEAD than at the merge base with base. A lock git cannot read, or that
+// does not parse, on either side counts as changed.
+func pinsChanged(g gitTool, base, file string) bool {
+	mb, err := g.raw("merge-base", base, "HEAD")
+	if err != nil || len(mb) == 0 {
+		return true
+	}
+	pins := func(rev string) (string, bool) {
+		cmd := g.command("cat-file", "blob", rev+":./"+file)
+		data, err := cmd.Output()
+		if err != nil {
+			return "", true // absent on that side
+		}
+		f, err := lock.Decode(data)
+		if err != nil {
+			return "", false
+		}
+		b, _ := json.Marshal(f.Sources)
+		if len(f.Sources) == 0 {
+			b = nil
+		}
+		return string(b), true
+	}
+	before, ok1 := pins(strings.TrimSpace(mb[0]))
+	after, ok2 := pins("HEAD")
+	return !ok1 || !ok2 || before != after
 }
 
 // gitBin finds git on PATH, as stele publish does: one inside the project at
@@ -529,8 +577,11 @@ func printSubprojects(w io.Writer, subs []subproject) {
 func printRuleFileChanges(w io.Writer, cs []check.RuleFileChange) {
 	for _, c := range cs {
 		what := "it holds the project's rules"
-		if scope.Match(enforce.FileName, c.File) {
+		switch {
+		case scope.Match(enforce.FileName, c.File):
 			what = "it sets how strictly the rules are enforced"
+		case scope.Match(lock.FileName, c.File):
+			what = "it pins the shared rules"
 		}
 		fmt.Fprintf(w, "%s: %s on this branch: %s; review the change\n", showPath(c.File), c.Change, what)
 	}
