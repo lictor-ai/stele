@@ -57,6 +57,9 @@ func invalidRules(ev adapter.Event, file string, room int) (warning, context str
 		if len(msg) > room {
 			context = invalidRulesMessage(idx, ps, room)
 		}
+		if len(context) > room {
+			context = "" // no room left: the warning still names them
+		}
 	}
 
 	mark := rulesMark(ps)

@@ -46,5 +46,8 @@ func runProbe(argv []string, root string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, bin, argv[1:]...)
 	cmd.Dir = root
 	cmd.Env = toolpath.Env(os.Environ(), root)
+	// npm's codex.cmd starts node, which the timeout's kill of the shim does
+	// not reach: once the shim is gone, stop waiting for its output.
+	cmd.WaitDelay = time.Second
 	return cmd.Output()
 }

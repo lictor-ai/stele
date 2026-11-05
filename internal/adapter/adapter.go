@@ -226,8 +226,8 @@ type Adapter interface {
 	// is not one of stele's own files, and a write to it asks no one.
 	SharedRulesFile() bool
 	// SpliceRules returns the file on disk with rendered, what RenderRules
-	// wrote, in place of stele's part of it. ok is false when disk is not
-	// stele's to change.
+	// wrote, in place of stele's part of it; disk is nil when there is no
+	// file. ok is false when disk is not stele's to change.
 	SpliceRules(disk, rendered []byte) (out []byte, ok bool)
 	// UnspliceRules returns the file on disk without stele's part; remove
 	// says nothing else is left, so the file goes. ok is false when disk is

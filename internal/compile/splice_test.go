@@ -11,6 +11,31 @@ import (
 	"github.com/lictor-ai/stele/internal/source/stelemd"
 )
 
+// A missing file a part of is written spliced into nothing, so the next
+// compile finds its part and adds no second one.
+func TestCompileSplicesMissingFile(t *testing.T) {
+	root := t.TempDir()
+	writeRules(t, root, twoRules)
+	g := listing
+	g.Splice = func(disk, rendered []byte) ([]byte, bool) {
+		s := string(disk)
+		if i := strings.Index(s, "<<<\n"); i >= 0 {
+			j := strings.Index(s, ">>>\n")
+			return []byte(s[:i] + "<<<\n" + string(rendered) + s[j:]), true
+		}
+		return []byte(s + "<<<\n" + string(rendered) + ">>>\n"), true
+	}
+	srcs := []source.Source{stelemd.New()}
+	for range 2 {
+		if _, err := Compile(context.Background(), root, srcs, []Generated{g}, ids(), testKey); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := readGen(t, root); strings.Count(got, "<<<\n") != 1 || !strings.HasPrefix(got, "<<<\n") {
+		t.Errorf("file = %q, want one part", got)
+	}
+}
+
 // A file compile writes only a part of keeps every other byte: Splice puts
 // the rendered part in, and refusing is a foreign file, left alone.
 func TestCompileSplicesGenerated(t *testing.T) {
