@@ -1357,27 +1357,36 @@ Code's.
 `codex` is Codex's, measured on Codex 0.166.0 (payloads under
 `cmd/stele/testdata/hook/codex`). `Parse` makes a `PreToolUse` for
 `apply_patch` a `PreTool`, for `Bash` a `PreShell` (PowerShell on Windows), a
-`PostToolUse` for `apply_patch` a `PostTool`; `turn_id` is the prompt. The
-patch, Codex's own format, gives one `Edit` per file: an add is `Whole`, an
-update's hunks are its `NewText`, a delete `Removes`, a move removes the old
-path and writes the new one whole. After the call, the result's `A`/`M`/`D`
-list narrows the edits, and a failed patch has none. `Render` answers a deny,
-and an ask, which Codex refuses, as `permissionDecision: "deny"` with a reason
-that is never empty; after a tool, `decision: "block"`.
+`PostToolUse` for `apply_patch` a `PostTool`; `turn_id` is the prompt. A `Bash`
+call that runs `apply_patch` (quoted, a heredoc, or argv), which Codex applies
+itself, is a `PreTool` or `PostTool` too, never a shell command. The patch,
+Codex's own format, read as leniently as Codex reads it (a heredoc wrapper,
+trimmed headers), gives one `Edit` per file: an add is `Whole`, an update's
+hunks are its `NewText`, a delete `Removes`, a move removes the old path and
+writes the new one whole; one stele cannot follow gives every file a header
+anywhere names. After the call, the result's `A`/`M`/`D` list narrows the
+edits; a failed patch's files are checked by their new text only. `Render`
+answers a deny, and an ask, which Codex refuses, as `permissionDecision:
+"deny"` with a reason that is never empty; after a tool, `decision: "block"`;
+context past 6,000 bytes is cut, under Codex's spill limit.
 
 `Install` writes `stele hook --agent=codex`, with no version stamp, into
-`.codex/hooks.json` on `PreToolUse` (`^(apply_patch|Bash)$`), `PostToolUse`
-(`^apply_patch$`) and `SessionStart` (D74). Codex keys a hook's approval by its
-position and a hash of its settings, so a switch rewrites stele's handler in
-place and a new one is appended after the user's groups; init notes that the
-hooks must be approved with `/hooks`. The rules go in `AGENTS.md` between
+`.codex/hooks.json` on `PreToolUse` and `PostToolUse` (`^(apply_patch|Bash)$`)
+and `SessionStart` (D74). Codex keys a hook's approval by its group's place and
+a hash of its settings, so a switch rewrites stele's handler in place, a new
+one is appended after the user's groups, and uninstall leaves stele's group
+empty, with its matcher, while groups with hooks follow it; init notes that
+the hooks must be approved with `/hooks`. The rules go in `AGENTS.md` between
 `<!-- stele:begin … -->` and `<!-- stele:end -->` (D75): `SpliceRules` writes
-only between them, appending them when there are none, and refuses markers
-out of order; `ReadRules` and `SameRules` read only inside. `Loaded` counts
-the rules as read only at a `startup` whose walk from the nearest `.git`
-reaches root's file, with no `AGENTS.override.md` and the section's end
-within Codex's 32 KiB cap (or a lower `project_doc_max_bytes`); a resume,
-compaction, clear or fork answers `Forget`. A shared rules file is checked
+only between them, in the begin line's line end, appending them when there
+are none, and refuses markers out of order and UTF-16; `ReadRules` and
+`SameRules` read only inside. `Loaded` counts the rules as read only at a
+`startup` whose walk from the nearest `.git`, with none between root and the
+session's directory, reaches root's file, with no `AGENTS.override.md`, the
+section's end within Codex's 32 KiB cap (or a lower `project_doc_max_bytes`)
+and after no open HTML comment, and no AGENTS file written after the
+session's start, the time in its UUIDv7 id; a resume, compaction, clear or
+fork answers `Forget`. A shared rules file is checked
 like any file until it holds stele's section.
 
 ### `internal/install`

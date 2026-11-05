@@ -190,11 +190,11 @@ stele init: kept the existing stele.md
 Codex hooks: remind on, check on
 ```
 
-- It adds `stele hook --agent=codex` to `.codex/hooks.json` on `PreToolUse` (matcher `^(apply_patch|Bash)$`), `PostToolUse` (matcher `^apply_patch$`) and `SessionStart`, after any hooks already there. The command carries no version, so upgrading stele doesn't make Codex ask you to approve the hooks again.
+- It adds `stele hook --agent=codex` to `.codex/hooks.json` on `PreToolUse` (matcher `^(apply_patch|Bash)$`), `PostToolUse` (matcher `^(apply_patch|Bash)$`, for `apply_patch` run through the shell, which Codex applies itself) and `SessionStart`, after any hooks already there. The command carries no version, so upgrading stele doesn't make Codex ask you to approve the hooks again.
 - **Approve the hooks.** Start `codex` in the project, trust it, type `/hooks` and approve stele's three hooks. Codex runs no hook you haven't approved, and `codex exec` skips one without saying so. Turning `--remind` or `--check` on or off changes the hooks, so approve them again after.
 - The rules go in `AGENTS.md`, which Codex loads at the start of every session, between a `<!-- stele:begin … -->` and a `<!-- stele:end -->` line. stele writes only between those lines and keeps the rest of the file as it is; with no such lines, it adds them at the end. Don't edit inside them: `stele compile` writes them from `stele.md`.
 - `stele init --agent=claude-code,codex` sets up both. Without `--agent`, `stele init` and `stele uninstall` work for the agents already set up in the directory, or Claude Code when none is.
-- `stele uninstall --agent=codex` removes stele's hooks from `.codex/hooks.json` and its lines from `AGENTS.md`, and the file if nothing else is left; `.stele/` goes with the last agent's hooks.
+- `stele uninstall --agent=codex` removes stele's hooks from `.codex/hooks.json`, leaving its group empty while yours follow it so they keep their approvals, and its lines from `AGENTS.md`, and the file if nothing else is left; `.stele/` goes with the last agent's hooks.
 
 Everything else is as for Claude Code: the same `stele.md`, the same deny before a write and check after it, the same switches, and `stele check` in CI. `stele stats` shows the two agents apart.
 
@@ -641,11 +641,15 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **Codex reads only the first 32 KiB of its `AGENTS.md` files.** If stele's section ends past that, counting the `AGENTS.md` files of the directories above, or if an `AGENTS.override.md` sits beside it, Codex starts without the rules, and the deny before a write shows them instead. A `-c project_doc_max_bytes=…` on the command line isn't seen.
 
-**The rules count as loaded only at a session's startup, launched in the project or below it.** After a resume, a compaction, `/clear` or a fork, and in a subagent, the deny shows the rules again.
+**The rules count as loaded only at a session's startup, launched in the project or below it.** After a resume, a compaction, `/clear` or a fork, and in a subagent, the deny shows the rules again. So it does when a `.git` sits between the project and where Codex runs, as in a submodule, since Codex then starts its walk there, and when an `AGENTS.md` changed after the session started: Codex reads it when the session starts, and stele hears of the session only at its first prompt.
 
-**No reminder to re-run `stele init` for Codex.** Its hooks carry no version.
+**Removing a hook can cost the approvals of the hooks after it in its group.** Codex keys an approval by place. Uninstall keeps stele's group, empty, so the groups after it keep theirs; a hook you added inside stele's own group, after its handler, moves up and must be approved again.
 
-**Only `apply_patch` is checked.** Writes through MCP tools aren't seen.
+**`AGENTS.md` must be UTF-8.** A UTF-16 one is left alone, with a note, and Codex starts without the rules. When stele adds its section to a file whose last line has no line end, it adds one.
+
+**Notes past about 6,000 bytes are cut.** Codex moves a hook's longer context into a file the model may not open, so stele cuts it, says so, and `stele check` shows the rest.
+
+**Only `apply_patch` is checked,** whether Codex calls it as a tool or runs it in its shell. Writes through MCP tools aren't seen.
 
 **Only the version is checked, at `stele init`.** stele runs `codex --version` there and never in the hook. The release notes, not stele, are the source for 0.141 and 0.145.
 
