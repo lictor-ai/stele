@@ -8,6 +8,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/safefile"
@@ -25,8 +28,16 @@ import (
 //     keeps was not measured, so it forgets what was loaded;
 //   - it runs in root or below it, and a .git is at or above root, so the
 //     walk passes root, and no project_root_markers setting moves it;
+//   - no .git lies between root and where it runs, which would make a
+//     submodule's root the walk's top, below root;
 //   - root has no AGENTS.override.md, which Codex would read instead;
-//   - root's section ends within the cap, counted from the top of the walk.
+//   - root's section ends within the cap, counted from the top of the walk,
+//     and no HTML comment left open before it hides it;
+//   - none of those files changed since the session started: Codex reads
+//     them when the session starts, and this hook runs only at its first
+//     turn, which may come much later (measured on 0.166.0). The start is
+//     the time in the session id, a UUIDv7; an id that is not one primes
+//     nothing.
 //
 // A subagent is never primed: its loading was not measured.
 func Loaded(ev adapter.Event, root string) adapter.Load {
@@ -53,6 +64,18 @@ func Loaded(ev adapter.Event, root string) adapter.Load {
 	if !ok {
 		return l
 	}
+	for d := cwd; d != root; d = filepath.Dir(d) {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+			return l // a submodule or nested checkout: Codex's walk starts there
+		}
+		if filepath.Dir(d) == d {
+			return l
+		}
+	}
+	started, ok := sessionStarted(ev.SessionID)
+	if !ok {
+		return l
+	}
 	limit, markers := projectDocLimit(root)
 	if markers && cwd != root {
 		return l
@@ -60,20 +83,63 @@ func Loaded(ev adapter.Event, root string) adapter.Load {
 	if _, err := os.Lstat(filepath.Join(root, overrideFile)); err == nil {
 		return l
 	}
-	data, err := safefile.ReadRegular(filepath.Join(root, RulesFile), MaxRulesFile)
-	if err != nil {
+	file := filepath.Join(root, RulesFile)
+	data, err := safefile.ReadRegular(file, MaxRulesFile)
+	if err != nil || changedSince(file, started) {
 		return l
 	}
 	end := sectionEnd(data)
-	if end < 0 {
+	if end < 0 || openComment(data[:sectionBegin(data)]) {
 		return l
 	}
 	before := 0
 	for _, d := range dirsBetween(top, root) {
 		before += docSize(d)
+		for _, name := range []string{overrideFile, RulesFile} {
+			if changedSince(filepath.Join(d, name), started) {
+				return l
+			}
+		}
 	}
 	l.Read = before+end <= limit
 	return l
+}
+
+// sessionStarted is when a session began, from its id: Codex's ids are
+// UUIDv7, whose first 48 bits are the Unix time in milliseconds.
+func sessionStarted(id string) (time.Time, bool) {
+	u, err := uuid.Parse(id)
+	if err != nil || u.Version() != 7 {
+		return time.Time{}, false
+	}
+	ms := int64(u[0])<<40 | int64(u[1])<<32 | int64(u[2])<<24 | int64(u[3])<<16 | int64(u[4])<<8 | int64(u[5])
+	return time.UnixMilli(ms), true
+}
+
+// changedSince reports whether file was written after t, which a session id
+// gives to the millisecond. A file that is not there did not change.
+func changedSince(file string, t time.Time) bool {
+	info, err := os.Stat(file)
+	return err == nil && info.ModTime().After(t.Add(time.Millisecond))
+}
+
+// sectionBegin is the byte offset of the section's begin line in data, or
+// len(data) when there is none.
+func sectionBegin(data []byte) int {
+	off := 0
+	for _, line := range strings.SplitAfter(string(data), "\n") {
+		if b, _ := fence(line); b {
+			return off
+		}
+		off += len(line)
+	}
+	return len(data)
+}
+
+// openComment reports whether text leaves an HTML comment open, which would
+// hide what follows from a reader that hides comments.
+func openComment(text []byte) bool {
+	return bytes.LastIndex(text, []byte("<!--")) > bytes.LastIndex(text, []byte("-->"))
 }
 
 // within reports whether dir is root or below it.

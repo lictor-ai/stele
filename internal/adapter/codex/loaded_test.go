@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/lictor-ai/stele/internal/adapter"
 )
@@ -29,8 +32,55 @@ func repo(t *testing.T, sub string) string {
 	return root
 }
 
+// startEv is a session start whose id, a UUIDv7 as Codex's are, says it
+// began now.
 func startEv(source, cwd string) adapter.Event {
-	return adapter.Event{Kind: adapter.SessionStart, Cwd: cwd, Native: start{Source: source}}
+	return adapter.Event{Kind: adapter.SessionStart, SessionID: uuid.Must(uuid.NewV7()).String(), Cwd: cwd, Native: start{Source: source}}
+}
+
+// AGENTS.md changed after the session started is not what Codex read: Codex
+// reads it when the session starts, the hook runs at the first turn.
+func TestLoadedChangedSinceStart(t *testing.T) {
+	root := repo(t, "")
+	ev := startEv("startup", root)
+	time.Sleep(20 * time.Millisecond)
+	if err := os.WriteFile(filepath.Join(root, RulesFile), RenderRules(testRules[:1]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if l := Loaded(ev, root); l.Read || !l.Launch {
+		t.Errorf("AGENTS.md changed after the start: %+v", l)
+	}
+	ev.SessionID = "not-a-uuid"
+	if l := Loaded(ev, root); l.Read {
+		t.Errorf("a session id with no time: %+v", l)
+	}
+	if got, ok := sessionStarted("01a1a883-dc24-7932-8abd-64e03740d9f7"); !ok || got.UTC().Format("2006-01-02") != "2026-11-04" {
+		t.Errorf("recorded id's time = %v, %v", got, ok)
+	}
+}
+
+// A .git between root and where Codex runs, a submodule, is where Codex's
+// walk starts: root's AGENTS.md is not read.
+func TestLoadedNestedGit(t *testing.T) {
+	root := repo(t, "")
+	sub := filepath.Join(root, "vendor", "lib")
+	if err := os.MkdirAll(filepath.Join(sub, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if l := Loaded(startEv("startup", filepath.Join(sub, "x")), root); l.Read {
+		t.Errorf("below a nested .git: %+v", l)
+	}
+}
+
+func TestLoadedOpenCommentBefore(t *testing.T) {
+	root := repo(t, "")
+	data := append([]byte("<!-- a note never closed\n\n"), RenderRules(testRules)...)
+	if err := os.WriteFile(filepath.Join(root, RulesFile), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if l := Loaded(startEv("startup", root), root); l.Read {
+		t.Errorf("an open comment before the section: %+v", l)
+	}
 }
 
 func TestLoadedStartupOnly(t *testing.T) {
@@ -70,6 +120,9 @@ func TestLoadedOverride(t *testing.T) {
 func TestLoadedNoGit(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	root := t.TempDir()
+	if _, ok := gitTop(root); ok {
+		t.Skip("the temporary directory is inside a git checkout")
+	}
 	if err := os.WriteFile(filepath.Join(root, RulesFile), RenderRules(testRules), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package codex
 import (
 	"bytes"
 	_ "embed"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -50,8 +51,12 @@ var sectionTemplate = template.Must(template.New("rules-section").Funcs(template
 // marker lines.
 func fence(line string) (begin, end bool) {
 	l := strings.TrimSpace(line)
-	return strings.HasPrefix(l, beginPrefix), l == endLine
+	return beginLine.MatchString(l), l == endLine
 }
+
+// beginLine is the section's begin line: the marker, and maybe words after a
+// colon, which a stele of another version may word differently.
+var beginLine = regexp.MustCompile(`^<!-- stele:begin(?:: [^\n]*?)? -->$`)
 
 // fenced reports whether a rule's text holds a line that would read as a
 // marker of the section.
@@ -134,69 +139,111 @@ func section(lines []string) (begin, end int, found, ok bool) {
 	return begin, end, true, true
 }
 
-// text is a file split into lines, with how it was written.
+// text is a file split into lines, each with its own line end, so every
+// byte outside stele's section is written back as it was.
 type text struct {
-	bom   bool
-	crlf  bool
-	lines []string // without their line ends; the last is "" when the file ends in one
+	bom   string
+	lines []string // each with its line end; the last may have none
 }
 
 func splitText(data []byte) text {
 	body, bom := bytes.CutPrefix(data, []byte("\xef\xbb\xbf"))
-	s := string(body)
-	t := text{bom: bom, crlf: strings.Contains(s, "\r\n")}
-	t.lines = strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	t := text{lines: strings.SplitAfter(string(body), "\n")}
+	if bom {
+		t.bom = "\xef\xbb\xbf"
+	}
+	if n := len(t.lines); n > 0 && t.lines[n-1] == "" {
+		t.lines = t.lines[:n-1]
+	}
 	return t
 }
 
-func (t text) join(lines []string) []byte {
-	nl := "\n"
-	if t.crlf {
-		nl = "\r\n"
+func (t text) join(lines []string) []byte { return []byte(t.bom + strings.Join(lines, "")) }
+
+// ending is a line's line end: "\r\n", "\n", or "" for a last line with none.
+func ending(line string) string {
+	switch {
+	case strings.HasSuffix(line, "\r\n"):
+		return "\r\n"
+	case strings.HasSuffix(line, "\n"):
+		return "\n"
 	}
-	s := strings.Join(lines, nl)
-	if t.bom {
-		s = "\xef\xbb\xbf" + s
-	}
-	return []byte(s)
+	return ""
 }
 
-// renderedLines are the section's lines, without a final empty one.
-func renderedLines(rendered []byte) []string {
-	return strings.Split(strings.TrimRight(strings.ReplaceAll(string(rendered), "\r\n", "\n"), "\n"), "\n")
+// lastEnding is the line end of the file's last line that has one, "\n"
+// when none has.
+func (t text) lastEnding() string {
+	for i := len(t.lines) - 1; i >= 0; i-- {
+		if e := ending(t.lines[i]); e != "" {
+			return e
+		}
+	}
+	return "\n"
+}
+
+// renderedLines are the section's lines, each ended with nl.
+func renderedLines(rendered []byte, nl string) []string {
+	plain := strings.TrimRight(strings.ReplaceAll(string(rendered), "\r\n", "\n"), "\n")
+	lines := strings.Split(plain, "\n")
+	for i := range lines {
+		lines[i] += nl
+	}
+	return lines
+}
+
+// utf16 reports whether data looks like UTF-16 text, which stele does not
+// write into: its byte order mark, or a NUL byte.
+func utf16(data []byte) bool {
+	return bytes.HasPrefix(data, []byte{0xff, 0xfe}) || bytes.HasPrefix(data, []byte{0xfe, 0xff}) || bytes.IndexByte(data, 0) >= 0
 }
 
 // SpliceRules returns disk with rendered, a section RenderRules wrote, in
-// place of stele's section, in disk's line ends and byte order mark. A file
-// with no section gets it appended after a blank line. Every byte outside
-// the section is kept. ok is false when disk's markers are broken: the file
-// is then not stele's to change.
+// place of stele's section, its lines ended as the begin line was. A file
+// with no section gets it appended after a blank line, in the line end of
+// the file's last line. Every byte outside the section is kept; a last line
+// with no line end gets one. ok is false when disk's markers are broken, or
+// it is UTF-16: the file is then not stele's to change. disk is nil when
+// there is no file.
 func SpliceRules(disk, rendered []byte) (out []byte, ok bool) {
+	if utf16(disk) {
+		return nil, false
+	}
 	t := splitText(disk)
 	begin, end, found, ok := section(t.lines)
 	if !ok {
 		return nil, false
 	}
-	sec := renderedLines(rendered)
 	if found {
+		nl := ending(t.lines[begin])
+		if nl == "" {
+			nl = t.lastEnding()
+		}
+		sec := renderedLines(rendered, nl)
+		if ending(t.lines[end]) == "" {
+			sec[len(sec)-1] = strings.TrimSuffix(sec[len(sec)-1], nl)
+		}
 		lines := append(append(append([]string{}, t.lines[:begin]...), sec...), t.lines[end+1:]...)
 		return t.join(lines), true
 	}
-	lines := t.lines
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1] // the final line end
+	nl := t.lastEnding()
+	lines := append([]string{}, t.lines...)
+	if n := len(lines); n > 0 {
+		if ending(lines[n-1]) == "" {
+			lines[n-1] += nl
+		}
+		lines = append(lines, nl) // a blank line before the section
 	}
-	if len(lines) > 0 {
-		lines = append(lines, "") // a blank line before the section
-	}
-	lines = append(append(lines, sec...), "")
-	return t.join(lines), true
+	return t.join(append(lines, renderedLines(rendered, nl)...)), true
 }
 
 // UnspliceRules returns disk without stele's section, and the one blank line
 // before it; remove says nothing else is left. ok is false when disk holds
-// no section, or a broken one.
+// no section, a broken one, or is UTF-16.
 func UnspliceRules(disk []byte) (out []byte, remove, ok bool) {
+	if utf16(disk) {
+		return nil, false, false
+	}
 	t := splitText(disk)
 	begin, end, found, ok := section(t.lines)
 	if !ok || !found {
@@ -219,7 +266,7 @@ func sectionText(data []byte) []byte {
 	if !found || !ok {
 		return nil
 	}
-	return []byte(strings.Join(t.lines[begin+1:end], "\n"))
+	return []byte(strings.Join(t.lines[begin+1:end], ""))
 }
 
 // OwnedRules reports whether data holds stele's section, well fenced.

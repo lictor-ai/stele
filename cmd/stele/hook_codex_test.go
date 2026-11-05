@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/lictor-ai/stele/internal/journal"
 )
 
@@ -142,10 +144,20 @@ func TestHookCodexPostBlocksPerFile(t *testing.T) {
 			t.Errorf("reason lacks %q:\n%s", want, o.Reason)
 		}
 	}
-	// A patch that failed wrote nothing: nothing to check.
+	// A patch that failed may still have written some files: what of its new
+	// text is in them is checked.
 	p["tool_response"] = "Exit code: 1\nWall time: 0.1 seconds\nOutput:\nfailed\n"
+	if o, _ := codexHook(t, p); o.Decision != "block" {
+		t.Errorf("after a failed patch that wrote its files: %+v", o)
+	}
+	// One that wrote nothing has nothing to check.
+	for _, f := range []string{"a.go", "b.go"} {
+		if err := os.WriteFile(filepath.Join(root, f), []byte("package x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, out := codexHook(t, p); out != "" {
-		t.Errorf("after a failed patch: stdout %q", out)
+		t.Errorf("after a failed patch that wrote nothing: stdout %q", out)
 	}
 }
 
@@ -204,10 +216,15 @@ func TestCodexInitAndPrimedSession(t *testing.T) {
 		t.Errorf("AGENTS.md:\n%s", agents)
 	}
 
-	if _, out := codexHook(t, codexPayload(t, "session-start", root, "")); !strings.Contains(out, "apply_patch") {
+	// A session that began after AGENTS.md was written, as its UUIDv7 id says.
+	session := uuid.Must(uuid.NewV7()).String()
+	start := codexPayload(t, "session-start", root, "")
+	start["session_id"] = session
+	if _, out := codexHook(t, start); !strings.Contains(out, "apply_patch") {
 		t.Fatalf("session start: %q", out)
 	}
 	p := codexPayload(t, "pre-patch-add", root, "*** Begin Patch\n*** Add File: internal/db.go\n+package db\n*** End Patch")
+	p["session_id"] = session
 	if _, out := codexHook(t, p); out != "" {
 		t.Errorf("a write after a primed startup: stdout %q, want nothing", out)
 	}

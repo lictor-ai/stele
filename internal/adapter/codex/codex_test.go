@@ -141,6 +141,86 @@ func TestParsePatch(t *testing.T) {
 	}
 }
 
+// Patches Codex accepts leniently, and ones stele cannot follow: every file
+// a header names is seen, a move's target and an indented header included.
+func TestParsePatchLenient(t *testing.T) {
+	cwd := t.TempDir()
+	at := func(rel string) string { return filepath.Join(cwd, filepath.FromSlash(rel)) }
+	files := func(es []adapter.Edit) []string {
+		var out []string
+		for _, e := range es {
+			out = append(out, e.File)
+		}
+		return out
+	}
+	tests := []struct {
+		name, patch string
+		want        []string
+	}{
+		{"a heredoc wrapper", "<<'EOF'\n*** Begin Patch\n*** Add File: a.go\n+x\n*** End Patch\nEOF\n", []string{at("a.go")}},
+		{"apply_patch and a heredoc", "apply_patch <<\"PATCH\"\n*** Begin Patch\n*** Delete File: b.go\n*** End Patch\nPATCH", []string{at("b.go")}},
+		{"indented headers", "*** Begin Patch\n  *** Update File: a.go\n  @@\n-a\n+b\n  *** Delete File: stele.md\n*** End Patch", []string{at("a.go"), at("stele.md")}},
+		{"a delete after an add body, indented", "*** Begin Patch\n*** Add File: a.go\n+x\n   *** Delete File: stele.md\n*** End Patch", []string{at("a.go"), at("stele.md")}},
+		{"broken, with a move", "*** Begin Patch\n*** Update File: a.go\n*** Move to: .codex/hooks.json\n??\n", []string{at("a.go"), at(".codex/hooks.json")}},
+		{"broken, a header inside a line", "garbage *** Delete File: stele.json\n", []string{at("stele.json")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := files(parsePatch(tt.patch, cwd))
+			if strings.Join(got, "|") != strings.Join(tt.want, "|") {
+				t.Errorf("files = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Codex runs apply_patch through its shell itself, and the hooks get it as
+// Bash (measured on 0.166.0): it is read as the patch, never as a command.
+func TestParseShellPatch(t *testing.T) {
+	cwd := t.TempDir()
+	patch := "*** Begin Patch\n*** Add File: s.txt\n+x\n*** End Patch"
+	for name, command := range map[string]any{
+		"quoted, as recorded": "apply_patch '" + patch + "'",
+		"a heredoc":           "apply_patch <<'EOF'\n" + patch + "\nEOF",
+		"argv":                []string{"apply_patch", patch},
+		"argv, applypatch":    []string{"applypatch", patch},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, event := range []string{"PreToolUse", "PostToolUse"} {
+				data, _ := json.Marshal(map[string]any{"hook_event_name": event, "cwd": cwd, "tool_name": "Bash",
+					"tool_input": map[string]any{"command": command}, "tool_response": "Invalid patch: The last line of the patch must be '*** End Patch'\n"})
+				got, err := Parse(data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := adapter.PreTool
+				if event == "PostToolUse" {
+					want = adapter.PostTool
+				}
+				if got.Kind != want || got.Command != "" || len(got.Edits) != 1 || got.Edits[0].File != filepath.Join(cwd, "s.txt") {
+					t.Errorf("%s: %+v", event, got)
+				}
+			}
+		})
+	}
+	// Any other shell command after it runs is nothing to answer.
+	data, _ := json.Marshal(map[string]any{"hook_event_name": "PostToolUse", "cwd": cwd, "tool_name": "Bash", "tool_input": map[string]any{"command": "go test"}})
+	if got, _ := Parse(data); got.Kind != adapter.Other {
+		t.Errorf("post shell: %+v", got)
+	}
+}
+
+// tool_input may be the patch itself, a JSON string.
+func TestParsePatchInputString(t *testing.T) {
+	cwd := t.TempDir()
+	data, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "cwd": cwd, "tool_name": "apply_patch",
+		"tool_input": "*** Begin Patch\n*** Add File: a.go\n+x\n*** End Patch"})
+	got, err := Parse(data)
+	if err != nil || len(got.Edits) != 1 || got.Edits[0].File != filepath.Join(cwd, "a.go") {
+		t.Errorf("got %+v, %v", got, err)
+	}
+}
+
 func FuzzParsePatch(f *testing.F) {
 	f.Add("*** Begin Patch\n*** Add File: a\n+x\n*** End Patch")
 	f.Add("*** Begin Patch\n*** Update File: a\n*** Move to: b\n@@\n-x\n+y\n*** End Patch")
@@ -163,9 +243,12 @@ func TestParsePatchResult(t *testing.T) {
 	if len(got.Edits) != 1 || got.Edits[0].File != filepath.Join(cwd, "b.go") {
 		t.Errorf("listed b.go only: %+v", got.Edits)
 	}
+	// A failed patch may have written some files: each is checked by its new
+	// text only, never as a whole file it may not have reached.
 	failed := "Exit code: 1\nWall time: 0.1 seconds\nOutput:\napply_patch verification failed\n"
-	if got, _ := Parse(patchPayload(t, "PostToolUse", cwd, patch, failed)); len(got.Edits) != 0 {
-		t.Errorf("a failed patch wrote %+v", got.Edits)
+	got, _ = Parse(patchPayload(t, "PostToolUse", cwd, patch, failed))
+	if len(got.Edits) != 2 || got.Edits[0].Whole || got.Edits[0].NewText[0] != "x" {
+		t.Errorf("after a failed patch: %+v", got.Edits)
 	}
 	if got, _ := Parse(patchPayload(t, "PostToolUse", cwd, patch, map[string]any{"x": 1})); len(got.Edits) != 2 {
 		t.Errorf("a result not read keeps the patch's files: %+v", got.Edits)
@@ -267,6 +350,17 @@ func TestRender(t *testing.T) {
 		o := decode(t, Render("SessionStart", adapter.Answer{Context: "use apply_patch"}))
 		if o.HookSpecificOutput.HookEventName != "SessionStart" || o.HookSpecificOutput.AdditionalContext != "use apply_patch" {
 			t.Errorf("got %+v", o.HookSpecificOutput)
+		}
+	})
+	t.Run("a long context is cut to stay inline", func(t *testing.T) {
+		long := strings.Repeat("a line of a long note\n", 600)
+		o := decode(t, Render("PostToolUse", adapter.Answer{Context: long}))
+		got := o.HookSpecificOutput.AdditionalContext
+		if len(got) > maxContext || !strings.Contains(got, "stele cut the last") || !strings.HasPrefix(long, strings.SplitN(got, "\n\n(stele", 2)[0]) {
+			t.Errorf("context of %d bytes: %.80q…", len(got), got)
+		}
+		if short := decode(t, Render("SessionStart", adapter.Answer{Context: "x"})); short.HookSpecificOutput.AdditionalContext != "x" {
+			t.Error("a short context changed")
 		}
 	})
 	t.Run("nothing to say", func(t *testing.T) {

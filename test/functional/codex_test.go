@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Codex, through the built binary: the hooks stele init writes into
@@ -45,12 +47,23 @@ func (p *project) useCodexHook() {
 	p.hookArgs = words[2:]
 }
 
+// codexSessions are each project's session id, a UUIDv7 as Codex's are,
+// made at its first event: the session starts after init wrote AGENTS.md.
+var codexSessions = map[string]string{}
+
+func codexSession(dir string) string {
+	if _, ok := codexSessions[dir]; !ok {
+		codexSessions[dir] = uuid.Must(uuid.NewV7()).String()
+	}
+	return codexSessions[dir]
+}
+
 // codexEvent is a Codex hook payload: an apply_patch (patch), a shell
 // command (shell), or neither, for a session start.
 func (p *project) codexEvent(event, turn, patch, shell, resp string) []byte {
 	p.t.Helper()
 	m := map[string]any{
-		"session_id": "019a-codex", "turn_id": turn, "transcript_path": nil, "cwd": p.dir,
+		"session_id": codexSession(p.dir), "turn_id": turn, "transcript_path": nil, "cwd": p.dir,
 		"hook_event_name": event, "model": "gpt-5.6-luna", "permission_mode": "bypassPermissions",
 	}
 	switch {
@@ -85,7 +98,7 @@ func codexInit(t *testing.T, args ...string) *project {
 func TestCodexInitWritesHooksAndSection(t *testing.T) {
 	p := codexInit(t)
 	hooks := p.read(".codex/hooks.json")
-	for _, want := range []string{`"PreToolUse"`, `"^(apply_patch|Bash)$"`, `"PostToolUse"`, `"^apply_patch$"`, `"SessionStart"`, `"stele hook --agent=codex"`} {
+	for _, want := range []string{`"PreToolUse"`, `"^(apply_patch|Bash)$"`, `"PostToolUse"`, `"^(apply_patch|Bash)$"`, `"SessionStart"`, `"stele hook --agent=codex"`} {
 		if !strings.Contains(hooks, want) {
 			t.Errorf(".codex/hooks.json lacks %s:\n%s", want, hooks)
 		}

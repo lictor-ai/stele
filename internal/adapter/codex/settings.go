@@ -29,7 +29,7 @@ type registration struct{ Event, Matcher string }
 // command, after a patch, and when a session starts.
 var registrations = []registration{
 	{"PreToolUse", "^(apply_patch|Bash)$"},
-	{"PostToolUse", "^apply_patch$"},
+	{"PostToolUse", "^(apply_patch|Bash)$"},
 	{"SessionStart", ""},
 }
 
@@ -220,6 +220,15 @@ func (f *settingsFile) place(r registration, fresh json.RawMessage) error {
 			if _, ok := h.stamp(); !ok {
 				continue
 			}
+			// stele's group alone, under an older stele's matcher, takes
+			// this one's where it is.
+			if !done && g.matcher() != r.Matcher && len(g.hooks) == 1 {
+				m, err := jsonedit.Marshal(r.Matcher)
+				if err != nil {
+					return err
+				}
+				g.fields.Set("matcher", m)
+			}
 			if !done && g.matcher() == r.Matcher {
 				g.hooks[i], done = fresh, true
 				g.handlers[i] = handler{Command: "stele hook " + agentArg} // stele's, already placed
@@ -227,6 +236,14 @@ func (f *settingsFile) place(r registration, fresh json.RawMessage) error {
 				continue
 			}
 			g.drop[i] = true
+		}
+	}
+	// A place stele's handler kept, emptied by an uninstall: it goes back
+	// there.
+	for _, g := range f.groups[r.Event] {
+		if !done && g.emptySlot() && g.matcher() == r.Matcher {
+			g.hooks, g.handlers = []json.RawMessage{fresh}, []handler{{Command: "stele hook " + agentArg}}
+			g.dirty, done = true, true
 		}
 	}
 	if !done {
@@ -327,6 +344,7 @@ type group struct {
 	handlers []handler    // hooks, decoded
 	drop     map[int]bool // hooks to remove
 	dirty    bool         // hooks changed in place
+	slot     bool         // stele emptied it: it keeps its place
 }
 
 // matcher returns the group's matcher, "" when it has none or it is not a
@@ -418,6 +436,11 @@ func parseGroup(raw json.RawMessage, ev string) (*group, error) {
 
 // prune rebuilds ev's groups after changes: handlers marked to drop go, and
 // a group they leave empty.
+//
+// A group stele empties stays, with its matcher and no hooks, when a group
+// with hooks follows it: Codex keys a hook's approval by its group's place,
+// and an empty group keeps the places after it (measured on 0.166.0 with
+// hooks/list). Empty groups at the end, which keep no place, go.
 func (f *settingsFile) prune(ev string) error {
 	var kept []*group
 	for _, g := range f.groups[ev] {
@@ -433,8 +456,9 @@ func (f *settingsFile) prune(ev string) error {
 				handlers = append(handlers, g.handlers[i])
 			}
 		}
-		if len(hooks) == 0 {
-			continue // stele emptied it
+		if hooks == nil {
+			hooks = []json.RawMessage{}
+			g.slot = true // stele emptied it
 		}
 		g.fields.Set("hooks", jsonedit.Array(hooks))
 		raw, err := g.fields.Marshal()
@@ -444,8 +468,30 @@ func (f *settingsFile) prune(ev string) error {
 		g.raw, g.hooks, g.handlers, g.drop, g.dirty = raw, hooks, handlers, map[int]bool{}, false
 		kept = append(kept, g)
 	}
+	for len(kept) > 0 && kept[len(kept)-1].emptySlot() {
+		kept = kept[:len(kept)-1]
+	}
 	f.groups[ev] = kept
 	return nil
+}
+
+// emptySlot reports whether g is a group stele emptied, or left empty
+// before, keeping its place: no hooks, and a matcher stele registers.
+func (g *group) emptySlot() bool {
+	if g.fields == nil || len(g.hooks) != 0 {
+		return false
+	}
+	if g.slot {
+		return true
+	}
+	for _, r := range registrations {
+		if g.matcher() == r.Matcher {
+			if _, ok := g.fields.Get("hooks"); ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // render writes the file back: every value as written, laid out with two
