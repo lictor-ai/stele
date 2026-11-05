@@ -220,6 +220,15 @@ func (f *settingsFile) place(r registration, fresh json.RawMessage) error {
 			if _, ok := h.stamp(); !ok {
 				continue
 			}
+			// stele's group alone, under an older stele's matcher, takes
+			// this one's where it is.
+			if !done && g.matcher() != r.Matcher && len(g.hooks) == 1 {
+				m, err := jsonedit.Marshal(r.Matcher)
+				if err != nil {
+					return err
+				}
+				g.fields.Set("matcher", m)
+			}
 			if !done && g.matcher() == r.Matcher {
 				g.hooks[i], done = fresh, true
 				g.handlers[i] = handler{Command: "stele hook " + agentArg} // stele's, already placed

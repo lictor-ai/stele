@@ -183,6 +183,20 @@ func TestUninstallKeepsPlaces(t *testing.T) {
 	}
 }
 
+// A hooks file an older stele wrote, with another matcher, is updated in
+// place: no empty group is left behind.
+func TestInstallUpdatesOlderMatcherInPlace(t *testing.T) {
+	old := `{"hooks":{"PostToolUse":[{"matcher":"^apply_patch$","hooks":[{"type":"command","command":"stele hook --agent=codex","timeout":10}]},{"matcher":"x","hooks":[{"type":"command","command":"mine"}]}]}}`
+	out, changed, _, err := Install([]byte(old), adapter.Switches{})
+	if err != nil || !changed {
+		t.Fatalf("Install: %v, changed %v", err, changed)
+	}
+	got := hooksOf(t, out)["PostToolUse"]
+	if len(got) != 2 || got[0][0] != "matcher=^(apply_patch|Bash)$" || got[0][1] != "stele hook --agent=codex" || got[1][1] != "mine" {
+		t.Errorf("PostToolUse = %v", got)
+	}
+}
+
 func TestOtherSteleHook(t *testing.T) {
 	ours, _, _, _ := Install(nil, adapter.Switches{})
 	if OtherSteleHook(ours, adapter.Switches{}) {
