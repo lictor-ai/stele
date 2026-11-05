@@ -53,9 +53,10 @@ type Generated struct {
 	// Same reports whether the file on disk is up to date with want. nil:
 	// the same text, line ends and a byte order mark aside.
 	Same func(disk, want []byte) bool
-	// Splice, when set, puts what Render gave into the file on disk, for a
-	// file compile writes only a part of, and says whether it may (ok);
-	// Owned is then not used. Same compares the file spliced.
+	// Splice, when set, puts what Render gave into the file on disk, nil
+	// when there is none, for a file compile writes only a part of, and says
+	// whether it may (ok); Owned is then not used. Same compares the file
+	// spliced.
 	Splice func(disk, rendered []byte) (out []byte, ok bool)
 }
 
@@ -200,7 +201,10 @@ func generate(root string, idx index.Index, pins []source.Pin, gens []Generated)
 		data := g.Render(idx)
 		f := File{Path: g.Path, Data: data}
 		disk, err := safefile.ReadRegular(filepath.Join(root, filepath.FromSlash(g.Path)), maxGenerated)
-		if err == nil && g.Splice != nil {
+		if g.Splice != nil && (err == nil || errors.Is(err, fs.ErrNotExist)) {
+			if err != nil {
+				disk = nil // missing: its part is spliced into nothing
+			}
 			f.Data, f.Foreign = spliced(g, disk, data)
 			f.Changed = !f.Foreign && !sameFile(g, disk, f.Data) && !partial
 			files[i] = f
