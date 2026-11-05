@@ -95,7 +95,7 @@ func (Adapter) SessionContext() string                  { return SessionContext(
 func (Adapter) SharedRulesFile() bool { return false }
 
 func (Adapter) SpliceRules(disk, rendered []byte) ([]byte, bool) {
-	return rendered, OwnedRules(disk)
+	return rendered, disk == nil || OwnedRules(disk)
 }
 
 func (Adapter) UnspliceRules(disk []byte) ([]byte, bool, bool) {
