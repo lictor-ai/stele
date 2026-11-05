@@ -113,6 +113,7 @@ func TestTimeoutFor(t *testing.T) {
 	const net = 7 * time.Minute
 	for _, args := range [][]string{
 		{"clone", "--bare"}, {"--git-dir=x", "fetch"}, {"--git-dir=x", "push"}, {"ls-remote", "--symref"},
+		{"-c", "transfer.fsckObjects=true", "--git-dir=x", "fetch"},
 	} {
 		if got := TimeoutFor(args, net); got != net {
 			t.Errorf("TimeoutFor(%q) = %v, want %v", args, got, net)
@@ -122,6 +123,39 @@ func TestTimeoutFor(t *testing.T) {
 		if got := TimeoutFor(args, net); got != GitTimeout {
 			t.Errorf("TimeoutFor(%q) = %v, want %v", args, got, GitTimeout)
 		}
+	}
+}
+
+func TestErrorNamesTheSubcommand(t *testing.T) {
+	g := testGit(t)
+	_, err := g.Run(context.Background(), t.TempDir(), nil, nil, "-c", "x.y=z", "--git-dir="+t.TempDir(), "cat-file", "-e", "HEAD")
+	if err == nil || !strings.Contains(err.Error(), "git cat-file:") {
+		t.Errorf("err = %v, want it to name git cat-file", err)
+	}
+}
+
+// stele.json is committed: a user or token in an https repo would be too.
+// The error never shows it.
+func TestValidateRepoRefusesHTTPSUser(t *testing.T) {
+	for _, repo := range []string{
+		"https://ghp_secrettoken@github.com/a/b.git",
+		"https://x-access-token:ghp_secrettoken@github.com/a/b.git",
+		"https://ghp_secrettoken@github.com/a/b?x",
+	} {
+		err := ValidateRepo(repo)
+		if err == nil {
+			t.Errorf("ValidateRepo(%q) accepted", repo)
+			continue
+		}
+		if strings.Contains(err.Error(), "secrettoken") {
+			t.Errorf("ValidateRepo(%q) = %q, shows the token", repo, err)
+		}
+	}
+	if err := ValidateRepo("ssh://git@gitlab.com/g/p.git"); err != nil {
+		t.Errorf("ssh with a user: %v", err)
+	}
+	if got := access(ErrGit, "https://tok@host/x"); strings.Contains(got.Error(), "tok@") {
+		t.Errorf("access = %q, shows the user", got)
 	}
 }
 

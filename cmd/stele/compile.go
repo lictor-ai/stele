@@ -11,20 +11,25 @@ import (
 
 	"github.com/lictor-ai/stele/internal/check"
 	"github.com/lictor-ai/stele/internal/compile"
+	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/sign"
-	"github.com/lictor-ai/stele/internal/source"
+	"github.com/lictor-ai/stele/internal/source/gitrepo"
 )
 
 // runCompile reads every source, then writes stele.lock and the index when
 // they changed, and prints how each rule got its id. It then checks the
 // rules with the built-in checkers, as stele check does, and exits 1 when one
 // is invalid (#54). The files are written anyway: an invalid rule keeps its
-// id, and the valid rules are enforced.
+// id, and the valid rules are enforced. --update moves every git source's
+// pin to its ref's tip (D72).
 func runCompile(args []string, stdout, stderr io.Writer) int {
-	root, ok := setup("compile", args, stderr)
+	var update bool
+	root, ok := setupFlags("compile", args, stderr, func(fs *flag.FlagSet) {
+		fs.BoolVar(&update, "update", false, "pin every git source at its ref's tip")
+	})
 	if !ok {
 		return exitCantRun
 	}
@@ -33,11 +38,25 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "stele compile: %v\n", err)
 		return exitCantRun
 	}
-	r, err := compile.Compile(context.Background(), root, sources(), generated(root), uuid.NewString, key)
+	mode := gitrepo.Pinned
+	if update {
+		mode = gitrepo.Update
+	}
+	srcs, err := sources(root, mode)
 	if err != nil {
 		fmt.Fprintf(stderr, "stele compile: %v\n", err)
 		return exitCantRun
 	}
+	prev := committedPins(root)
+	r, err := compile.Compile(context.Background(), root, srcs, generated(root), uuid.NewString, key)
+	if err != nil {
+		fmt.Fprintf(stderr, "stele compile: %v\n", err)
+		return exitCantRun
+	}
+	if update && len(r.Lock.Sources) == 0 {
+		fmt.Fprintf(stdout, "no git source in %s: nothing to update\n", enforce.FileName)
+	}
+	printPins(stdout, prev, r.Lock.Sources, update)
 	printCompile(stdout, r)
 	for _, n := range generatedNotes(root, r.Files) {
 		fmt.Fprintf(stderr, "stele compile: %s\n", n)
@@ -76,8 +95,17 @@ func loadExistingKey() (sign.Key, error) {
 
 // setup parses a command's flags and finds the project root.
 func setup(name string, args []string, stderr io.Writer) (string, bool) {
+	return setupFlags(name, args, stderr, nil)
+}
+
+// setupFlags is setup for a command with flags of its own, which define
+// adds.
+func setupFlags(name string, args []string, stderr io.Writer, define func(*flag.FlagSet)) (string, bool) {
 	fs := flag.NewFlagSet("stele "+name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	if define != nil {
+		define(fs)
+	}
 	if err := fs.Parse(args); err != nil {
 		return "", false
 	}
@@ -92,10 +120,6 @@ func setup(name string, args []string, stderr io.Writer) (string, bool) {
 	}
 	return root, true
 }
-
-// sources is every source compile reads. External sources from stele.json
-// join the built-ins with the plugin registry (#14).
-func sources() []source.Source { return plugin.Builtins() }
 
 // printCompile says how each rule got its id, and what was written. Ids
 // matched by position are guesses, so each is named for the reader to check.
