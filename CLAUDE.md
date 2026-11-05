@@ -43,7 +43,12 @@ Guideline enforcement for coding agents. Go, single binary.
     `stele.lock`. It amends ADR-0004 and ADR-0007, which kept compile and
     check offline (they may now fetch a listed repository; the hook still
     never does), and D45, D53, D62 and D66. The spec carries it as D71–D72.
-12. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+12. `docs/adr/0012-a-second-agent-codex.md` — Codex, a second agent:
+    `stele hook --agent=<name>`, an agent registry, one tool call touching
+    several files (`Event.Edits`), an agent that cannot ask, and the rules in a
+    marked section of the user's `AGENTS.md`. It amends ADR-0005 and ADR-0009.
+    The spec carries it as D73–D76.
+13. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
@@ -64,7 +69,7 @@ enterprise idea. Do not implement it or use it as a v1 format.
 - Only `internal/adapter/<agent>`, `cmd/stele/agents.go` and
   `internal/install/agent_test.go` (the install tests, which check the real
   adapter's output) import an agent adapter; nothing else names Claude Code's
-  events, tools or files (ADR-0009).
+  or Codex's events, tools or files (ADR-0009, ADR-0012).
 - Only plugins listed in `stele.json` and found on `PATH` run, never one inside
   the repository (D43).
 - Nothing leaves the machine except through a sink listed in `stele.json`, and
