@@ -33,14 +33,21 @@ const (
 	endOfFile  = "*** End of File"
 )
 
-// fileLine finds a file header anywhere, for a patch that does not parse.
-var fileLine = regexp.MustCompile(`(?m)^\*\*\* (Add|Update|Delete) File: (.+?)\r?$`)
+// fileLine finds a file header anywhere, even indented or inside a line, for
+// a patch that does not parse: whatever Codex might take as a header is a
+// file the guard sees.
+var fileLine = regexp.MustCompile(`\*\*\* (Add File|Update File|Delete File|Move to): ([^\r\n]+)`)
+
+// heredoc opens a patch wrapped as the shell takes it, which Codex also
+// accepts: <<'EOF', <<"EOF" or <<EOF, maybe after apply_patch.
+var heredoc = regexp.MustCompile(`^\s*(?:apply_?patch\s+)?<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)['"]?[ \t]*\r?$`)
 
 // parsePatch returns the files patch touches, paths taken relative to cwd,
-// in the patch's order. A patch stele cannot follow still gives the files its
-// headers name, so the guard and the rules see them; only their new text is
-// lost.
+// in the patch's order. A patch stele cannot follow still gives every file a
+// header anywhere in it names, so the guard and the rules see them; only
+// their new text is lost.
 func parsePatch(patch, cwd string) []adapter.Edit {
+	patch = unwrap(patch)
 	if edits, ok := readPatch(patch, cwd); ok {
 		return edits
 	}
@@ -50,13 +57,30 @@ func parsePatch(patch, cwd string) []adapter.Edit {
 		if !ok {
 			continue
 		}
-		if m[1] == "Delete" {
+		if m[1] == "Delete File" {
 			edits = append(edits, adapter.Edit{File: f, Removes: true})
 		} else {
 			edits = append(edits, adapter.Edit{File: f, Writes: true})
 		}
 	}
 	return edits
+}
+
+// unwrap takes a heredoc's wrapper off a patch: its first line and its
+// closing tag.
+func unwrap(patch string) string {
+	first, rest, ok := strings.Cut(patch, "\n")
+	m := heredoc.FindStringSubmatch(first)
+	if !ok || m == nil {
+		return patch
+	}
+	lines := strings.Split(rest, "\n")
+	for i, l := range lines {
+		if strings.TrimSpace(l) == m[2] {
+			return strings.Join(lines[:i], "\n")
+		}
+	}
+	return rest
 }
 
 // patchReader reads one patch, file by file.
@@ -95,19 +119,25 @@ func readPatch(patch, cwd string) (edits []adapter.Edit, ok bool) {
 // line reads one line of the patch; false is a line the format has no place
 // for.
 func (r *patchReader) line(line string) bool {
+	// Codex trims a header line, so an indented one is a header too.
+	h := strings.TrimSpace(line)
+	if !strings.HasPrefix(h, "*** ") {
+		h = ""
+	}
 	switch {
-	case strings.HasPrefix(line, addFile):
-		return r.start(line[len(addFile):], true)
-	case strings.HasPrefix(line, updateFile):
-		return r.start(line[len(updateFile):], false)
-	case strings.HasPrefix(line, deleteFile):
+	case strings.HasPrefix(h, addFile):
+		return r.start(h[len(addFile):], true)
+	case strings.HasPrefix(h, updateFile):
+		return r.start(h[len(updateFile):], false)
+	case strings.HasPrefix(h, deleteFile):
 		r.done()
-		f, ok := patchPath(line[len(deleteFile):], r.cwd)
+		f, ok := patchPath(h[len(deleteFile):], r.cwd)
 		if ok {
 			r.edits = append(r.edits, adapter.Edit{File: f, Removes: true})
 		}
 		return ok
-	case strings.HasPrefix(line, moveTo):
+	case strings.HasPrefix(h, moveTo):
+		line = h
 		// An update's new path: the old one goes, and the file is written
 		// there in full.
 		if r.cur == nil || r.adding {
@@ -122,7 +152,7 @@ func (r *patchReader) line(line string) bool {
 		return true
 	case r.cur == nil:
 		return strings.TrimSpace(line) == ""
-	case line == endOfFile:
+	case h == endOfFile:
 		return true
 	case r.adding:
 		if !strings.HasPrefix(line, "+") {
@@ -130,7 +160,7 @@ func (r *patchReader) line(line string) bool {
 		}
 		r.body = append(r.body, line[1:])
 		return true
-	case strings.HasPrefix(line, "@@"):
+	case strings.HasPrefix(strings.TrimLeft(line, " \t"), "@@"):
 		r.hunk()
 		return true
 	case strings.HasPrefix(line, "+"):

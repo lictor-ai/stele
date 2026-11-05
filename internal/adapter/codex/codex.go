@@ -32,7 +32,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
+	"strings"
 
 	"github.com/lictor-ai/stele/internal/adapter"
 )
@@ -50,8 +54,8 @@ func kind(event, tool string) adapter.Kind {
 		return adapter.PreTool
 	case event == "PreToolUse" && tool == shellTool:
 		return adapter.PreShell
-	case event == "PostToolUse" && tool == patchTool:
-		return adapter.PostTool
+	case event == "PostToolUse" && (tool == patchTool || tool == shellTool):
+		return adapter.PostTool // a shell command only when it runs apply_patch
 	case event == "SessionStart":
 		return adapter.SessionStart
 	}
@@ -103,60 +107,151 @@ func Parse(stdin []byte) (adapter.Event, error) {
 		AgentID:   p.AgentID,
 		Cwd:       p.Cwd,
 	}
-	switch e.Kind {
-	case adapter.SessionStart:
+	post := p.HookEventName == "PostToolUse"
+	switch {
+	case e.Kind == adapter.SessionStart:
 		e.Native = start{Source: p.Source}
-	case adapter.PreShell:
+	case p.ToolName == shellTool && (e.Kind == adapter.PreShell || e.Kind == adapter.PostTool):
 		var in struct {
 			Command json.RawMessage `json:"command"`
 			Workdir string          `json:"workdir"`
 		}
-		if json.Unmarshal(p.ToolInput, &in) == nil {
-			e.Command = shellCommand(in.Command)
-			if in.Workdir != "" {
-				if w, ok := patchPath(in.Workdir, p.Cwd); ok {
-					e.Cwd = w
-				}
-			}
-		}
-		e.Dialect = shellDialect
-	case adapter.PreTool, adapter.PostTool:
-		var in struct {
-			Command string `json:"command"`
-			Input   string `json:"input"`
-		}
 		if json.Unmarshal(p.ToolInput, &in) != nil {
+			e.Kind = adapter.Other
 			return e, nil
 		}
-		patch := in.Command
-		if patch == "" {
-			patch = in.Input
+		if in.Workdir != "" {
+			if w, ok := patchPath(in.Workdir, p.Cwd); ok {
+				e.Cwd = w
+			}
 		}
-		e.Edits = parsePatch(patch, p.Cwd)
-		if e.Kind == adapter.PostTool {
+		command, argvPatch := shellCommand(in.Command)
+		// Codex applies a patch run through its shell itself, measured on
+		// 0.166.0: apply_patch '<patch>' reaches the hooks as Bash. It is
+		// read as the patch it is.
+		patch, isPatch := argvPatch, argvPatch != ""
+		if !isPatch {
+			patch, isPatch = shellPatch(command)
+		}
+		switch {
+		case isPatch:
+			e.Kind = adapter.PreTool
+			if post {
+				e.Kind = adapter.PostTool
+			}
+			e.Edits = parsePatch(patch, e.Cwd)
+			if post {
+				e.Edits = applied(e.Edits, p.ToolResponse, e.Cwd)
+			}
+		case post:
+			e.Kind = adapter.Other // nothing runs after a shell command
+		default:
+			e.Command, e.Dialect = command, shellDialect
+		}
+	case e.Kind == adapter.PreTool || e.Kind == adapter.PostTool:
+		e.Edits = parsePatch(patchInput(p.ToolInput), p.Cwd)
+		if post {
 			e.Edits = applied(e.Edits, p.ToolResponse, p.Cwd)
 		}
 	}
 	return e, nil
 }
 
-// shellCommand is a Bash call's command: a string, or an argv whose last
-// word is the script a shell runs, such as ["bash", "-lc", "…"].
-func shellCommand(raw json.RawMessage) string {
+// patchInput is an apply_patch's patch: tool_input's command or input, or
+// tool_input itself when it is a string.
+func patchInput(raw json.RawMessage) string {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
 		return s
 	}
-	var argv []string
-	if json.Unmarshal(raw, &argv) == nil && len(argv) > 0 {
-		return argv[len(argv)-1]
+	var in struct {
+		Command string `json:"command"`
+		Input   string `json:"input"`
 	}
-	return ""
+	json.Unmarshal(raw, &in)
+	if in.Command != "" {
+		return in.Command
+	}
+	return in.Input
 }
 
-// applied narrows a patch's edits to what its result says it did: nothing
-// when it failed, else the files it lists. A result stele cannot read keeps
-// them all.
+// patchCommand matches a shell command that runs apply_patch.
+var patchCommand = regexp.MustCompile(`^\s*(?:apply_patch|applypatch)(?:\s|$)`)
+
+// shellCommand is a Bash call's command: a string, or an argv whose last
+// word is the script a shell runs, such as ["bash", "-lc", "…"]. An argv
+// that runs apply_patch itself gives its patch instead, never as a command.
+func shellCommand(raw json.RawMessage) (command, patch string) {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s, ""
+	}
+	var argv []string
+	if json.Unmarshal(raw, &argv) != nil || len(argv) == 0 {
+		return "", ""
+	}
+	name := strings.ToLower(filepath.Base(strings.ReplaceAll(argv[0], `\`, "/")))
+	name = strings.TrimSuffix(name, ".exe")
+	if name == "apply_patch" || name == "applypatch" {
+		if len(argv) > 1 {
+			return "", argv[1]
+		}
+		return "", " "
+	}
+	return argv[len(argv)-1], ""
+}
+
+// shellPatch reads the patch of a shell command that runs apply_patch: a
+// heredoc, apply_patch <<'EOF' …, or a quoted argument. ok is false for any
+// other command. One whose patch stele cannot cut out still gives its text,
+// so the headers in it name the files.
+func shellPatch(command string) (patch string, ok bool) {
+	if !patchCommand.MatchString(command) {
+		return "", false
+	}
+	rest := strings.TrimLeft(command, " \t")
+	rest = strings.TrimLeft(rest[strings.IndexAny(rest+" ", " \t\n"):], " \t")
+	switch {
+	case strings.HasPrefix(rest, "<<"):
+		return unwrap(command), true
+	case strings.HasPrefix(rest, "'"):
+		var b strings.Builder
+		for i := 1; i < len(rest); i++ {
+			if rest[i] == '\'' {
+				if i+1 < len(rest) && rest[i+1] == '\'' { // PowerShell's '' is a quote
+					b.WriteByte('\'')
+					i++
+					continue
+				}
+				return b.String(), true
+			}
+			b.WriteByte(rest[i])
+		}
+	case strings.HasPrefix(rest, `"`):
+		if s, err := strconv.Unquote(firstQuoted(rest)); err == nil {
+			return s, true
+		}
+	}
+	return rest, true
+}
+
+// firstQuoted is the double-quoted string at the start of s.
+func firstQuoted(s string) string {
+	for i := 1; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case '"':
+			return s[:i+1]
+		}
+	}
+	return s
+}
+
+// applied narrows a patch's edits to what its result says it did: the files
+// it lists. A patch that failed may still have written some of its files:
+// each is checked, by its new text only, so a file the patch never reached is
+// not judged on what it held. A result stele cannot read keeps them all.
 func applied(edits []adapter.Edit, raw json.RawMessage, cwd string) []adapter.Edit {
 	var resp string
 	if json.Unmarshal(raw, &resp) != nil {
@@ -167,7 +262,15 @@ func applied(edits []adapter.Edit, raw json.RawMessage, cwd string) []adapter.Ed
 	case !ok:
 		return edits
 	case failed:
-		return nil
+		out := make([]adapter.Edit, 0, len(edits))
+		for _, e := range edits {
+			if e.Whole {
+				e.Whole = false
+				e.ReplaceAll = make([]bool, len(e.NewText))
+			}
+			out = append(out, e)
+		}
+		return out
 	}
 	listed := map[string]bool{}
 	for p := range changed {

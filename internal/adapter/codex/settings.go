@@ -29,7 +29,7 @@ type registration struct{ Event, Matcher string }
 // command, after a patch, and when a session starts.
 var registrations = []registration{
 	{"PreToolUse", "^(apply_patch|Bash)$"},
-	{"PostToolUse", "^apply_patch$"},
+	{"PostToolUse", "^(apply_patch|Bash)$"},
 	{"SessionStart", ""},
 }
 
