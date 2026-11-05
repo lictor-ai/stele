@@ -38,7 +38,10 @@ func TestGitConfigIsHermetic(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not on PATH")
 	}
-	out, err := exec.Command("git", "config", "--show-origin", "--get", "user.email").Output()
+	// Outside any repository, as the tests' projects are.
+	cmd := exec.Command("git", "config", "--show-origin", "--get", "user.email")
+	cmd.Dir = t.TempDir()
+	out, err := cmd.Output()
 	if err != nil || !strings.Contains(string(out), "stele-cmd-test") {
 		t.Errorf("user.email comes from %q, %v; want the test's own config", out, err)
 	}
