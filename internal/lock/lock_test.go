@@ -113,7 +113,7 @@ func TestLoadErrors(t *testing.T) {
 		substr  string
 	}{
 		{name: "not JSON", content: "{", is: ErrInvalid, substr: FileName},
-		{name: "unknown version", content: `{"version": 2, "project": "p", "rules": []}`, is: ErrInvalid, substr: "version 2"},
+		{name: "unknown version", content: `{"version": 3, "project": "p", "rules": []}`, is: ErrInvalid, substr: "version 3"},
 		{
 			// A bad merge duplicated an entry.
 			name: "duplicate id",

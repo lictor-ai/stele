@@ -115,6 +115,21 @@ func fingerprint(src []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ParseNamed is Parse for a file in stele.md's format that is not the
+// project's own stele.md, such as a shared one the git source read (D71):
+// each rule, and a parse error, name file.
+func ParseNamed(src []byte, file string) ([]source.Rule, error) {
+	rules, err := Parse(src)
+	var pe *source.ParseError
+	if errors.As(err, &pe) {
+		pe.File = file
+	}
+	for i := range rules {
+		rules[i].File = file
+	}
+	return rules, err
+}
+
 // Parse turns the contents of stele.md into rules. A bad rule is a
 // *source.ParseError naming the line.
 func Parse(src []byte) ([]source.Rule, error) {
