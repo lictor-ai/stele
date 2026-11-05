@@ -20,7 +20,8 @@ edit or rewrite them, not even to fix or migrate them. Only source plugins
 rules from the compiled index (index.Load, compile.EnsureFresh). The one
 exception: internal/publish reads stele.md from git (git cat-file, the
 committed blob) to copy it to the publish repository, and never parses it
-(D64).
+(D64). The git source (internal/source/gitrepo) reads a shared rule file
+through internal/gitexec, at the commit stele.lock pins (D71, D72).
 
 ---
 
@@ -98,8 +99,11 @@ external plugins never run on the hot path (D45), and only plugins listed in
 stele.json and found on PATH ever run, never one inside the repository
 (D43). os/exec belongs to stele check (cmd/stele/check.go), stele publish
 (internal/publish) and internal/gitexec, which runs git for stele publish
-and the git source (ADR-0011); stele hook and stele stats never reach any of
-them.
+and the git source (ADR-0011). Only cmd/stele/sources.go hands gitexec to
+the git source, and only runCompile, runCheck and init call it: a file the
+hook reaches, compile.go included, may hold such a caller but imports
+neither os/exec nor gitexec. stele hook and stele stats never call it;
+cmd/stele/hookreach_test.go follows their calls to check it.
 
 ---
 
@@ -110,7 +114,7 @@ message: stele hook never reaches stele publish or git (D45, D66, ADR-0011)
 
 stele publish and internal/gitexec talk to the network and start processes,
 so nothing on the hook's path imports them. cmd/stele/hookreach_test.go
-checks the whole import graph of stele hook.
+checks the whole import graph of stele hook, and what runHook calls.
 
 ---
 

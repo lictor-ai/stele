@@ -18,7 +18,8 @@ edit or rewrite them, not even to fix or migrate them. Only source plugins
 rules from the compiled index (index.Load, compile.EnsureFresh). The one
 exception: internal/publish reads stele.md from git (git cat-file, the
 committed blob) to copy it to the publish repository, and never parses it
-(D64).
+(D64). The git source (internal/source/gitrepo) reads a shared rule file
+through internal/gitexec, at the commit stele.lock pins (D71, D72).
 
 <!-- stele rule 002ec6b6-4084-4149-ab0f-16fc48253a55 -->
 scope: **/*.go
@@ -76,14 +77,17 @@ external plugins never run on the hot path (D45), and only plugins listed in
 stele.json and found on PATH ever run, never one inside the repository
 (D43). os/exec belongs to stele check (cmd/stele/check.go), stele publish
 (internal/publish) and internal/gitexec, which runs git for stele publish
-and the git source (ADR-0011); stele hook and stele stats never reach any of
-them.
+and the git source (ADR-0011). Only cmd/stele/sources.go hands gitexec to
+the git source, and only runCompile, runCheck and init call it: a file the
+hook reaches, compile.go included, may hold such a caller but imports
+neither os/exec nor gitexec. stele hook and stele stats never call it;
+cmd/stele/hookreach_test.go follows their calls to check it.
 
 <!-- stele rule e4949be3-548c-4bc9-9929-2d410e483f23 -->
 scope: cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go, internal/{adapter,backstop,check,compile,enforce,index,journal,lock,plugin,safefile,scope,session,sign,source}/**/*.go, internal/install/{assets,install,doc}.go
 stele publish and internal/gitexec talk to the network and start processes,
 so nothing on the hook's path imports them. cmd/stele/hookreach_test.go
-checks the whole import graph of stele hook.
+checks the whole import graph of stele hook, and what runHook calls.
 
 <!-- stele rule d4e09005-a875-4772-8f9c-9edfc4a7e32f -->
 scope: internal/**/*.go, !**/*_test.go

@@ -57,6 +57,8 @@ enterprise idea. Do not implement it or use it as a v1 format.
 - stele never writes to `stele.md` or `stele.json` (D38).
 - Only source plugins open rule files (D40). Everything else reads `index.json`.
   The one exception: `stele publish` reads `stele.md` from git to copy it (D64).
+  The git source (`internal/source/gitrepo`) is a source: it reads a shared
+  rule file through `internal/gitexec` (D71).
 - External plugins never run on the hot path: not in `stele hook`, not in
   `stele mcp` (D45). Nor does the `git` source, nor anything that starts git:
   only `internal/gitexec` and `cmd/stele/check.go` run git, and the hook and
