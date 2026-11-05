@@ -155,6 +155,34 @@ func TestUninstallOnlyStele(t *testing.T) {
 	}
 }
 
+// Uninstall keeps the places of the user's hooks after stele's, which their
+// approvals are keyed by: stele's group stays, empty; install fills it again.
+func TestUninstallKeepsPlaces(t *testing.T) {
+	installed, _, _, _ := Install([]byte(userHooks), adapter.Switches{})
+	var s map[string]any
+	json.Unmarshal(installed, &s)
+	pre := s["hooks"].(map[string]any)["PreToolUse"].([]any)
+	s["hooks"].(map[string]any)["PreToolUse"] = append(pre, map[string]any{"matcher": "x", "hooks": []any{map[string]any{"type": "command", "command": "late.sh"}}})
+	withLate, _ := json.Marshal(s)
+
+	out, removed, _, err := Uninstall(withLate)
+	if err != nil || removed != 3 {
+		t.Fatalf("Uninstall: %d, %v", removed, err)
+	}
+	got := hooksOf(t, out)["PreToolUse"]
+	if len(got) != 3 || len(got[1]) != 1 || got[1][0] != "matcher=^(apply_patch|Bash)$" || got[2][1] != "late.sh" {
+		t.Errorf("PreToolUse after uninstall = %v: late.sh must stay third", got)
+	}
+	if hooksOf(t, out)["PostToolUse"] != nil {
+		t.Errorf("an empty group at the end stayed: %s", out)
+	}
+	again, _, _, _ := Install(out, adapter.Switches{})
+	got = hooksOf(t, again)["PreToolUse"]
+	if len(got) != 3 || got[1][1] != "stele hook --agent=codex" || got[2][1] != "late.sh" {
+		t.Errorf("PreToolUse after a new install = %v", got)
+	}
+}
+
 func TestOtherSteleHook(t *testing.T) {
 	ours, _, _, _ := Install(nil, adapter.Switches{})
 	if OtherSteleHook(ours, adapter.Switches{}) {
