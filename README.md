@@ -554,7 +554,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **Codex can't ask you about stele's own files.** A patch to `stele.md`, `stele.json`, `stele.lock`, `.stele/` or an agent's settings files is refused, and Codex is told to ask you to make the change.
 
-**Most PowerShell writes aren't seen on Windows.** Codex's shell runs PowerShell there, and stele reads only bash's forms of writing a file, such as `>`; `Set-Content` or `Out-File` go through unseen. `stele check` in CI is the catch.
+**Codex's shell is read, not checked.** On Windows it runs PowerShell, and stele reads its commands as PowerShell: redirections, `Set-Content`, `Add-Content`, `Out-File`, `Tee-Object`, `New-Item`, `Clear-Content`, `Copy-Item`, `Move-Item`, `Rename-Item`, `Remove-Item`, their aliases, and `[IO.File]`'s write, copy, move and delete methods. A command that writes a file a scoped rule covers is stopped once per file each turn, as a Bash one is. A path built with `$(...)`, an `env:` variable or a variable not set to a plain string in the same command isn't seen, nor are scripts, `Invoke-Expression`, or other cmdlets and .NET methods. `stele check` in CI is the catch.
 
 **Codex reads only the first 32 KiB of its `AGENTS.md` files.** If stele's section ends past that, counting the `AGENTS.md` files of the directories above, or if an `AGENTS.override.md` sits beside it, Codex starts without the rules, and the deny before a write shows them instead. A `-c project_doc_max_bytes=…` on the command line isn't seen.
 

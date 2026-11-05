@@ -47,7 +47,7 @@ Guideline enforcement for coding agents. Go, single binary.
     `stele hook --agent=<name>`, an agent registry, one tool call touching
     several files (`Event.Edits`), an agent that cannot ask, and the rules in a
     marked section of the user's `AGENTS.md`. It amends ADR-0005 and ADR-0009.
-    The spec carries it as D73–D76.
+    The spec carries it as D73–D77.
 13. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
