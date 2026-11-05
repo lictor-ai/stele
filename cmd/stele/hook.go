@@ -90,7 +90,7 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 		a = afterWrites(ev, sw)
 		room := install.MaxMessage
 		if a.Context != "" {
-			room -= len(a.Context) + len("\n\n") // joinNotes' separator
+			room = max(0, room-len(a.Context)-len("\n\n")) // joinNotes' separator
 		}
 		w, c := invalidRules(ev, rulesEdit(ev).File, room)
 		a.Warning = joinLines(a.Warning, w)
@@ -158,13 +158,17 @@ func beforeWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	if sw.RemindOff {
 		return adapter.Answer{}
 	}
+	// Each project gets an equal share of the message, and shows at least
+	// one rule in it.
 	var a adapter.Answer
 	budget := install.MaxMessage
+	if len(roots) > 1 {
+		budget = install.MaxMessage/len(roots) - len("\n\n")
+	}
 	for _, root := range roots {
 		r := beforeRoot(ev, root, rels[root], budget)
 		if r.Deny {
 			a.Deny, a.Reason = true, joinNotes(a.Reason, r.Reason)
-			budget -= len(r.Reason) + len("\n\n")
 		}
 		a.Context = joinNotes(a.Context, r.Context)
 		a.Warning = joinLines(a.Warning, r.Warning)
@@ -216,15 +220,11 @@ func beforeRoot(ev adapter.Event, root string, rels []string, budget int) adapte
 	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
 		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, File: file, Rules: rules, Now: now(),
 			Fit: func(rs []backstop.Rule) int {
-				k := install.FitRules(len(rs), budget, func(k int) string {
+				// At least one: a rule too long for any message would
+				// otherwise be denied forever.
+				return max(1, install.FitRules(len(rs), budget, func(k int) string {
 					return install.BlockMessageMore(agent.Words(), shown, blockRules(rs[:k]), len(rs)-k, note)
-				})
-				// At least one in the first message: a rule too long for
-				// any would otherwise be denied forever.
-				if budget == install.MaxMessage {
-					k = max(k, 1)
-				}
-				return k
+				}))
 			}}
 		d, *st = backstop.Decide(in, *st)
 		return nil
@@ -307,37 +307,62 @@ func rulesEdit(ev adapter.Event) adapter.Edit {
 	return ws[0]
 }
 
+// postRoom is the least room one file's check needs in each of the answer's
+// messages; a file after those that left less is not checked, and the
+// answer says how many were not.
+const postRoom = 512
+
+// skippedRoom is what the note on files not checked needs.
+const skippedRoom = 200
+
 // afterWrites decides a PostTool call: each file written is checked, and
-// the answers are one, any block winning. Their messages share one budget.
+// the answers are one, any block winning. The block's reasons share one
+// message of install.MaxMessage, and the context another, as for one file; a
+// project's note is given once.
 func afterWrites(ev adapter.Event, sw adapter.Switches) adapter.Answer {
+	ws := writes(ev)
 	var a adapter.Answer
-	budget := install.MaxMessage
-	for _, e := range writes(ev) {
-		r := afterWrite(ev, e, sw, budget)
+	reasonRoom, contextCap := install.MaxMessage, install.MaxMessage
+	if len(ws) > 1 {
+		contextCap -= skippedRoom
+	}
+	contextRoom := contextCap
+	noted := map[string]bool{}
+	skipped := 0
+	for _, e := range ws {
+		if reasonRoom < postRoom || contextRoom < postRoom {
+			skipped++
+			continue
+		}
+		r := afterWrite(ev, e, sw, reasonRoom, contextRoom, noted)
 		if r.Deny {
 			a.Deny, a.Reason = true, joinNotes(a.Reason, r.Reason)
-			budget -= len(r.Reason) + len("\n\n")
+			reasonRoom = install.MaxMessage - len(a.Reason) - len("\n\n")
 		}
 		a.Context = joinNotes(a.Context, r.Context)
-		a.Warning = joinLines(a.Warning, r.Warning)
-		if budget <= 0 {
-			break
+		contextRoom = contextCap - len(a.Context) - len("\n\n")
+		if !strings.Contains(a.Warning, r.Warning) {
+			a.Warning = joinLines(a.Warning, r.Warning)
 		}
+	}
+	if skipped > 0 {
+		a.Context = joinNotes(a.Context, fmt.Sprintf("stele did not check %d more of the files this call wrote: its message was full. Run stele check on them.", skipped))
 	}
 	return a
 }
 
 // afterWrite decides one file a PostTool call wrote: it checks the lines the
-// agent just wrote against the rules with a built-in check (D45), in a
-// message of at most budget bytes. It keeps no session state, so parallel
-// writes cannot race.
-func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, budget int) adapter.Answer {
+// agent just wrote against the rules with a built-in check (D45), the block's
+// reason in at most reasonRoom bytes and the context in at most contextRoom.
+// A project's note already in noted is not given again. It keeps no session
+// state, so parallel writes cannot race.
+func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, reasonRoom, contextRoom int, noted map[string]bool) adapter.Answer {
 	root, rel, ok := target(e.File)
 	if !ok {
 		return adapter.Answer{}
 	}
 	if sw.CheckOff {
-		return refreshOnly(root, rel, ev)
+		return refreshOnly(root, rel, ev, noted)
 	}
 
 	policy, perr := enforce.Load(root)
@@ -353,6 +378,7 @@ func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, budget in
 	if err != nil {
 		return fail(err)
 	}
+	note = once(noted, note)
 	recordWrote(root, key, idx, ev, rel)
 
 	// The file is read back, not taken from the payload: an Edit carries only
@@ -422,12 +448,28 @@ func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, budget in
 	// notes and the non-blocking ones, which share its budget.
 	var a adapter.Answer
 	if len(hard) > 0 {
-		a.Deny, a.Reason = true, message(hard, true, budget)
+		a.Deny, a.Reason = true, message(hard, true, reasonRoom)
 	}
-	room := budget - len(joinNotes(notes...))
-	softMsg := message(soft, false, room-4)
+	room := contextRoom - len(joinNotes(notes...))
+	softMsg := ""
+	if room-4 > 0 {
+		softMsg = message(soft, false, room-4)
+	}
 	a.Context = joinNotes(append([]string{softMsg}, notes...)...)
 	return a
+}
+
+// once returns note the first time noted sees it, and "" after: one tool
+// call's files in one project share their project's note.
+func once(noted map[string]bool, note string) string {
+	if note == "" || noted == nil {
+		return note
+	}
+	if noted[note] {
+		return ""
+	}
+	noted[note] = true
+	return note
 }
 
 // refreshOnly is the post-write answer with --check=off. Nothing is checked,
@@ -435,7 +477,7 @@ func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, budget in
 // this hook compiles an agent's edit to stele.md, whose write asks before it
 // runs (ADR-0006). A failure only warns: no check was asked for, so there is
 // nothing for block_on_error to stand in for.
-func refreshOnly(root, rel string, ev adapter.Event) adapter.Answer {
+func refreshOnly(root, rel string, ev adapter.Event, noted map[string]bool) adapter.Answer {
 	warn := func(err error) adapter.Answer {
 		return adapter.Answer{Warning: fmt.Sprintf("stele: rules not refreshed after this write: %v", err)}
 	}
@@ -448,7 +490,7 @@ func refreshOnly(root, rel string, ev adapter.Event) adapter.Answer {
 		return warn(err)
 	}
 	recordWrote(root, key, idx, ev, rel)
-	return adapter.Answer{Context: note}
+	return adapter.Answer{Context: once(noted, note)}
 }
 
 // written returns the lines an Edit or MultiEdit wrote: exactly, from

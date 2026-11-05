@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/compile"
 	"github.com/lictor-ai/stele/internal/install"
 	"github.com/lictor-ai/stele/internal/lock"
@@ -108,7 +109,14 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return exitCantRun
 	}
-	changes, notes, err := install.Uninstall(agent, root, nil)
+	// .stele/ stays while another agent's hooks use it.
+	var others []adapter.Adapter
+	for _, o := range agents {
+		if o.Name() != agent.Name() {
+			others = append(others, o)
+		}
+	}
+	changes, notes, err := install.Uninstall(agent, root, others)
 	return report("uninstall", changes, notes, err, stdout, stderr)
 }
 
