@@ -590,11 +590,12 @@ func read(ctx context.Context, root string, s source.Source) ([]source.Rule, str
 }
 
 // named prefixes err with the source, unless it is a parse error, which
-// already names its file and line.
+// already names its file and line, or an error that names its source.
 func named(s source.Source, err error) error {
 	if err != nil {
 		var pe *source.ParseError
-		if !errors.As(err, &pe) {
+		var sn source.SelfNamed
+		if !errors.As(err, &pe) && !errors.As(err, &sn) {
 			err = fmt.Errorf("source %s: %w", s.Name(), err)
 		}
 	}
@@ -652,6 +653,12 @@ func plan(root string, rules []source.Rule, fps map[string]string, pins []source
 		}
 	}
 
+	files := generate(root, idx, next, gens)
+	for _, f := range files {
+		if len(f.Data) > maxGenerated {
+			return Result{}, fmt.Errorf("the rules make %s %d bytes, over the %d stele reads back: fewer or shorter rules", f.Path, len(f.Data), maxGenerated)
+		}
+	}
 	cur, err := index.Load(root, key)
 	if err != nil && !errors.Is(err, index.ErrNoIndex) {
 		return Result{}, err
@@ -662,7 +669,7 @@ func plan(root string, rules []source.Rule, fps map[string]string, pins []source
 		Report:       rep,
 		LockChanged:  !lock.Equal(prev, next),
 		IndexChanged: err != nil || !index.Equal(cur, idx),
-		Files:        generate(root, idx, next, gens),
+		Files:        files,
 	}, nil
 }
 

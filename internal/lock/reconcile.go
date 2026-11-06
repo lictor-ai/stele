@@ -60,8 +60,8 @@ func Reconcile(rules []source.Rule, prev File, newID func() string) (ids []strin
 			continue
 		}
 		if j, ok := owner[r.ID]; ok {
-			return nil, File{}, Report{}, fmt.Errorf("%w %s: supplied by %s and %s",
-				ErrDuplicateID, r.ID, where(rules[j]), where(r))
+			return nil, File{}, Report{}, &DuplicateError{Sources: []string{rules[j].Source, r.Source}, err: fmt.Errorf("%w %s: supplied by %s and %s",
+				ErrDuplicateID, r.ID, where(rules[j]), where(r))}
 		}
 		owner[r.ID] = i
 		ids[i] = r.ID
@@ -78,8 +78,8 @@ func Reconcile(rules []source.Rule, prev File, newID func() string) (ids []strin
 			}
 			for j, r := range rules {
 				if r.ID == "" && r.Source == e.Source && hashes[j] == e.Hash {
-					return nil, File{}, Report{}, fmt.Errorf("%w %s: supplied by %s, and the id of %s in %s",
-						ErrDuplicateID, id, where(rules[i]), where(r), FileName)
+					return nil, File{}, Report{}, &DuplicateError{Sources: []string{rules[i].Source, r.Source}, err: fmt.Errorf("%w %s: supplied by %s, and the id of %s in %s",
+						ErrDuplicateID, id, where(rules[i]), where(r), FileName)}
 				}
 			}
 		}
@@ -172,3 +172,13 @@ func where(r source.Rule) string {
 	}
 	return fmt.Sprintf("%s position %d", r.Source, r.Position)
 }
+
+// DuplicateError is ErrDuplicateID from ids rules supplied: Sources names the
+// sources of the two rules, so a caller can tell whose fault it is.
+type DuplicateError struct {
+	Sources []string
+	err     error
+}
+
+func (e *DuplicateError) Error() string { return e.err.Error() }
+func (e *DuplicateError) Unwrap() error { return e.err }

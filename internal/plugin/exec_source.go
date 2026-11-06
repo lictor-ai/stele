@@ -13,6 +13,7 @@ import (
 
 	"github.com/lictor-ai/stele/internal/printable"
 	"github.com/lictor-ai/stele/internal/rulesblock"
+	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/source"
 )
 
@@ -107,9 +108,13 @@ func (s *execSource) Read(ctx context.Context, root string) ([]source.Rule, stri
 		return nil, "", s.fail("read", fmt.Errorf("%w: %d rules, at most %d", ErrProtocol, len(*a.Rules), maxRules))
 	}
 	rules := make([]source.Rule, len(*a.Rules))
+	total := 0
 	for i, r := range *a.Rules {
 		if err := checkRule(r); err != nil {
 			return nil, "", s.fail("read", fmt.Errorf("%w: rule %d: %v", ErrProtocol, i, err))
+		}
+		if total += len(*r.Body); total > maxSourceBodies {
+			return nil, "", s.fail("read", fmt.Errorf("%w: the rules' bodies are over %d bytes together", ErrProtocol, maxSourceBodies))
 		}
 		rules[i] = source.Rule{
 			Description: r.Description,
@@ -148,6 +153,34 @@ func checkFingerprint(fp *string) (string, error) {
 	return *fp, nil
 }
 
+// The other fields of a rule, which go into generated files beside its body:
+// each one line, and bounded (D78).
+const (
+	maxScopes      = 64
+	maxScopeLen    = 1 << 10
+	maxTags        = 32
+	maxTagLen      = 64
+	maxDescription = 1 << 10
+	maxMeta        = 64
+	maxMetaValue   = 1 << 10
+	maxFileLen     = 1 << 10
+	// maxSourceBodies caps the bodies of one source's rules together, as
+	// stele.md is capped: every rule goes into the agents' rules files.
+	maxSourceBodies = 4 << 20
+)
+
+// oneLine reports why s, a field of what, cannot go on one line of a
+// generated file, or nil: no line break, no NUL, at most max bytes.
+func oneLine(what, s string, max int) error {
+	switch {
+	case len(s) > max:
+		return fmt.Errorf("%s over %d bytes", what, max)
+	case strings.ContainsAny(s, "\r\n\x00\u2028\u2029\u0085"):
+		return fmt.Errorf("%s holds a line break or a NUL", what)
+	}
+	return nil
+}
+
 // checkRule reports what in r stele will not take from a source.
 func checkRule(r sentRule) error {
 	if r.Body == nil || strings.TrimSpace(*r.Body) == "" {
@@ -160,7 +193,7 @@ func checkRule(r sentRule) error {
 	case strings.ContainsRune(body, 0):
 		return fmt.Errorf("body holds a NUL")
 	}
-	for _, line := range strings.Split(body, "\n") {
+	for _, line := range strings.FieldsFunc(body, func(c rune) bool { return c == '\n' || c == '\r' || c == '\u2028' || c == '\u2029' || c == '\u0085' }) {
 		if rulesblock.IsMarker(line) {
 			return fmt.Errorf("body holds a line that marks a rule in a generated file")
 		}
@@ -168,19 +201,58 @@ func checkRule(r sentRule) error {
 	if r.ID != "" && !uuid.MatchString(r.ID) {
 		return fmt.Errorf("id %q is not a lower-case UUID", printable.Clean(r.ID))
 	}
+	if r.Line < 0 {
+		return fmt.Errorf("line %d is below 0", r.Line)
+	}
+	if err := oneLine("description", r.Description, maxDescription); err != nil {
+		return err
+	}
+	if len(r.Scope) > maxScopes {
+		return fmt.Errorf("%d scope patterns, at most %d", len(r.Scope), maxScopes)
+	}
+	for _, s := range r.Scope {
+		if err := oneLine("a scope pattern", s, maxScopeLen); err != nil {
+			return err
+		}
+	}
+	if err := scope.Validate(r.Scope); err != nil {
+		return fmt.Errorf("scope: %v", err)
+	}
+	if len(r.Tags) > maxTags {
+		return fmt.Errorf("%d tags, at most %d", len(r.Tags), maxTags)
+	}
+	for _, tag := range r.Tags {
+		if err := oneLine("a tag", tag, maxTagLen); err != nil {
+			return err
+		}
+	}
+	if len(r.Meta) > maxMeta {
+		return fmt.Errorf("%d meta keys, at most %d", len(r.Meta), maxMeta)
+	}
 	for k, v := range r.Meta {
-		if !metaKey.MatchString(k) {
+		if !metaKey.MatchString(k) || len(k) > maxTagLen {
 			return fmt.Errorf("meta key %q is not lower-case letters, digits, _ and -", printable.Clean(k))
 		}
-		if strings.ContainsAny(v, "\r\n") {
-			return fmt.Errorf("meta %q is more than one line", k)
+		if err := oneLine(fmt.Sprintf("meta %q", k), v, maxMetaValue); err != nil {
+			return err
 		}
 	}
 	if r.File != "" {
-		if strings.Contains(r.File, `\`) || path.IsAbs(r.File) || path.Clean(r.File) != r.File ||
+		first, _, _ := strings.Cut(r.File, "/")
+		if err := oneLine("file", r.File, maxFileLen); err != nil {
+			return err
+		}
+		if strings.Contains(r.File, `\`) || strings.Contains(first, ":") || path.IsAbs(r.File) || path.Clean(r.File) != r.File ||
 			r.File == ".." || strings.HasPrefix(r.File, "../") || printable.Clean(r.File) != r.File {
 			return fmt.Errorf("file %q is not a relative path with / separators inside the project", printable.Clean(r.File))
 		}
 	}
 	return nil
+}
+
+// IsExternal reports whether s is an external source: a plugin, whose wrong
+// answer is the plugin's fault, not the project's.
+func IsExternal(s source.Source) bool {
+	_, ok := s.(*execSource)
+	return ok
 }

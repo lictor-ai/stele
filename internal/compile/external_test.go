@@ -178,3 +178,19 @@ func TestEnsureFreshLeavesFilesWithAnUnreadableLock(t *testing.T) {
 		t.Errorf("generated file rewritten to %q with an unreadable lock", got)
 	}
 }
+
+// Rules that would make a generated file larger than stele reads back fail
+// the compile, rather than write a file the next run calls foreign.
+func TestCompileRefusesAnOversizedGeneratedFile(t *testing.T) {
+	root := t.TempDir()
+	writeRules(t, root, twoRules)
+	org := newFake()
+	org.rules[0].Body = strings.Repeat("x", maxGenerated+1)
+	_, err := Compile(context.Background(), root, []source.Source{stelemd.New(), org}, []Generated{listing}, ids(), testKey)
+	if err == nil || !strings.Contains(err.Error(), "gen/rules.txt") {
+		t.Fatalf("Compile = %v, want an error naming the file", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "gen", "rules.txt")); err == nil {
+		t.Error("the file was written")
+	}
+}

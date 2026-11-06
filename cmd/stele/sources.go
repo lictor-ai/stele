@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -88,4 +90,20 @@ func short(commit string) string {
 		return commit[:7]
 	}
 	return commit
+}
+
+// pluginFault reports whether err, from planning srcs, is a duplicate id an
+// external source supplied: the plugin's fault, so stele check exits 2, not
+// 1 as for a project's own rule files.
+func pluginFault(srcs []source.Source, err error) bool {
+	var de *lock.DuplicateError
+	if !errors.As(err, &de) {
+		return false
+	}
+	for _, s := range srcs {
+		if plugin.IsExternal(s) && slices.Contains(de.Sources, s.Name()) {
+			return true
+		}
+	}
+	return false
 }

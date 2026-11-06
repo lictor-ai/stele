@@ -83,13 +83,15 @@ Each rule:
 | Field | |
 | :-- | :-- |
 | `body` | The rule, as the agent reads it. Required, at most 1 MiB, no NUL, and no line of the form `<!-- stele rule … -->`. |
-| `scope` | The paths it applies to, as in `stele.md`. |
-| `description`, `tags` | As in `stele.md`. |
-| `meta` | Other keys, as in `stele.md`: `check`, `pattern`, `message`, … Keys are lower-case letters, digits, `_` and `-`; values one line. |
-| `file`, `line` | Where it came from, for messages: a relative path with `/`. |
-| `id` | Only if your source owns its ids: a lower-case UUID. stele makes one otherwise. |
+| `scope` | The paths it applies to, as in `stele.md`: at most 64 patterns of 1 KiB. |
+| `description`, `tags` | As in `stele.md`: a description of at most 1 KiB, at most 32 tags of 64 bytes. |
+| `meta` | Other keys, as in `stele.md`: `check`, `pattern`, `message`, … At most 64; keys are lower-case letters, digits, `_` and `-`; values at most 1 KiB. |
+| `file`, `line` | Where it came from, for messages: a relative path with `/`, no drive or `:` in its first part; a line from 1, or 0 for none. |
+| `id` | Only if your source owns its ids: a lower-case UUID, never one another rule has. stele makes one otherwise. |
 
-At most 10,000 rules. Their order is their position: keep it stable, and
+Every field but `body` is one line: no line break (`\r`, `\n`, U+0085,
+U+2028, U+2029) and no NUL. At most 10,000 rules, and 4 MiB of bodies
+together: every rule goes into the agents' rules files. Their order is their position: keep it stable, and
 stele keeps their ids when the text changes. A `read` has 1 minute, or the
 entry's `timeout`; its answer at most 32 MiB.
 
