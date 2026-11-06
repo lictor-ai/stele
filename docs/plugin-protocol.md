@@ -1,8 +1,9 @@
 # Writing a stele plugin
 
 A plugin is a program that gives stele something it doesn't do itself. A
-**source** plugin gives it rules. This page is protocol 1, the one this stele
-speaks ([ADR-0013](adr/0013-external-plugins.md)).
+**source** plugin gives it rules; a **checker** plugin checks code against
+them in `stele check`. This page is protocol 1, the one this stele speaks
+([ADR-0013](adr/0013-external-plugins.md)).
 
 ## The short version
 
@@ -17,14 +18,15 @@ stdout: {"protocol": 1, "fingerprint": "9f2c…", "rules": [{"body": "Every expo
 
 ## Naming and installing
 
-Call the program `stele-source-<name>`, `stele-source-<name>.exe` on Windows,
-and put it on your `PATH`. `<name>` is lower-case letters, digits and `-`,
+Call the program `stele-source-<name>` or `stele-checker-<name>`, with `.exe`
+on Windows, and put it on your `PATH`. `<name>` is lower-case letters, digits and `-`,
 starting with a letter, at most 64. `stelemd`, `git` and `regex` are taken.
 
 A project lists it in `stele.json`:
 
 ```json
-{ "sources": [{ "name": "<name>", "config": { … }, "timeout": "2m" }] }
+{ "sources":  [{ "name": "<name>", "config": { … }, "timeout": "2m" }],
+  "checkers": [{ "name": "<name>", "config": { … }, "timeout": "10m" }] }
 ```
 
 stele runs it only if it is listed, and only from `PATH`: never from inside
@@ -66,7 +68,8 @@ Sent once per run of stele, before any other call.
 {"protocol": 1, "kind": "source", "protocols": [1], "version": "0.1.0"}
 ```
 
-`kind` must be `source` for a `stele-source-` program. `protocols` must hold
+`kind` must be `source` for a `stele-source-` program, `checker` for a
+`stele-checker-` one. `protocols` must hold
 1. `version` is your program's, 1 to 64 printable characters.
 
 ## `read`
@@ -165,3 +168,117 @@ func main() {
 
 It trusts `config.file` to stay inside the project; a real plugin should
 check that.
+
+## `validate` (checker)
+
+Sent by `stele check`, before any file is checked, with every rule that
+names your checker.
+
+```
+{"protocol": 1, "op": "validate", "config": { … }, "rules": [{"id": "…", "body": "…", "scope": ["…"], "meta": {"check": "<name>", …}}]}
+{"protocol": 1, "problems": [{"rule_id": "…", "message": "word: is missing"}]}
+```
+
+Report each rule whose settings, its `meta`, you can't use; `[]` if none.
+stele calls such a rule invalid, fails `stele check`, and doesn't send it to
+`check`. 10 seconds, 1 MiB.
+
+## `check` (checker)
+
+```
+{"protocol": 1, "op": "check", "root": "…", "config": { … }, "files": ["main.go"], "rules": [ … ]}
+{"protocol": 1, "violations": [{"rule_id": "…", "file": "main.go", "line": 4, "column": 5, "message": "…"}], "skipped": [{"file": "…", "reason": "…"}]}
+```
+
+`files` are relative, with `/`: read them under `root` yourself. stele sends
+only the files some of the rules' `scope` covers, and drops a violation outside its
+rule's scope. Each violation names one of the rules and one of the files
+sent; `line` and `column` start at 1, the column counting characters.
+`message` is optional, the rule's own text by default. List a file you
+couldn't check under `skipped`: stele reports it rather than pass it. 5
+minutes, or the entry's `timeout`; at most 32 MiB and 100,000 violations.
+
+Whether a violation fails the build is the rule's `blocking:`, never yours.
+
+## Example: a checker
+
+`stele-checker-word` flags every line that holds a rule's `word:`.
+
+```go
+// stele-checker-word flags every line that holds a rule's word. A rule:
+//
+//	check: word
+//	word: TODO
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"unicode/utf8"
+)
+
+type request struct {
+	Op    string   `json:"op"`
+	Root  string   `json:"root"`
+	Files []string `json:"files"`
+	Rules []struct {
+		ID   string            `json:"id"`
+		Meta map[string]string `json:"meta"`
+	} `json:"rules"`
+}
+
+type violation struct {
+	RuleID string `json:"rule_id"`
+	File   string `json:"file"`
+	Line   int    `json:"line"`
+	Column int    `json:"column"`
+}
+
+func main() {
+	var req request
+	answer := map[string]any{"protocol": 1}
+	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
+		answer["error"] = err.Error()
+	}
+	switch req.Op {
+	case "describe":
+		answer["kind"], answer["protocols"], answer["version"] = "checker", []int{1}, "0.1.0"
+	case "validate":
+		problems := []map[string]string{}
+		for _, r := range req.Rules {
+			if r.Meta["word"] == "" {
+				problems = append(problems, map[string]string{"rule_id": r.ID, "message": "word: is missing"})
+			}
+		}
+		answer["problems"] = problems
+	case "check":
+		found, skipped := []violation{}, []map[string]string{}
+		for _, f := range req.Files {
+			file, err := os.Open(filepath.Join(req.Root, filepath.FromSlash(f)))
+			if err != nil {
+				skipped = append(skipped, map[string]string{"file": f, "reason": "cannot be read"})
+				continue
+			}
+			lines := bufio.NewScanner(file)
+			for n := 1; lines.Scan(); n++ {
+				for _, r := range req.Rules {
+					text := lines.Text()
+					if i := strings.Index(text, r.Meta["word"]); i >= 0 {
+						// The column counts characters, not bytes.
+						found = append(found, violation{r.ID, f, n, utf8.RuneCountInString(text[:i]) + 1})
+					}
+				}
+			}
+			file.Close()
+		}
+		answer["violations"], answer["skipped"] = found, skipped
+	}
+	json.NewEncoder(os.Stdout).Encode(answer)
+}
+```
+
+A file it can't open is listed under `skipped`, so stele reports it rather
+than pass it.

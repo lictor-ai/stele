@@ -433,7 +433,7 @@ func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, reasonRoo
 	var r check.Report
 	if !own(root, rel) {
 		var ids []string
-		r, ids = check.RunFileChecked(idx, rel, content, plugin.BuiltinCheckers(), keep)
+		r, ids = check.RunFileChecked(idx, rel, content, plugin.NamedCheckers(root), keep)
 		if len(ids) > 0 {
 			rec := &journal.CheckedRecord{Header: logHeader(idx.Project, ev, ev.AgentID), Prompt: ev.PromptID,
 				File: rel, Rules: ids, More: r.Truncated}

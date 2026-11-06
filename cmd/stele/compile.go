@@ -63,7 +63,7 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 	for _, n := range generatedNotes(root, r.Files) {
 		fmt.Fprintf(stderr, "stele compile: %s\n", n)
 	}
-	ps := check.Validate(r.Index, plugin.BuiltinCheckers())
+	ps, _ := check.Validate(ctx, r.Index, plugin.NamedCheckers(root))
 	if len(ps) == 0 {
 		return exitOK
 	}

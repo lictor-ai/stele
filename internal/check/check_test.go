@@ -15,11 +15,12 @@ import (
 // fake is a checker that records what it was given and returns canned
 // violations.
 type fake struct {
-	name     string
-	problems []Problem
-	found    []Violation
-	skipped  []Skip
-	err      error
+	name        string
+	problems    []Problem
+	found       []Violation
+	skipped     []Skip
+	err         error
+	validateErr error
 
 	gotRules []string
 	gotFiles []string
@@ -27,7 +28,9 @@ type fake struct {
 
 func (f *fake) Name() string { return f.name }
 
-func (f *fake) Validate(rules []Rule) []Problem { return f.problems }
+func (f *fake) Validate(_ context.Context, rules []Rule) ([]Problem, error) {
+	return f.problems, f.validateErr
+}
 
 func (f *fake) Check(_ context.Context, _ string, rules []Rule, files []string) (Result, error) {
 	for _, r := range rules {
@@ -139,7 +142,7 @@ func TestValidate(t *testing.T) {
 		entry("guide", "Guidance only.", nil, nil),
 	}}
 	f := &fake{name: "fake", problems: []Problem{{RuleID: "bad", Message: "fake: no pattern"}}}
-	got := Validate(idx, map[string]Checker{"fake": f})
+	got, _ := Validate(context.Background(), idx, map[string]Checker{"fake": f})
 	r, err := Run(context.Background(), "root", idx, nil, map[string]Checker{"fake": &fake{name: "fake", problems: f.problems}})
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +156,7 @@ func TestValidate(t *testing.T) {
 	if f.gotRules != nil || f.gotFiles != nil {
 		t.Errorf("Validate ran the checker on rules %v, files %v; it must read no file", f.gotRules, f.gotFiles)
 	}
-	if ps := Validate(index.Index{}, map[string]Checker{"fake": f}); len(ps) != 0 {
+	if ps, _ := Validate(context.Background(), index.Index{}, map[string]Checker{"fake": f}); len(ps) != 0 {
 		t.Errorf("Validate(empty index) = %v, want none", ps)
 	}
 }
@@ -175,7 +178,7 @@ func TestRunRuleProblems(t *testing.T) {
 		t.Errorf("checked rules (-want +got):\n%s", diff)
 	}
 	want := []Problem{
-		{RuleID: "unknown", Excerpt: "Use semgrep.", Message: `check: "semgrep" is not a checker; the only one is the built-in fake`},
+		{RuleID: "unknown", Excerpt: "Use semgrep.", Message: `check: "semgrep" is not a checker; the only one is the built-in fake; list an external checker under "checkers" in stele.json`},
 		{RuleID: "empty", Excerpt: "Empty check.", Message: "check is empty"},
 		{RuleID: "yes", Excerpt: "Blocking yes.", Message: `blocking: "yes" is not true or false`},
 		{RuleID: "bad", Excerpt: "Fails validation.", Message: "fake: no pattern"},

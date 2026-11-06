@@ -6,13 +6,15 @@
 // each rule's scope. Whether a violation blocks is read from the rule, never
 // from the checker (spec §8).
 //
-// In v1 the only checker is the built-in regex (ADR-0004). A rule that names
-// any other is a Problem, never skipped: a CI job that silently skips a check
-// is worse than a red build.
+// The built-in checker is regex; others are external plugins listed in
+// stele.json (ADR-0013). A rule that names a checker not there is a Problem,
+// never skipped: a CI job that silently skips a check is worse than a red
+// build.
 package check
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -20,14 +22,16 @@ import (
 
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/scope"
+	"github.com/lictor-ai/stele/internal/source"
 )
 
 // Checker verifies code against the rules that name it.
 type Checker interface {
 	Name() string
 	// Validate reports rules whose settings are wrong, before any file is
-	// read. Those rules are left out of Check.
-	Validate(rules []Rule) []Problem
+	// read. Those rules are left out of Check. An error means the checker
+	// could not say, such as an external one that failed (D80).
+	Validate(ctx context.Context, rules []Rule) ([]Problem, error)
 	// Check runs rules on files: paths relative to root, with / separators.
 	// A file it cannot check, such as one that no longer exists, is skipped
 	// and named in the result.
@@ -139,7 +143,10 @@ func (r Report) ExitCode() int {
 // Run checks files, relative to root, against the rules in idx that name a
 // checker in cs. An error means a checker could not run.
 func Run(ctx context.Context, root string, idx index.Index, files []string, cs map[string]Checker) (Report, error) {
-	p := prepare(idx, cs)
+	p, err := prepare(ctx, idx, cs, false)
+	if err != nil {
+		return Report{}, err
+	}
 	for _, g := range p.groups {
 		var mine []string
 		for _, f := range files {
@@ -152,7 +159,7 @@ func Run(ctx context.Context, root string, idx index.Index, files []string, cs m
 		}
 		res, err := g.checker.Check(ctx, root, g.rules, mine)
 		if err != nil {
-			return Report{}, fmt.Errorf("%s: %w", g.checker.Name(), err)
+			return Report{}, checkerErr(g.checker.Name(), err)
 		}
 		p.report.Skipped = append(p.report.Skipped, res.Skipped...)
 		for _, v := range res.Violations {
@@ -171,9 +178,11 @@ func Run(ctx context.Context, root string, idx index.Index, files []string, cs m
 
 // Validate reports the rules in idx that cannot be checked, as Run would,
 // reading no file: a bad blocking, an empty or unknown check, or settings
-// the checker rejects. Excerpts are filled.
-func Validate(idx index.Index, cs map[string]Checker) []Problem {
-	return prepare(idx, cs).report.Problems
+// the checker rejects. Excerpts are filled. An error means a checker could
+// not validate its rules.
+func Validate(ctx context.Context, idx index.Index, cs map[string]Checker) ([]Problem, error) {
+	p, err := prepare(ctx, idx, cs, false)
+	return p.report.Problems, err
 }
 
 // RunFile checks one file's content without reading anything. Only
@@ -198,7 +207,9 @@ func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Ch
 // rules, which the log records (ADR-0010); a binary file was checked against
 // none.
 func RunFileChecked(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) (Report, []string) {
-	p := prepare(idx, cs)
+	// Only ContentCheckers are asked to validate: they are built in, and
+	// start nothing (D45). They cannot fail to.
+	p, _ := prepare(context.Background(), idx, cs, true)
 	if Own(file) {
 		return p.report, nil
 	}
@@ -321,8 +332,10 @@ type prepared struct {
 
 // prepare groups idx's checked rules by checker and validates them. Invalid
 // rules become problems and are left out; the others still run, so one
-// stele check shows every problem.
-func prepare(idx index.Index, cs map[string]Checker) prepared {
+// stele check shows every problem. With content, only ContentCheckers are
+// asked to validate, and only their rules are grouped. An error is a checker
+// that could not validate.
+func prepare(ctx context.Context, idx index.Index, cs map[string]Checker, content bool) (prepared, error) {
 	p := prepared{report: NewReport(idx.Project)}
 	problem := func(r rule, msg string) {
 		p.report.Problems = append(p.report.Problems, Problem{RuleID: r.ID, Excerpt: r.excerpt, Message: msg})
@@ -363,12 +376,19 @@ func prepare(idx index.Index, cs map[string]Checker) prepared {
 	for _, name := range names {
 		rules := byChecker[name]
 		g := group{checker: cs[name], byID: map[string]rule{}}
+		if _, ok := g.checker.(ContentChecker); content && !ok {
+			continue
+		}
 		plain := make([]Rule, len(rules))
 		for i, r := range rules {
 			plain[i] = r.Rule
 		}
+		problems, err := g.checker.Validate(ctx, plain)
+		if err != nil {
+			return prepared{report: p.report}, checkerErr(name, err)
+		}
 		bad := map[string]bool{}
-		for _, pr := range g.checker.Validate(plain) {
+		for _, pr := range problems {
 			for _, r := range rules {
 				if r.ID == pr.RuleID {
 					pr.Excerpt = r.excerpt
@@ -387,7 +407,7 @@ func prepare(idx index.Index, cs map[string]Checker) prepared {
 			p.groups = append(p.groups, g)
 		}
 	}
-	return p
+	return p, nil
 }
 
 // known names the checkers a rule can use.
@@ -401,9 +421,9 @@ func known(cs map[string]Checker) string {
 	case 0:
 		return "there are none"
 	case 1:
-		return "the only one is the built-in " + names[0]
+		return "the only one is the built-in " + names[0] + `; list an external checker under "checkers" in stele.json`
 	}
-	return "the checkers are " + strings.Join(names, ", ")
+	return "the checkers are " + strings.Join(names, ", ") + `; list an external checker under "checkers" in stele.json`
 }
 
 // ownFiles are stele's own files. A rule is never checked against them: a
@@ -458,4 +478,14 @@ func Excerpt(body string) string {
 		return s
 	}
 	return string([]rune(s)[:excerptLen]) + "…"
+}
+
+// checkerErr is err from the checker name, prefixed with it unless it names
+// its plugin already (source.SelfNamed).
+func checkerErr(name string, err error) error {
+	var sn source.SelfNamed
+	if errors.As(err, &sn) {
+		return err
+	}
+	return fmt.Errorf("%s: %w", name, err)
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/lictor-ai/stele/internal/check"
 	"github.com/lictor-ai/stele/internal/gitexec"
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/plugin"
@@ -42,6 +43,13 @@ func sources(root string, mode gitrepo.Mode, stderr io.Writer) ([]source.Source,
 	f.CacheDir = gitCacheDir
 	f.Remotes = localRemotes
 	return plugin.Sources(root, f, mode, pluginexec.New(root, stderr))
+}
+
+// checkers is every checker stele check runs under root: the built-ins, then
+// the external ones stele.json lists, whose stderr goes to stderr. Only
+// runCheck calls it (D79).
+func checkers(root string, stderr io.Writer) (map[string]check.Checker, error) {
+	return plugin.Checkers(root, pluginexec.New(root, stderr))
 }
 
 // interruptible is the context of a command that runs plugins: Ctrl-C, or a

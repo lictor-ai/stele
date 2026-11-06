@@ -24,7 +24,6 @@ import (
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/journal"
 	"github.com/lictor-ai/stele/internal/lock"
-	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/source"
 	"github.com/lictor-ai/stele/internal/source/gitrepo"
@@ -73,7 +72,13 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 
 	// 1. The rules.
 	var r compile.Result
+	var cs map[string]check.Checker
 	if !none {
+		// The checkers are found first: a missing one fails before anything
+		// is read (D80).
+		if cs, err = checkers(root, stderr); err != nil {
+			return cantRun("%v", err)
+		}
 		// The git sources read their pinned commits and never move them (D72).
 		srcs, err := sources(root, gitrepo.Frozen, stderr)
 		if err != nil {
@@ -128,7 +133,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	files, subs := ownedFiles(root, files)
 	rep := check.NewReport("")
 	if !none {
-		if rep, err = check.Run(ctx, root, r.Index, files, plugin.BuiltinCheckers()); err != nil {
+		if rep, err = check.Run(ctx, root, r.Index, files, cs); err != nil {
 			return cantRun("%v", err)
 		}
 	}
