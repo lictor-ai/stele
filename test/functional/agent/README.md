@@ -62,6 +62,9 @@ Each run is one `codex exec --json`, with the prompt on stdin. **It uses your Ch
 - **stele beats CLAUDE.md when the task pulls against a rule.** In
   `probe-cli-marks` with Sonnet, CLAUDE.md was compliant in 5 of 8 runs and
   stele in 8 of 8, for 8% more tokens.
+- **With Codex, stele beats AGENTS.md, for more tokens.** On the 3 big
+  scenarios with `gpt-6-luna`, AGENTS.md was compliant in 12 of 18 runs and
+  stele in 18 of 18, for 28% more tokens (397k against 311k).
 - **Open:** in `probe-local-style`, Haiku under stele read files one call at a
   time, which cost 63% more tokens.
 

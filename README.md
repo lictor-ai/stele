@@ -83,6 +83,15 @@ We gave Claude Code the same coding work with no rules, with the rules pasted in
 |---|---|---|
 | 33% | 63% | 100% |
 
+We did the same with Codex, on the three hardest tasks (74 rules), with the rules in `AGENTS.md` instead of `CLAUDE.md`. 18 runs each, model `gpt-6-luna`:
+
+| | No rules | Rules in `AGENTS.md` | stele |
+|---|---|---|---|
+| Rules respected | 6/18 | 12/18 | 18/18 |
+| Tokens per run | 200k | 311k | 397k |
+
+With Codex, stele cost 28% more tokens than `AGENTS.md`, mostly from one more turn per run. With Claude Code on the same tasks, stele and `CLAUDE.md` cost the same.
+
 ### Speed
 
 The hook adds about 0.1 s per write on Windows. With 500 rules, it adds up to 0.17 s.

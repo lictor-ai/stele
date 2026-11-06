@@ -1,0 +1,3 @@
+2026-11-06T19:20:16.273470Z ERROR codex_core::tools::router: error=stele checked your write to cmd/loga/main.go: it breaks these project rules. The write was saved; fix these lines now, without changing code outside your task. Write files with apply_patch only, not through shell.
+
+cmd/loga/main.go:31:51: rule cf274263-2c36-485e-a327-e6ad66f07bab "Wrap errors with %w so callers can use errors.Is and errors.…": wrap errors with %w, not %v
