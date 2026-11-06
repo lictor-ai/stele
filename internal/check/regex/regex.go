@@ -76,14 +76,14 @@ func (Checker) Name() string { return Name }
 // Validate reports a rule with no pattern, one that does not compile, and one
 // that matches the empty string: that would be a violation at every position
 // of every file.
-func (Checker) Validate(rules []check.Rule) []check.Problem {
+func (Checker) Validate(_ context.Context, rules []check.Rule) ([]check.Problem, error) {
 	var ps []check.Problem
 	for _, r := range rules {
 		if _, err := compile(r); err != nil {
 			ps = append(ps, check.Problem{RuleID: r.ID, Message: err.Error()})
 		}
 	}
-	return ps
+	return ps, nil
 }
 
 // Check reads each file once and runs every rule that applies to it. A file

@@ -205,3 +205,124 @@ func holds(list []string, s string) bool {
 	}
 	return false
 }
+
+const checkedRules = "scope: [\"**/*.go\"]\ncheck: good\n\nRun the linter.\n"
+
+// withPluginChecker lists the checker plugin name in stele.json, answering
+// with violations.
+func withPluginChecker(t *testing.T, root, name, extra, violations string) {
+	t.Helper()
+	writeAt(t, root, "stele.json", `{"checkers": [{"name": "`+name+`"`+extra+`, "config": {"violations": [`+violations+`]}}]}`+"\n")
+}
+
+// checkedProject is a project whose one rule names the checker good, compiled
+// with good listed, and the rule's id.
+func checkedProject(t *testing.T) (root, id string) {
+	t.Helper()
+	root = project(t, checkedRules)
+	withPluginChecker(t, root, "good", "", "")
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile: %s", errOut)
+	}
+	f, err := lock.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAt(t, root, "a.go", "package a\n")
+	return root, f.Rules[0].ID
+}
+
+func TestCheckExternalChecker(t *testing.T) {
+	installPlugin(t, filepath.Join(t.TempDir(), "bin"), "checker", "good")
+	root, id := checkedProject(t)
+	withPluginChecker(t, root, "good", "", `{"rule_id": "`+id+`", "file": "a.go", "line": 1, "column": 9, "message": "the linter says no"}`)
+	code, out, errOut := runCmd("check", "a.go")
+	if code != exitFailed || !strings.Contains(out, "a.go:1:9: error "+id) || !strings.Contains(out, "the linter says no") {
+		t.Errorf("check = %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	code, out, _ = runCmd("check", "--format", "json", "a.go")
+	if code != exitFailed || !strings.Contains(out, `"message": "the linter says no"`) {
+		t.Errorf("check json = %d, %s", code, out)
+	}
+	withPluginChecker(t, root, "good", "", "")
+	if code, out, errOut := runCmd("check", "a.go"); code != exitOK {
+		t.Errorf("clean check = %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
+func TestCheckExternalCheckerFailures(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "bin")
+	for _, m := range []string{"good", "crash", "slow", "badjson"} {
+		installPlugin(t, bin, "checker", m)
+	}
+	for _, c := range []struct{ name, extra, want string }{
+		{"nothere", "", `stele-checker-nothere not found on PATH: install it, or remove "nothere" from "checkers" in stele.json`},
+		{"crash", "", "stele-checker-crash describe: exited with status 3: the fake plugin crashed"},
+		{"badjson", "", "answer is not valid JSON"},
+	} {
+		root := project(t, strings.ReplaceAll(checkedRules, "check: good", "check: "+c.name))
+		withPluginChecker(t, root, c.name, c.extra, "")
+		if code, _, errOut := runCmd("compile"); code != exitOK {
+			t.Fatalf("%s: compile: %s", c.name, errOut)
+		}
+		writeAt(t, root, "a.go", "package a\n")
+		code, _, errOut := runCmd("check", "a.go")
+		if code != exitCantRun || !strings.Contains(errOut, c.want) {
+			t.Errorf("%s: check = %d, stderr %q; want 2 and %q", c.name, code, errOut, c.want)
+		}
+	}
+}
+
+func TestCheckExternalCheckerTimeout(t *testing.T) {
+	installPlugin(t, filepath.Join(t.TempDir(), "bin"), "checker", "slow")
+	root := project(t, strings.ReplaceAll(checkedRules, "check: good", "check: slow"))
+	withPluginChecker(t, root, "slow", `, "timeout": "1s"`, "")
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile: %s", errOut)
+	}
+	writeAt(t, root, "a.go", "package a\n")
+	// describe has its own 10 s; it is the one that times out here.
+	code, _, errOut := runCmd("check", "a.go")
+	if code != exitCantRun || !strings.Contains(errOut, "no answer in") {
+		t.Errorf("check = %d, stderr %q; want 2, no answer", code, errOut)
+	}
+}
+
+// stele compile and the hook know a listed checker by name: its rules are
+// valid, and it never runs (D79).
+func TestCompileAndHookNeverRunCheckers(t *testing.T) {
+	installPlugin(t, filepath.Join(t.TempDir(), "bin"), "checker", "witness")
+	witness := filepath.Join(t.TempDir(), "witness")
+	t.Setenv("STELE_FAKE_WITNESS", witness)
+	root := project(t, strings.ReplaceAll(checkedRules, "check: good", "check: witness"))
+	withPluginChecker(t, root, "witness", "", "")
+	code, out, errOut := runCmd("compile")
+	if code != exitOK || strings.Contains(out+errOut, "not a checker") {
+		t.Fatalf("compile = %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	hook(t, write(filepath.Join(root, "a.go"), "p1", ""))
+	post, _ := postHook(t, root, "post-write", "a.go", "package a\n")
+	if strings.Contains(post.HookSpecificOutput.AdditionalContext, "not a checker") {
+		t.Errorf("the hook calls the rule invalid: %s", post.HookSpecificOutput.AdditionalContext)
+	}
+	if data, err := os.ReadFile(witness); err == nil {
+		t.Fatalf("a checker ran from compile or the hook: %q", data)
+	}
+	writeAt(t, root, "a.go", "package a\n")
+	if code, _, errOut := runCmd("check", "a.go"); code != exitOK {
+		t.Fatalf("check: %s", errOut)
+	}
+	if data, _ := os.ReadFile(witness); !strings.Contains(string(data), "checker validate") || !strings.Contains(string(data), "checker check") {
+		t.Errorf("witness after check = %q: want validate and check", data)
+	}
+}
+
+// A rule naming a checker stele.json doesn't list is still invalid.
+func TestCompileUnlistedCheckerIsInvalid(t *testing.T) {
+	root := project(t, checkedRules)
+	code, out, errOut := runCmd("compile")
+	if !strings.Contains(out+errOut, `"good" is not a checker`) {
+		t.Errorf("compile = %d, stdout %q, stderr %q; want the rule called invalid", code, out, errOut)
+	}
+	_ = root
+}

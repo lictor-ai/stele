@@ -91,7 +91,7 @@ func TestValidate(t *testing.T) {
 		rule("matches-nothing", map[string]string{"check": "regex", "pattern": "a*"}),
 		rule("good", map[string]string{"check": "regex", "pattern": `password\s*=`}),
 	}
-	got := New().Validate(rules)
+	got, _ := New().Validate(context.Background(), rules)
 	var ids []string
 	for _, p := range got {
 		ids = append(ids, p.RuleID)

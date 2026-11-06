@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -15,6 +16,10 @@ import (
 	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/session"
 )
+
+// bg is the context of a validation that starts nothing: only names of
+// external checkers are known here (D79).
+var bg = context.Background()
 
 // maxProblemsShown caps the invalid rules one warning names; the rest are
 // counted.
@@ -47,7 +52,7 @@ func invalidRules(ev adapter.Event, file string, room int) (warning, context str
 	if err != nil {
 		return "", ""
 	}
-	ps := check.Validate(idx, plugin.BuiltinCheckers())
+	ps, _ := check.Validate(bg, idx, plugin.NamedCheckers(root))
 	if len(ps) == 0 {
 		return "", ""
 	}
