@@ -23,13 +23,19 @@ import (
 	"time"
 )
 
-// arms are the setups compared, in report order. stele-tools is stele with
-// the agent told to change files only with its file tools, which the hooks
-// see; it is a diagnostic, not run by default.
-var arms = []string{"none", "claudemd", "stele", "stele-tools"}
+// arms are the setups compared, in report order. agentsmd is claudemd for
+// Codex: the rules pasted into AGENTS.md. stele-tools is stele with the agent
+// told to change files only with its file tools, which the hooks see; it is
+// a diagnostic, not run by default.
+var arms = []string{"none", "claudemd", "agentsmd", "stele", "stele-tools"}
 
 type config struct {
+	agent                string // claude-code or codex
 	claude, stele, model string
+	codex                []string // the command that starts Codex
+	effort               string   // Codex's model_reasoning_effort
+	codexHome            string   // the eval's CODEX_HOME
+	goDir                string   // Go's cache and temp files, writable in Codex's sandbox
 	timeout              time.Duration
 	scenarioDir, outDir  string
 	streamDir            string
@@ -40,7 +46,7 @@ type config struct {
 func main() {
 	var (
 		scenarios = flag.String("scenarios", "", "comma-separated scenarios to run (default: all)")
-		armList   = flag.String("arms", "none,claudemd,stele", "comma-separated arms: none, claudemd, stele, stele-tools")
+		armList   = flag.String("arms", "", "comma-separated arms: none, claudemd, agentsmd, stele, stele-tools (default: none,claudemd,stele, or none,agentsmd,stele for Codex)")
 		reps      = flag.Int("reps", 1, "runs per scenario and arm")
 		parallel  = flag.Int("parallel", 3, "runs at once")
 		baseline  = flag.String("baseline", "", "comma-separated results/*.jsonl whose runs of the arms not run now join the summary")
@@ -48,7 +54,10 @@ func main() {
 	)
 	flag.StringVar(&cfg.claude, "claude", "", "claude binary (default: newest VS Code extension's, else claude on PATH)")
 	flag.StringVar(&cfg.stele, "stele", "", "stele binary (default: built from this module)")
-	flag.StringVar(&cfg.model, "model", "claude-sonnet-5-5", "model the agent runs on")
+	flag.StringVar(&cfg.agent, "agent", "claude-code", "agent: claude-code or codex")
+	codexFlag := flag.String("codex", "", "codex binary, or its codex.js (default: the npm package's codex.js, else codex on PATH)")
+	flag.StringVar(&cfg.effort, "effort", "medium", "Codex's model_reasoning_effort")
+	flag.StringVar(&cfg.model, "model", "", "model the agent runs on (default: claude-sonnet-5-5, or gpt-6-luna for Codex)")
 	flag.DurationVar(&cfg.timeout, "timeout", 10*time.Minute, "timeout per run")
 	flag.BoolVar(&cfg.keep, "keep", false, "keep each run's temporary tree (default: only its diff, beside the stream)")
 	flag.BoolVar(&cfg.rtk, "rtk", false, "add the rtk hook from the user's settings (only it) to every arm")
@@ -60,8 +69,41 @@ func main() {
 	}
 	cfg.scenarioDir = filepath.Join(here, "scenarios")
 	cfg.outDir = filepath.Join(here, "results")
-	if cfg.claude == "" {
-		cfg.claude = findClaude()
+	switch cfg.agent {
+	case "claude-code":
+		if cfg.model == "" {
+			cfg.model = "claude-sonnet-5-5"
+		}
+		if *armList == "" {
+			*armList = "none,claudemd,stele"
+		}
+		if cfg.claude == "" {
+			cfg.claude = findClaude()
+		}
+	case "codex":
+		if cfg.model == "" {
+			cfg.model = "gpt-6-luna"
+		}
+		if *armList == "" {
+			*armList = "none,agentsmd,stele"
+		}
+		cfg.codex = findCodex()
+		if *codexFlag != "" {
+			cfg.codex = codexCommand(*codexFlag)
+		}
+		if cfg.codexHome, err = newCodexHome(); err != nil {
+			fail(err)
+		}
+		cleanup = func() { os.RemoveAll(cfg.codexHome) }
+		defer cleanup()
+		cfg.goDir = filepath.Join(cfg.codexHome, "go")
+		for _, d := range []string{"cache", "tmp"} {
+			if err := os.MkdirAll(filepath.Join(cfg.goDir, d), 0o755); err != nil {
+				fail(err)
+			}
+		}
+	default:
+		fail(fmt.Errorf("unknown agent %q", cfg.agent))
 	}
 	if cfg.stele == "" {
 		cfg.stele, err = buildStele(filepath.Join(here, "..", "..", ".."))
@@ -109,7 +151,11 @@ func main() {
 			}
 		}
 	}
-	fmt.Fprintf(os.Stderr, "%d runs, model %s, claude %s, stele %s\n", len(jobs), cfg.model, cfg.claude, cfg.stele)
+	agentBin := "claude " + cfg.claude
+	if cfg.agent == "codex" {
+		agentBin = strings.Join(cfg.codex, " ") + ", effort " + cfg.effort
+	}
+	fmt.Fprintf(os.Stderr, "%d runs, agent %s, model %s, %s, stele %s\n", len(jobs), cfg.agent, cfg.model, agentBin, cfg.stele)
 
 	var (
 		mu      sync.Mutex
@@ -234,7 +280,12 @@ func split(s string) []string {
 	return out
 }
 
+// cleanup removes what the eval made outside results/ (Codex's home, with
+// its copy of the login), also when it fails.
+var cleanup = func() {}
+
 func fail(err error) {
+	cleanup()
 	fmt.Fprintln(os.Stderr, "agent eval:", err)
 	os.Exit(2)
 }

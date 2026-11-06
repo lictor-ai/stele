@@ -126,7 +126,7 @@ func summary(results []Result, model string) string {
 				continue
 			}
 			s := mean(rs[arm])
-			for _, a := range []string{"none", "claudemd", "stele"} {
+			for _, a := range []string{"none", "claudemd", "agentsmd", "stele"} {
 				if a == arm || len(rs[a]) == 0 {
 					continue
 				}
