@@ -118,6 +118,24 @@ func TestHookCodexMultiFileDeny(t *testing.T) {
 	}
 }
 
+// A command that runs apply_patch inside a longer line is read for its
+// patch's files and as a shell command, for what else it writes.
+func TestHookCodexPatchInsideACommand(t *testing.T) {
+	root := project(t, hookRules)
+	clock(t, time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC))
+	cmd := "cd . && apply_patch '*** Begin Patch\n*** Add File: notes.md\n+x\n*** End Patch' && echo x > internal/db.go"
+	o, _ := codexHook(t, codexPayload(t, "pre-bash-powershell", root, cmd))
+	h := o.HookSpecificOutput
+	if h.PermissionDecision != "deny" || !strings.Contains(h.PermissionDecisionReason, "internal/db.go") || !strings.Contains(h.PermissionDecisionReason, "Never build SQL") {
+		t.Errorf("the echo's write was not seen: %+v", h)
+	}
+	cmd = "cd . && apply_patch '*** Begin Patch\n*** Delete File: stele.md\n*** End Patch' && echo x > internal/db.go"
+	o, _ = codexHook(t, codexPayload(t, "pre-bash-powershell", root, cmd))
+	if h := o.HookSpecificOutput; h.PermissionDecision != "deny" || !strings.Contains(h.PermissionDecisionReason, "does not let Codex change it") {
+		t.Errorf("stele.md in the patch was not refused: %+v", h)
+	}
+}
+
 // Codex cannot ask the user: a patch that touches stele's own files is
 // refused, and the agent told to leave it to the user.
 func TestHookCodexOwnFileRefused(t *testing.T) {

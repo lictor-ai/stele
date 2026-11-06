@@ -143,6 +143,11 @@ func Parse(stdin []byte) (adapter.Event, error) {
 			e.Edits = parsePatch(patch, e.Cwd)
 			if post {
 				e.Edits = applied(e.Edits, p.ToolResponse, e.Cwd)
+			} else if patch == command {
+				// stele could not cut the patch out of the command, such as
+				// cd x && apply_patch … && echo > a.go: the command is read as
+				// a shell command too, for what else it writes.
+				e.Command, e.Dialect = command, shellDialect
 			}
 		case post:
 			e.Kind = adapter.Other // nothing runs after a shell command
