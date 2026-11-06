@@ -1,7 +1,7 @@
 # A second agent: Codex
 
-* Status: proposed
-* Date: 2026-11-04
+* Status: accepted
+* Date: 2026-11-05
 * Amends: ADR-0005 ("the generated file is stele's own; no file of the
   user's is touched"), ADR-0009 ("a second agent adds a way to choose (a flag
   on the command it installs)": this is that flag, and the interface widens

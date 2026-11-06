@@ -83,9 +83,16 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 	switch {
 	case ev.Kind == adapter.PreShell:
 		a = beforeBash(ev, sw)
-	case ev.Kind == adapter.PreTool && len(ev.Edits) > 0:
+	case ev.Kind == adapter.PreTool && (len(ev.Edits) > 0 || ev.Command != ""):
 		a = beforeWrite(ev, sw)
-		a.Warning = joinLines(a.Warning, versionWarning(ev, ev.Edits[0].File, installed))
+		// A tool call that is also a shell command, such as a patch run
+		// inside a longer command line: what the rest writes counts too.
+		if ev.Command != "" {
+			a = mergeAnswers(a, beforeBash(ev, sw))
+		}
+		if len(ev.Edits) > 0 {
+			a.Warning = joinLines(a.Warning, versionWarning(ev, ev.Edits[0].File, installed))
+		}
 	case ev.Kind == adapter.PostTool && len(writes(ev)) > 0:
 		a = afterWrites(ev, sw)
 		room := install.MaxMessage
@@ -104,6 +111,23 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 		stdout.Write(out)
 	}
 	return exitOK
+}
+
+// mergeAnswers is one answer for two decisions on one call: a deny or an
+// ask in either stands, and their texts are joined.
+func mergeAnswers(a, b adapter.Answer) adapter.Answer {
+	m := adapter.Answer{
+		Deny:    a.Deny || b.Deny,
+		Reason:  joinNotes(a.Reason, b.Reason),
+		Ask:     joinNotes(a.Ask, b.Ask),
+		Context: joinNotes(a.Context, b.Context),
+		Warning: joinLines(a.Warning, b.Warning),
+	}
+	if m.Deny && m.Ask != "" {
+		// A deny is all the agent reads: it carries the ask's words too.
+		m.Reason = joinNotes(m.Ask, m.Reason)
+	}
+	return m
 }
 
 // target returns the stele root for file, which a tool writes, and the file
@@ -407,7 +431,7 @@ func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, reasonRoo
 	// A file stele generated for the agent holds every rule's text: it is
 	// never checked, as check.RunFileLines skips stele's other files.
 	var r check.Report
-	if !own(rel) {
+	if !own(root, rel) {
 		var ids []string
 		r, ids = check.RunFileChecked(idx, rel, content, plugin.BuiltinCheckers(), keep)
 		if len(ids) > 0 {

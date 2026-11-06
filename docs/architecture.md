@@ -1167,12 +1167,21 @@ Everything that knows one agent's shape (ADR-0009). Adapters are always
 compiled in (D44): they run on the hot path, so there is nothing to resolve.
 
 `internal/adapter` defines the `Adapter` interface and the agent-neutral types,
-and imports no adapter. `internal/adapter/claudecode` is the only adapter in
-v1. Only it, `cmd/stele/agents.go` (the registry) and
-`internal/install/agent_test.go` (the install tests, which check the real
-adapter's output) import it; `isolation_test.go` fails the build otherwise.
-`stele hook` uses the registry's adapter, so the installed command is
-unchanged.
+and imports no adapter. The adapters are `internal/adapter/claudecode` and
+`internal/adapter/codex` (ADR-0012). Only they, `cmd/stele/agents.go` (the
+registry) and `internal/install/agent_test.go` (the install tests, which check
+the real adapter's output) import one; `isolation_test.go` fails the build
+otherwise. What two adapters share lives outside `internal/adapter`:
+`internal/rulesblock` (a rules file's blocks and their hash) and
+`internal/jsonedit` (editing a JSON settings file byte for byte).
+
+The registry lists the agents, Claude Code first, the default. `stele hook
+--agent=<name>` answers the agent it names, the default with none, so a hook
+installed before Codex is unchanged; an unknown name says nothing. What
+concerns every agent goes over the whole registry: the guard covers every
+agent's settings files, and compile writes a rules file for each *active*
+agent under a root, one whose hooks are installed there or whose rules file
+holds stele's rules, the default when none is (D73).
 
 ```go
 type Kind int // Other, PreTool, PostTool, PreShell, SessionStart, SubagentStart
@@ -1182,19 +1191,28 @@ type Event struct {
     Kind                         Kind
     SessionID, PromptID, AgentID string
     Cwd                          string
-    Writes     bool     // the tool writes File; a read does not
-    Whole      bool     // the tool replaced the whole file
-    File       string   // absolute, or ""
+    Edits      []Edit   // one per file the tool touches (D76)
     Command    string   // PreShell: read, never run (#57)
     Background bool
+    Dialect    Dialect  // Bash or PowerShell: how Command is read
+    Native     any      // the adapter's own reading, read only by its methods
+}
+
+type Edit struct {
+    File       string   // absolute, cleaned
+    Writes     bool     // the tool writes the file's content
+    Whole      bool     // the tool replaced the whole file
+    Removes    bool     // the tool deletes the file, or moves it away
     NewText    []string // what the tool put in the file, one per edit
     ReplaceAll []bool   // each NewText's replace-all
     Added      []Lines  // the lines added, from the agent's own patch
     Patched    bool     // false: no patch to trust; Added means nothing
-    Native     any      // the adapter's own reading, read only by its methods
 }
 
 type Lines struct{ First, Last int }
+
+// What an agent starting now did with a root's rules file.
+type Load struct{ Agent string; Read, Launch, Forget bool }
 
 type Answer struct {
     Deny    bool   // before a tool: deny; after it: a block, the write stays
@@ -1206,7 +1224,10 @@ type Answer struct {
 
 type Switches struct{ RemindOff, CheckOff bool } // zero: both on (ADR-0006)
 type Rule struct{ ID string; Scope []string; Body string }
-type Words struct{ Agent, Shell, WriteTools, WriteInstead string }
+type Words struct {
+    Agent, Shell, WriteTools, WriteInstead string
+    NoAsk bool // the agent cannot ask the user: an Ask is refused instead
+}
 
 type Adapter interface {
     // A stable id in the log and in reports: "claude-code" (ADR-0010).
@@ -1218,7 +1239,7 @@ type Adapter interface {
     HookArgs(args []string) (version string, sw Switches) // stele hook's own --installed= and switches
 
     // What the agent loaded at a start event, from root's rules file.
-    Loaded(ev Event, root string) (agent string, launch, ok bool)
+    Loaded(ev Event, root string) Load
 
     // Install.
     SettingsFile() string
@@ -1241,12 +1262,27 @@ type Adapter interface {
     ReadRules(data []byte) map[string]string
     OwnedRules(data []byte) bool
     SameRules(disk, want []byte) bool
+    // A rules file that is the user's, stele writing a section of it.
+    SharedRulesFile() bool
+    SpliceRules(disk, rendered []byte) (out []byte, ok bool)
+    UnspliceRules(disk []byte) (out []byte, remove, ok bool)
+    RulesNotes(root string) []string
+
+    // Only stele init runs the probe, never the hook.
+    VersionProbe() []string
+    VersionNotes(out []byte, err error) []string
 
     // Words.
     Words() Words
     SessionContext() string
 }
 ```
+
+One tool call may touch several files (D76). Before a write, any of stele's
+own files among the edits asks, or is refused for an agent that cannot ask;
+otherwise each project decides once over the rules of all its files, the
+same files again being the retry, and a removal shows no rules. After it,
+each file written is checked, the answers merged under the message cap.
 
 The neutral flow in `cmd/stele` decides; the adapter translates. The neutral
 flow is the root, the index, scope, the backstop, session state, checks,
@@ -1318,13 +1354,52 @@ unclosed one could hide the rest of the rule while its hash counts it as read.
 The template lives in the adapter, with `session-context.tmpl`: both are Claude
 Code's.
 
+`codex` is Codex's, measured on Codex 0.166.0 (payloads under
+`cmd/stele/testdata/hook/codex`). `Parse` makes a `PreToolUse` for
+`apply_patch` a `PreTool`, for `Bash` a `PreShell` (PowerShell on Windows), a
+`PostToolUse` for `apply_patch` a `PostTool`; `turn_id` is the prompt. A `Bash`
+call that runs `apply_patch` (quoted, a heredoc, or argv), which Codex applies
+itself, is a `PreTool` or `PostTool` too, never a shell command. The patch,
+Codex's own format, read as leniently as Codex reads it (a heredoc wrapper,
+trimmed headers), gives one `Edit` per file: an add is `Whole`, an update's
+hunks are its `NewText`, a delete `Removes`, a move removes the old path and
+writes the new one whole; one stele cannot follow gives every file a header
+anywhere names. After the call, the result's `A`/`M`/`D` list narrows the
+edits; a failed patch's files are checked by their new text only. `Render`
+answers a deny, and an ask, which Codex refuses, as `permissionDecision:
+"deny"` with a reason that is never empty; after a tool, `decision: "block"`;
+context past 6,000 bytes is cut, under Codex's spill limit.
+
+`Install` writes `stele hook --agent=codex`, with no version stamp, into
+`.codex/hooks.json` on `PreToolUse` and `PostToolUse` (`^(apply_patch|Bash)$`)
+and `SessionStart` (D74). Codex keys a hook's approval by its group's place and
+a hash of its settings, so a switch rewrites stele's handler in place, a new
+one is appended after the user's groups, and uninstall leaves stele's group
+empty, with its matcher, while groups with hooks follow it; init notes that
+the hooks must be approved with `/hooks`. The rules go in `AGENTS.md` between
+`<!-- stele:begin … -->` and `<!-- stele:end -->` (D75): `SpliceRules` writes
+only between them, in the begin line's line end, appending them when there
+are none, and refuses markers out of order and UTF-16; `ReadRules` and
+`SameRules` read only inside. `Loaded` counts the rules as read only at a
+`startup` whose walk from the nearest `.git`, with none between root and the
+session's directory, reaches root's file, with no `AGENTS.override.md`, the
+section's end within Codex's 32 KiB cap (or a lower `project_doc_max_bytes`)
+and after no open HTML comment, and no AGENTS file of the walk, nor a
+directory from its top down to root (whose time a removal or a rename
+changes), less than 2 s older than the session's start, the time in its
+UUIDv7 id; a resume, compaction, clear or fork answers `Forget`. The
+`apply_patch` the guard reads names every file a header-looking line does,
+whatever the reader made of the patch, and the patch ends at its last
+non-blank line, as Codex's. A shared rules file is checked
+like any file until it holds stele's section.
+
 ### `internal/install`
 
 ```go
 type Set struct{ Remind, Check *bool } // nil keeps the installed switch
 func Init(a adapter.Adapter, root, version string, set Set) (changes, notes []string, err error)
 func InstalledSwitches(a adapter.Adapter, root string) (adapter.Switches, bool)
-func Uninstall(a adapter.Adapter, root string) (changes, notes []string, err error)
+func Uninstall(a adapter.Adapter, root string, others []adapter.Adapter) (changes, notes []string, err error) // .stele/ stays while one of others has hooks
 func Header(version string) []byte // the comment a new stele.md starts with
 func Older(a, b string) bool       // release a comes before b, by semver precedence
 ```
@@ -1914,9 +1989,9 @@ or errors and call `t.Helper()`; they do not fail tests themselves. Comparisons 
 ## 11. Command surface
 
 ```
-stele init         set stele up here: Claude Code hooks, stele.md, .stele/, then compile
-                     [--remind=on|off] [--check=on|off]
-stele uninstall    remove exactly what init wrote
+stele init         set stele up here: an agent's hooks, stele.md, .stele/, then compile
+                     [--remind=on|off] [--check=on|off] [--agent=claude-code,codex] (D73)
+stele uninstall    remove exactly what init wrote [--agent=…]
 stele compile      every source, then compile.Plan + compile.Apply (lock, index, .claude/rules/stele-rules.md); prints the reconcile report
                      and each git source's pin [--update: pin every git source at its ref's tip] (D72)
 stele check        validate the rules, run checkers on changed files; writes nothing but a log line where stele already runs, nothing in CI (ADR-0010)
@@ -1926,8 +2001,8 @@ stele stats        how the rules are doing, from the local log; writes nothing, 
 stele status       describe the install [--format text|json]
 stele push         send new log entries to every listed sink
 stele mcp          run the MCP server on stdio
-stele hook         read a Claude Code hook payload on stdin, decide
-                     [--installed=<version>] [--remind=off] [--check=off]
+stele hook         read an agent's hook payload on stdin, decide
+                     [--agent=<name>] [--installed=<version>] [--remind=off] [--check=off]
 ```
 
 `init` and `uninstall` work in the current directory, never an ancestor: Claude

@@ -174,6 +174,30 @@ The hook also recompiles when `stele.md` changes, so edits take effect on the ne
 
 To remove stele: `stele uninstall`. It removes stele's hooks, `.claude/rules/stele-rules.md` and `.stele/` (its [log](#what-stele-records) too), and keeps `stele.md`, `stele.lock` and `stele.json`.
 
+### Codex
+
+stele works with OpenAI's [Codex CLI](https://github.com/openai/codex) too, version 0.141 or later (0.145 or later on Windows). Run `stele init --agent=codex` where you start Codex:
+
+```
+$ stele init --agent=codex
+stele init in /home/you/project
+created .stele/.gitignore
+added stele hooks (PreToolUse, PostToolUse, SessionStart) to .codex/hooks.json
+wrote stele.lock
+wrote AGENTS.md
+stele init: Codex runs a project's hooks only in a trusted project, and only once you approve each one: start codex here, trust the project, type /hooks and approve stele's hooks. Until then Codex skips them, without a word in codex exec. Codex asks again whenever stele init changes them (--remind, --check).
+stele init: kept the existing stele.md
+Codex hooks: remind on, check on
+```
+
+- It adds `stele hook --agent=codex` to `.codex/hooks.json` on `PreToolUse` (matcher `^(apply_patch|Bash)$`), `PostToolUse` (matcher `^(apply_patch|Bash)$`, for `apply_patch` run through the shell, which Codex applies itself) and `SessionStart`, after any hooks already there. The command carries no version, so upgrading stele doesn't make Codex ask you to approve the hooks again.
+- **Approve the hooks.** Start `codex` in the project, trust it, type `/hooks` and approve stele's three hooks. Codex runs no hook you haven't approved, and `codex exec` skips one without saying so. Turning `--remind` or `--check` on or off changes the hooks, so approve them again after.
+- The rules go in `AGENTS.md`, which Codex loads at the start of every session, between a `<!-- stele:begin … -->` and a `<!-- stele:end -->` line. stele writes only between those lines and keeps the rest of the file as it is; with no such lines, it adds them at the end. Don't edit inside them: `stele compile` writes them from `stele.md`.
+- `stele init --agent=claude-code,codex` sets up both. Without `--agent`, `stele init` and `stele uninstall` work for the agents already set up in the directory, or Claude Code when none is.
+- `stele uninstall --agent=codex` removes stele's hooks from `.codex/hooks.json`, leaving its group empty while yours follow it so they keep their approvals, and its lines from `AGENTS.md`, and the file if nothing else is left; `.stele/` goes with the last agent's hooks.
+
+Everything else is as for Claude Code: the same `stele.md`, the same deny before a write and check after it, the same switches, and `stele check` in CI. `stele stats` shows the two agents apart.
+
 ## Writing stele.md
 
 Rules are separated by a line holding only `---`. A rule may start with `key: value` lines; then a blank line, then the rule in plain prose. HTML comments are skipped.
@@ -606,6 +630,28 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 **The thresholds are fixed.** 30 turns before a rule is judged dead, 10 broken writes before a fix rate. They can't be changed yet.
 
 **A log you add to git leaves with it.** `.stele/` ignores itself, but `git add -f .stele/log.jsonl` commits the log like any file, and a push sends its file paths and session and prompt ids along.
+
+### Codex
+
+**Codex runs no hook you haven't approved, and `codex exec` skips it without a word.** stele can only say so at `stele init`. Changing `--remind` or `--check` changes the hooks, and Codex wants them approved again.
+
+**Codex can't ask you about stele's own files.** A patch to `stele.md`, `stele.json`, `stele.lock`, `.stele/` or an agent's settings files is refused, and Codex is told to ask you to make the change.
+
+**Most PowerShell writes aren't seen on Windows.** Codex's shell runs PowerShell there, and stele reads only bash's forms of writing a file, such as `>`; `Set-Content` or `Out-File` go through unseen. `stele check` in CI is the catch.
+
+**Codex reads only the first 32 KiB of its `AGENTS.md` files.** If stele's section ends past that, counting the `AGENTS.md` files of the directories above, or if an `AGENTS.override.md` sits beside it, Codex starts without the rules, and the deny before a write shows them instead. A `-c project_doc_max_bytes=…` on the command line isn't seen.
+
+**The rules count as loaded only at a session's startup, launched in the project or below it.** After a resume, a compaction, `/clear` or a fork, and in a subagent, the deny shows the rules again. So it does when a `.git` sits between the project and where Codex runs, as in a submodule, since Codex then starts its walk there, and when an `AGENTS.md` may have changed since the session started: Codex reads it when the session starts, and stele hears of the session only at its first prompt. stele counts a change from the files' times and those of their directories, which a removal or a rename changes, with a margin of 2 seconds, so a session started within 2 seconds of any change in the project's directory, or a directory above it up to the repository, shows the rules again too.
+
+**Removing a hook can cost the approvals of the hooks after it in its group.** Codex keys an approval by place. Uninstall keeps stele's group, empty, so the groups after it keep theirs; a hook you added inside stele's own group, after its handler, moves up and must be approved again.
+
+**`AGENTS.md` must be UTF-8.** A UTF-16 one is left alone, with a note, and Codex starts without the rules. When stele adds its section to a file whose last line has no line end, it adds one.
+
+**Notes past about 6,000 bytes are cut.** Codex moves a hook's longer context into a file the model may not open, so stele cuts it, says so, and `stele check` shows the rest.
+
+**Only `apply_patch` is checked,** whether Codex calls it as a tool or runs it in its shell. Writes through MCP tools aren't seen.
+
+**Only the version is checked, at `stele init`.** stele runs `codex --version` there and never in the hook. The release notes, not stele, are the source for 0.141 and 0.145.
 
 ### Upgrades
 
