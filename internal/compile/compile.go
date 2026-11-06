@@ -106,7 +106,7 @@ func Plan(ctx context.Context, root string, srcs []source.Source, gens []Generat
 	if err != nil {
 		return Result{}, err
 	}
-	return plan(root, rules, fps, pins, gens, newID, false, nil)
+	return plan(root, rules, fps, pins, gens, newID, nil, nil)
 }
 
 // PlanLocal is Plan for stele stats, which starts no process (D70): it reads
@@ -139,7 +139,7 @@ func Compile(ctx context.Context, root string, srcs []source.Source, gens []Gene
 		return Result{}, err
 	}
 	defer unlock()
-	r, err := plan(root, rules, fps, pins, gens, newID, false, key)
+	r, err := plan(root, rules, fps, pins, gens, newID, nil, key)
 	if err != nil {
 		return Result{}, err
 	}
@@ -196,7 +196,7 @@ func writeGenerated(root string, files []File, replace func(string, []byte) erro
 // committed one holds them (D71, D81). That is the hook's index before the
 // first stele compile on a machine, or after a pull that moved a pin.
 func generate(root string, idx index.Index, l lock.File, gens []Generated) []File {
-	partial := len(unreadPins(idx.Sources, l.Sources)) > 0 || holdsUnread(idx.Sources, l.Rules)
+	partial := len(unreadPins(idx.Sources, l.Sources)) > 0 || lacks(idx, l.Rules)
 	files := make([]File, len(gens))
 	for i, g := range gens {
 		data := g.Render(idx)
@@ -259,7 +259,11 @@ func sameText(a, b []byte) bool {
 // staleGenerated reports whether a generated file differs from what idx
 // gives.
 func staleGenerated(root string, idx index.Index, gens []Generated) bool {
-	for _, f := range generate(root, idx, lockFile(root), gens) {
+	l, err := lockFile(root)
+	if err != nil {
+		return false // a lock stele cannot read: no generated file is touched
+	}
+	for _, f := range generate(root, idx, l, gens) {
 		if f.Changed {
 			return true
 		}
@@ -325,7 +329,11 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gen
 		return cur, false, err
 	}
 	if ok && len(stale) == 0 {
-		return cur, false, writeGenerated(root, generate(root, cur, lockFile(root), gens), safefile.Replace)
+		l, err := lockFile(root)
+		if err != nil {
+			return cur, false, nil
+		}
+		return cur, false, writeGenerated(root, generate(root, cur, l, gens), safefile.Replace)
 	}
 
 	r, err := rebuild(ctx, root, cur, ok, stale, builtins, gens, newID, key)
@@ -401,7 +409,7 @@ func rebuild(ctx context.Context, root string, cur index.Index, ok bool, stale m
 			rules = append(rules, rule(e))
 		}
 	}
-	return plan(root, rules, fps, nil, gens, newID, true, key)
+	return plan(root, rules, fps, nil, gens, newID, builtin, key)
 }
 
 // staleness loads the index and says which builtins changed since it was
@@ -474,15 +482,22 @@ func refresh(ctx context.Context, root string, builtins []source.Source, gens []
 	if err != nil || !ok || len(stale) > 0 {
 		return // another process is rebuilding; it writes the files too
 	}
-	_ = writeGenerated(root, generate(root, cur, lockFile(root), gens), safefile.ReplaceNow)
+	if l, err := lockFile(root); err == nil {
+		_ = writeGenerated(root, generate(root, cur, l, gens), safefile.ReplaceNow)
+	}
 }
 
-// holdsUnread reports whether entries hold a rule of a source fps, a plan's
-// or an index's fingerprints, did not read: an external source, on a
-// machine whose index was rebuilt from the builtins alone.
-func holdsUnread(fps map[string]string, entries []lock.Entry) bool {
+// lacks reports whether entries, the lock's, hold a rule idx does not: one of
+// a source the index was not built from, such as an external source on a
+// machine whose index was rebuilt from the builtins alone, or one a pull
+// added to a source it was (D81).
+func lacks(idx index.Index, entries []lock.Entry) bool {
+	ids := make(map[string]bool, len(idx.Rules))
+	for _, r := range idx.Rules {
+		ids[r.ID] = true
+	}
 	for _, e := range entries {
-		if _, ok := fps[e.Source]; !ok {
+		if !ids[e.ID] {
 			return true
 		}
 	}
@@ -503,15 +518,20 @@ func unreadPins(fps map[string]string, pins []source.Pin) map[string]bool {
 }
 
 // lockPins are the pins of stele.lock, or none when it cannot be read.
-func lockPins(root string) []source.Pin { return lockFile(root).Sources }
+func lockPins(root string) []source.Pin {
+	l, _ := lockFile(root)
+	return l.Sources
+}
 
-// lockFile is stele.lock, or an empty one when it cannot be read.
-func lockFile(root string) lock.File {
+// lockFile is stele.lock. One that cannot be read, such as one with a
+// merge's conflict markers, is an error: the hook then touches no generated
+// file, since it cannot tell which rules they must hold.
+func lockFile(root string) (lock.File, error) {
 	f, err := lock.Load(root)
 	if err != nil {
-		return lock.File{}
+		return lock.File{}, err
 	}
-	return f
+	return f, nil
 }
 
 // lockCompile takes the compile lock under .stele/, waiting at most wait.
@@ -570,11 +590,12 @@ func read(ctx context.Context, root string, s source.Source) ([]source.Rule, str
 }
 
 // named prefixes err with the source, unless it is a parse error, which
-// already names its file and line.
+// already names its file and line, or an error that names its source.
 func named(s source.Source, err error) error {
 	if err != nil {
 		var pe *source.ParseError
-		if !errors.As(err, &pe) {
+		var sn source.SelfNamed
+		if !errors.As(err, &pe) && !errors.As(err, &sn) {
 			err = fmt.Errorf("source %s: %w", s.Name(), err)
 		}
 	}
@@ -582,10 +603,13 @@ func named(s source.Source, err error) error {
 }
 
 // plan reconciles rules against stele.lock and builds the index. pins are the
-// pinned sources' commits. keepUnread keeps the lock entries of sources that
-// were not read, and every pin, so a rebuild from the builtins alone does not
-// cost external rules their ids, nor a pinned source its commit.
-func plan(root string, rules []source.Rule, fps map[string]string, pins []source.Pin, gens []Generated, newID func() string, keepUnread bool, key sign.Key) (Result, error) {
+// pinned sources' commits. A rebuild names the builtins it read: only their
+// rules come from what was read, so every lock entry of another source that
+// rules do not use is kept, and every pin, so a rebuild from the builtins
+// alone does not cost external rules their ids, nor a pinned source its
+// commit, nor a rule a pull added to a source the index carried (D81). nil
+// builtins is stele compile, which read every source.
+func plan(root string, rules []source.Rule, fps map[string]string, pins []source.Pin, gens []Generated, newID func() string, builtins map[string]bool, key sign.Key) (Result, error) {
 	prev, err := lock.Load(root)
 	if err != nil {
 		return Result{}, err
@@ -594,13 +618,13 @@ func plan(root string, rules []source.Rule, fps map[string]string, pins []source
 	if err != nil {
 		return Result{}, err
 	}
-	if keepUnread {
+	if builtins != nil {
 		used := make(map[string]bool, len(ids))
 		for _, id := range ids {
 			used[id] = true
 		}
 		for _, e := range prev.Rules {
-			if _, read := fps[e.Source]; !read && !used[e.ID] {
+			if !builtins[e.Source] && !used[e.ID] {
 				next.Rules = append(next.Rules, e)
 				rep.Dropped--
 			}
@@ -629,6 +653,12 @@ func plan(root string, rules []source.Rule, fps map[string]string, pins []source
 		}
 	}
 
+	files := generate(root, idx, next, gens)
+	for _, f := range files {
+		if len(f.Data) > maxGenerated {
+			return Result{}, fmt.Errorf("the rules make %s %d bytes, over the %d stele reads back: fewer or shorter rules", f.Path, len(f.Data), maxGenerated)
+		}
+	}
 	cur, err := index.Load(root, key)
 	if err != nil && !errors.Is(err, index.ErrNoIndex) {
 		return Result{}, err
@@ -639,7 +669,7 @@ func plan(root string, rules []source.Rule, fps map[string]string, pins []source
 		Report:       rep,
 		LockChanged:  !lock.Equal(prev, next),
 		IndexChanged: err != nil || !index.Equal(cur, idx),
-		Files:        generate(root, idx, next, gens),
+		Files:        files,
 	}, nil
 }
 

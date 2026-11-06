@@ -89,6 +89,9 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 			return ruleFileProblem(root, *format, fmt.Sprintf("%s is out of date with %s: run stele compile and commit %s",
 				lock.FileName, enforce.FileName, lock.FileName), stdout, stderr)
 		}
+		if pluginFault(srcs, err) {
+			return cantRun("%v", err)
+		}
 		if err != nil {
 			var pe *source.ParseError
 			if !errors.As(err, &pe) && !errors.Is(err, lock.ErrDuplicateID) && !errors.Is(err, lock.ErrInvalid) {

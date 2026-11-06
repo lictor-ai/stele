@@ -249,6 +249,9 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error { return e.Err }
 
+// NamesItsSource marks an Error as naming its plugin (source.SelfNamed).
+func (e *Error) NamesItsSource() {}
+
 // Info is what a plugin's describe says of it.
 type Info struct {
 	Exe       string `json:"-"` // where it was found

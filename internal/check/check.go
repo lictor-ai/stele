@@ -14,6 +14,7 @@ package check
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/scope"
+	"github.com/lictor-ai/stele/internal/source"
 )
 
 // Checker verifies code against the rules that name it.
@@ -157,7 +159,7 @@ func Run(ctx context.Context, root string, idx index.Index, files []string, cs m
 		}
 		res, err := g.checker.Check(ctx, root, g.rules, mine)
 		if err != nil {
-			return Report{}, fmt.Errorf("%s: %w", g.checker.Name(), err)
+			return Report{}, checkerErr(g.checker.Name(), err)
 		}
 		p.report.Skipped = append(p.report.Skipped, res.Skipped...)
 		for _, v := range res.Violations {
@@ -383,7 +385,7 @@ func prepare(ctx context.Context, idx index.Index, cs map[string]Checker, conten
 		}
 		problems, err := g.checker.Validate(ctx, plain)
 		if err != nil {
-			return prepared{report: p.report}, fmt.Errorf("%s: %w", name, err)
+			return prepared{report: p.report}, checkerErr(name, err)
 		}
 		bad := map[string]bool{}
 		for _, pr := range problems {
@@ -476,4 +478,14 @@ func Excerpt(body string) string {
 		return s
 	}
 	return string([]rune(s)[:excerptLen]) + "…"
+}
+
+// checkerErr is err from the checker name, prefixed with it unless it names
+// its plugin already (source.SelfNamed).
+func checkerErr(name string, err error) error {
+	var sn source.SelfNamed
+	if errors.As(err, &sn) {
+		return err
+	}
+	return fmt.Errorf("%s: %w", name, err)
 }

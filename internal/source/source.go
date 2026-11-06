@@ -61,6 +61,13 @@ type Pinned interface {
 // fails on it rather than move the pin.
 var ErrUnpinned = errors.New("stele.lock has no pin for this source as stele.json sets it")
 
+// SelfNamed is an error that already names the source it came from, such as
+// a plugin's, which names its executable: compile adds no prefix to it.
+type SelfNamed interface {
+	error
+	NamesItsSource()
+}
+
 // ParseError is bad input in a rule file. It names the file and the line.
 type ParseError struct {
 	File string // relative to the root

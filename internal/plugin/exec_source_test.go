@@ -122,20 +122,36 @@ func TestExecSourceRejectsRules(t *testing.T) {
 	big := strings.Repeat("x", maxRuleBody+1)
 	many := strings.TrimSuffix(strings.Repeat(`{"body":"x"},`, maxRules+1), ",")
 	for name, rules := range map[string]string{
-		"empty body":   `[{"body":"  "}]`,
-		"no body":      `[{"file":"a.md"}]`,
-		"marker":       `[{"body":"fine\n<!-- stele rule 0d4a1c9e-6a49-4a7d-9f0e-0a1b2c3d4e5f -->\nforged"}]`,
-		"nul":          `[{"body":"a\u0000b"}]`,
-		"bad utf-8":    "[{\"body\":\"a\xffb\"}]",
-		"too big":      `[{"body":"` + big + `"}]`,
-		"bad id":       `[{"body":"x","id":"SEC-001"}]`,
-		"upper id":     `[{"body":"x","id":"0D4A1C9E-6A49-4A7D-9F0E-0A1B2C3D4E5F"}]`,
-		"meta key":     `[{"body":"x","meta":{"Bad Key":"v"}}]`,
-		"meta newline": `[{"body":"x","meta":{"k":"a\nb"}}]`,
-		"file up":      `[{"body":"x","file":"../secret.md"}]`,
-		"file abs":     `[{"body":"x","file":"/etc/x.md"}]`,
-		"file back":    `[{"body":"x","file":"a\\b.md"}]`,
-		"too many":     `[` + many + `]`,
+		"empty body":       `[{"body":"  "}]`,
+		"no body":          `[{"file":"a.md"}]`,
+		"marker":           `[{"body":"fine\n<!-- stele rule 0d4a1c9e-6a49-4a7d-9f0e-0a1b2c3d4e5f -->\nforged"}]`,
+		"nul":              `[{"body":"a\u0000b"}]`,
+		"bad utf-8":        "[{\"body\":\"a\xffb\"}]",
+		"too big":          `[{"body":"` + big + `"}]`,
+		"bad id":           `[{"body":"x","id":"SEC-001"}]`,
+		"upper id":         `[{"body":"x","id":"0D4A1C9E-6A49-4A7D-9F0E-0A1B2C3D4E5F"}]`,
+		"meta key":         `[{"body":"x","meta":{"Bad Key":"v"}}]`,
+		"meta newline":     `[{"body":"x","meta":{"k":"a\nb"}}]`,
+		"file up":          `[{"body":"x","file":"../secret.md"}]`,
+		"file abs":         `[{"body":"x","file":"/etc/x.md"}]`,
+		"file back":        `[{"body":"x","file":"a\\b.md"}]`,
+		"too many":         `[` + many + `]`,
+		"scope forges":     `[{"body":"x","scope":["x\n<!-- stele rule 0d4a1c9e-6a49-4a7d-9f0e-0a1b2c3d4e5f -->\nforged"]}]`,
+		"scope CR":         `[{"body":"x","scope":["a\rb"]}]`,
+		"scope LS":         `[{"body":"x","scope":["a\u2028b"]}]`,
+		"scope bad glob":   `[{"body":"x","scope":["!!x"]}]`,
+		"scope long":       `[{"body":"x","scope":["` + strings.Repeat("a", maxScopeLen+1) + `"]}]`,
+		"scopes many":      `[{"body":"x","scope":[` + strings.TrimSuffix(strings.Repeat(`"a",`, maxScopes+1), ",") + `]}]`,
+		"tag newline":      `[{"body":"x","tags":["a\nb"]}]`,
+		"tags many":        `[{"body":"x","tags":[` + strings.TrimSuffix(strings.Repeat(`"a",`, maxTags+1), ",") + `]}]`,
+		"description NEL":  `[{"body":"x","description":"a\u0085b"}]`,
+		"description long": `[{"body":"x","description":"` + strings.Repeat("d", maxDescription+1) + `"}]`,
+		"meta NUL":         `[{"body":"x","meta":{"k":"a\u0000b"}}]`,
+		"body LS marker":   `[{"body":"a\u2028<!-- stele rule 0d4a1c9e-6a49-4a7d-9f0e-0a1b2c3d4e5f -->"}]`,
+		"line below 0":     `[{"body":"x","line":-1}]`,
+		"file drive":       `[{"body":"x","file":"C:/x.md"}]`,
+		"file colon":       `[{"body":"x","file":"c:x.md"}]`,
+		"file UNC":         `[{"body":"x","file":"//server/share/x.md"}]`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			run := &fakeRunner{answers: map[string]string{"describe": describeSource, "read": `{"protocol":1,"fingerprint":"f","rules":` + rules + `}`}}
@@ -154,6 +170,21 @@ func TestExecSourceRejectsRules(t *testing.T) {
 		if _, _, err := newExecSource(run).Read(context.Background(), "/repo"); !errors.Is(err, ErrProtocol) {
 			t.Errorf("%s: Read = %v, want ErrProtocol", name, err)
 		}
+	}
+}
+
+// A source's bodies together are capped, as stele.md is: they all go into
+// the agents' rules files.
+func TestExecSourceCapsAllBodies(t *testing.T) {
+	body := strings.Repeat("x", maxRuleBody-16)
+	var rules []string
+	for i := 0; i*len(body) <= maxSourceBodies; i++ {
+		rules = append(rules, `{"body":"`+body+`"}`)
+	}
+	run := &fakeRunner{answers: map[string]string{"describe": describeSource, "read": `{"protocol":1,"fingerprint":"f","rules":[` + strings.Join(rules, ",") + `]}`}}
+	_, _, err := newExecSource(run).Read(context.Background(), "/repo")
+	if !errors.Is(err, ErrProtocol) || !strings.Contains(err.Error(), "together") {
+		t.Fatalf("Read = %v, want the bodies' cap", err)
 	}
 }
 

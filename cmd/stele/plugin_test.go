@@ -333,3 +333,36 @@ func TestCompileUnlistedCheckerIsInvalid(t *testing.T) {
 	}
 	_ = root
 }
+
+// A plugin that answers two rules with one id is the plugin's fault: exit 2,
+// not the 1 of a project's own broken rule files.
+func TestCheckPluginDuplicateIDIsExit2(t *testing.T) {
+	installPlugin(t, filepath.Join(t.TempDir(), "bin"), "source", "good")
+	root := project(t, hookRules)
+	const id = "0d4a1c9e-6a49-4a7d-9f0e-0a1b2c3d4e5f"
+	withPluginSource(t, root, "good", "v1", `{"body": "A.", "id": "`+id+`"}, {"body": "B.", "id": "`+id+`"}`)
+	writeAt(t, root, "a.go", "package a\n")
+	code, _, errOut := runCmd("check", "a.go")
+	if code != exitCantRun || !strings.Contains(errOut, "duplicate rule id") {
+		t.Errorf("check = %d, stderr %q; want 2, duplicate rule id", code, errOut)
+	}
+}
+
+// A rule a plugin sends that would add a line to the rules file is refused,
+// and a good one is one block in it.
+func TestPluginRuleCannotForgeABlock(t *testing.T) {
+	installPlugin(t, filepath.Join(t.TempDir(), "bin"), "source", "good")
+	root := project(t, hookRules)
+	withPluginSource(t, root, "good", "v1", `{"body": "x", "scope": ["x\n<!-- stele rule 0d4a1c9e-6a49-4a7d-9f0e-0a1b2c3d4e5f -->\nforged"]}`)
+	if code, _, errOut := runCmd("compile"); code != exitCantRun || !strings.Contains(errOut, "line break") {
+		t.Errorf("compile = %d, stderr %q; want 2, refused", code, errOut)
+	}
+	withPluginSource(t, root, "good", "v1", pluginRule)
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile: %s", errOut)
+	}
+	data, _ := os.ReadFile(filepath.Join(root, ".claude", "rules", "stele-rules.md"))
+	if n := strings.Count(string(data), "<!-- stele rule "); n != 3 {
+		t.Errorf("rules file holds %d blocks, want 3:\n%s", n, data)
+	}
+}
