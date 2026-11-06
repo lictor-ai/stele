@@ -78,6 +78,28 @@ func TestCompileExternalSource(t *testing.T) {
 	}
 }
 
+func TestInitRunsExternalSource(t *testing.T) {
+	installPlugin(t, filepath.Join(t.TempDir(), "bin"), "source", "good")
+	root := project(t, hookRules)
+	withPluginSource(t, root, "good", "v1", pluginRule)
+	if code, _, errOut := runCmd("init"); code != exitOK {
+		t.Fatalf("init = %d, stderr %q", code, errOut)
+	}
+	rulesFile, _ := os.ReadFile(filepath.Join(root, ".claude", "rules", "stele-rules.md"))
+	if !strings.Contains(string(rulesFile), "Every exported function has a doc comment.") {
+		t.Errorf("rules file lacks the plugin's rule:\n%s", rulesFile)
+	}
+}
+
+func TestInitNotesAMissingPlugin(t *testing.T) {
+	root := project(t, hookRules)
+	withPluginSource(t, root, "nothere", "v1", pluginRule)
+	code, out, errOut := runCmd("init")
+	if code != exitOK || !strings.Contains(out+errOut, "stele-source-nothere not found on PATH") {
+		t.Errorf("init = %d, stdout %q, stderr %q; want 0 and a note", code, out, errOut)
+	}
+}
+
 func TestCompileExternalSourceFailures(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "bin")
 	for _, mode := range []string{"crash", "badproto", "wrongkind", "errors"} {

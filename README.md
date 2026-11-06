@@ -349,7 +349,7 @@ With `--base`, `stele check` also says when the branch adds, changes or deletes 
 |---|---|
 | 0 | Rules are valid (or there are none) and there is no blocking violation |
 | 1 | A rule is invalid, `stele.lock` or `.claude/rules/stele-rules.md` is out of date (`stele.lock` also when `stele.json` lists a shared rules source it has no pin for), or there is a blocking violation |
-| 2 | stele couldn't run: bad flags, no git, a git inside the project, unknown `--base` ref, no merge base, a bad `sources` in `stele.json`, a [shared rules](#shared-rules-from-another-repository) repository it can't read |
+| 2 | stele couldn't run: bad flags, no git, a git inside the project, unknown `--base` ref, no merge base, a bad `sources` in `stele.json`, a [shared rules](#shared-rules-from-another-repository) repository it can't read, a [plugin](#plugins) that is missing, refused, crashed, timed out or answered wrong |
 
 GitHub Actions:
 
@@ -384,7 +384,7 @@ Optional, committed next to `stele.md`. This is the default:
 
 | Key | Effect |
 |---|---|
-| `sources` | Rules from another git repository: see [Shared rules](#shared-rules-from-another-repository). |
+| `sources` | Rules from another git repository, see [Shared rules](#shared-rules-from-another-repository), or from a program you install, see [Plugins](#plugins). |
 | `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. It applies only to a part of the hook that is on: with `--remind=off` or `--check=off`, that part's failures only warn. |
 
 `backstop` is no longer read: use `stele init --remind=off`. `stele init` says so when `stele.json` still sets it, and leaves the file as it is:
@@ -461,6 +461,52 @@ Please make sure you have the correct access rights
 and the repository exists.
 stele needs read access to git@github.com:acme/guidelines.git: check that git ls-remote git@github.com:acme/guidelines.git works here
 ```
+
+## Plugins
+
+A plugin is a program you install that gives stele rules it can't read itself. List it under `sources` in `stele.json`, by name:
+
+```json
+{
+  "sources": [
+    { "name": "paragraphs", "config": { "file": "GUIDELINES.txt" } }
+  ]
+}
+```
+
+stele runs `stele-source-paragraphs` from your `PATH` (`stele-source-paragraphs.exe` on Windows) and adds its rules after the project's own:
+
+```
+$ stele compile
+3 rules: 0 matched by text, 0 by position, 3 new, 0 dropped
+wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
+```
+
+Commit `stele.lock` and `.claude/rules/stele-rules.md` as usual. `stele check` asks the plugin again, so when its rules change it fails until you run `stele compile`:
+
+```
+$ stele check
+stele check: stele.lock is out of date with the rules: run stele compile and commit stele.lock
+```
+
+A plugin that isn't installed stops `stele compile`, `stele check` and `stele init` with exit 2:
+
+```
+$ stele compile
+stele compile: source "paragraphs": stele-source-paragraphs not found on PATH: install it, or remove "paragraphs" from "sources" in stele.json
+```
+
+| Key | Effect |
+|---|---|
+| `name` | The plugin: stele runs `stele-source-<name>`. Lower-case letters, digits and `-`, starting with a letter. `stelemd`, `git` and `regex` are stele's own. |
+| `config` | Passed to the plugin as it is. |
+| `timeout` | How long a read may take: `"2m"`, from `1s` to `30m`. Default 1 minute. |
+
+- **Only from `PATH`, never from the project.** A plugin found inside the project, or inside the git repository that holds it, or through a relative `PATH` entry such as `.`, is refused, links followed. On Windows it must be an `.exe` or `.com`.
+- **Run with no shell, in the project's root.** It gets your environment, with `PATH` cut to entries outside the project. What it writes on stderr is shown, each line starting with its name.
+- **Never in the hook.** Plugins run at `stele compile`, `stele check` and `stele init` only. The hook uses the rules of the last one on your machine.
+
+Writing one takes a few lines in any language: [docs/plugin-protocol.md](docs/plugin-protocol.md) describes the protocol, with the `paragraphs` example above.
 
 ## Publish the rules: stele publish
 
@@ -605,6 +651,18 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **Windows limits paths to 260 characters.** stele's clone of a guidelines repository is in your user cache directory, under a 64-character name; a very long user cache path can make the fetch fail with "Filename too long".
 
+### Plugins
+
+**A plugin runs as you.** It can read your files, use your environment, tokens included, and reach the network. stele checks where it comes from, not what it does: install only plugins you trust.
+
+**A cloned project chooses which plugins run.** Its `stele.json` names them, and stele runs the ones of those names on your `PATH`. It can't bring a plugin of its own, but it can make one you installed run with its `config`.
+
+**Before the first `stele compile`, `stele check` or `stele init` on a machine, the hook knows only the project's own rules.** As for shared rules: the agent still loads a plugin's rules from the committed `.claude/rules/stele-rules.md`, but no write is denied or checked against them until then.
+
+**A plugin's rules aren't pinned.** `stele check` asks the plugin again, so if it reads something outside the project that changed, `stele check` fails until you run `stele compile`.
+
+**A teammate without the plugin can't compile or check.** A listed plugin missing from `PATH` is exit 2 for `stele compile` and `stele check`, and a note at `stele init`.
+
 ### Projects
 
 **A directory with its own `stele.md` or `stele.json` is a separate project.** Its files get only its rules. `stele check` at the parent skips it and says so; run `stele check` in it too.
@@ -666,7 +724,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **Only `stele publish` sends anything, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com. stele never sends the log.
 
-**Shared rules are fetched, never sent.** `stele compile`, `stele check` and `stele init` connect to each `repo` under `sources` when they need a commit they don't have. git sends what a fetch sends: the refs and commits it wants and has of that repository, and your login for that host through your own git setup. Nothing of the project goes with it. The hook and `stele stats` never connect. stele makes no other network call. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
+**Shared rules are fetched, never sent.** `stele compile`, `stele check` and `stele init` connect to each `repo` under `sources` when they need a commit they don't have. git sends what a fetch sends: the refs and commits it wants and has of that repository, and your login for that host through your own git setup. Nothing of the project goes with it. The hook and `stele stats` never connect. stele itself makes no other network call; a [plugin](#plugins) you install may. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 
 **`stele publish` opens merge requests on github.com and gitlab.com only.** Any other host, a self-hosted GitHub or GitLab included, gets the branch pushed and is told to open the request by hand, with no link.
 
