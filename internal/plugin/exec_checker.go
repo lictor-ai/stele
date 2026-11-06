@@ -166,7 +166,7 @@ func (c *execChecker) Validate(ctx context.Context, rules []check.Rule) ([]check
 }
 
 func (c *execChecker) Check(ctx context.Context, root string, rules []check.Rule, files []string) (check.Result, error) {
-	sent, _ := sendRules(rules)
+	sent, ids := sendRules(rules)
 	var a struct {
 		Violations *[]struct {
 			RuleID  string `json:"rule_id"`
@@ -200,6 +200,8 @@ func (c *execChecker) Check(ctx context.Context, root string, rules []check.Rule
 	var res check.Result
 	for _, v := range *a.Violations {
 		switch {
+		case !ids[v.RuleID]:
+			return bad("a violation of %q, which is not one of the rules sent", printable.Clean(v.RuleID))
 		case !sentFile[v.File]:
 			return bad("a violation in %q, which is not one of the files sent", printable.Clean(v.File))
 		case v.Line < 1 || v.Column < 1:

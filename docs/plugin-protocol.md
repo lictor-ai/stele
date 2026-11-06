@@ -217,6 +217,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 type request struct {
@@ -254,28 +255,30 @@ func main() {
 		}
 		answer["problems"] = problems
 	case "check":
-		found := []violation{}
+		found, skipped := []violation{}, []map[string]string{}
 		for _, f := range req.Files {
 			file, err := os.Open(filepath.Join(req.Root, filepath.FromSlash(f)))
 			if err != nil {
+				skipped = append(skipped, map[string]string{"file": f, "reason": "cannot be read"})
 				continue
 			}
 			lines := bufio.NewScanner(file)
 			for n := 1; lines.Scan(); n++ {
 				for _, r := range req.Rules {
-					if col := strings.Index(lines.Text(), r.Meta["word"]); col >= 0 {
-						found = append(found, violation{r.ID, f, n, col + 1})
+					text := lines.Text()
+					if i := strings.Index(text, r.Meta["word"]); i >= 0 {
+						// The column counts characters, not bytes.
+						found = append(found, violation{r.ID, f, n, utf8.RuneCountInString(text[:i]) + 1})
 					}
 				}
 			}
 			file.Close()
 		}
-		answer["violations"] = found
+		answer["violations"], answer["skipped"] = found, skipped
 	}
 	json.NewEncoder(os.Stdout).Encode(answer)
 }
 ```
 
-It counts the column in bytes, which is the same as characters only for
-ASCII text, and drops a file it can't open where a real checker would list it
-under `skipped`.
+A file it can't open is listed under `skipped`, so stele reports it rather
+than pass it.

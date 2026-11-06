@@ -83,6 +83,15 @@ We gave Claude Code the same coding work with no rules, with the rules pasted in
 |---|---|---|
 | 33% | 63% | 100% |
 
+We did the same with Codex, on the three hardest tasks (74 rules), with the rules in `AGENTS.md` instead of `CLAUDE.md`. 18 runs each, model `gpt-6-luna`:
+
+| | No rules | Rules in `AGENTS.md` | stele |
+|---|---|---|---|
+| Rules respected | 6/18 | 12/18 | 18/18 |
+| Tokens per run | 200k | 311k | 397k |
+
+With Codex, stele cost 28% more tokens than `AGENTS.md`, mostly from one more turn per run. With Claude Code on the same tasks, stele and `CLAUDE.md` cost the same.
+
 ### Speed
 
 The hook adds about 0.1 s per write on Windows. With 500 rules, it adds up to 0.17 s.
@@ -527,11 +536,19 @@ Finish the work before you merge it: no TODO in Go code.
 }
 ```
 
-`stele check` runs `stele-checker-word` on the files the rule's `scope` covers:
+`stele check` runs `stele-checker-word` on the files the rule's `scope` covers, here this `main.go`:
+
+```go
+package main
+
+func main() {
+	// TODO: read the config
+}
+```
 
 ```
 $ stele check main.go
-main.go:4:5: error c7fd8772-d0d3-48df-bf70-f8b41868cf84 "Finish the work before you merge it: no TODO in Go code."
+main.go:4:5: error 1bf07c03-cb51-4072-be43-2d2157d62b3f "Finish the work before you merge it: no TODO in Go code."
 1 rule valid
 checked 1 file: 1 error
 ```

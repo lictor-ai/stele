@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -364,5 +365,60 @@ func TestPluginRuleCannotForgeABlock(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(root, ".claude", "rules", "stele-rules.md"))
 	if n := strings.Count(string(data), "<!-- stele rule "); n != 3 {
 		t.Errorf("rules file holds %d blocks, want 3:\n%s", n, data)
+	}
+}
+
+// How stele check ends when a checker plugin answers wrong: its own fault is
+// exit 2, a rule it calls invalid is exit 1.
+func TestCheckCheckerPluginOutcomes(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "bin")
+	installPlugin(t, bin, "checker", "good")
+	installPlugin(t, bin, "checker", "errors")
+
+	t.Run("error answer", func(t *testing.T) {
+		root := project(t, strings.ReplaceAll(checkedRules, "check: good", "check: errors"))
+		withPluginChecker(t, root, "errors", "", "")
+		if code, _, errOut := runCmd("compile"); code != exitOK {
+			t.Fatalf("compile: %s", errOut)
+		}
+		writeAt(t, root, "a.go", "package a\n")
+		code, out, errOut := runCmd("check", "a.go")
+		if code != exitCantRun || !strings.Contains(errOut, "stele-checker-errors validate: the fake plugin was told to fail") {
+			t.Errorf("check = %d, stdout %q, stderr %q; want 2", code, out, errOut)
+		}
+		code, out, _ = runCmd("check", "--format", "json", "a.go")
+		if code != exitCantRun {
+			t.Errorf("check json = %d, want 2", code)
+		}
+		if strings.TrimSpace(out) != "" {
+			var v any
+			if err := json.Unmarshal([]byte(out), &v); err != nil {
+				t.Errorf("check json stdout is not JSON: %q", out)
+			}
+		}
+	})
+
+	t.Run("invalid rule", func(t *testing.T) {
+		root, id := checkedProject(t)
+		writeAt(t, root, "stele.json", `{"checkers": [{"name": "good", "config": {"problems": [{"rule_id": "`+id+`", "message": "no word: set"}]}}]}`+"\n")
+		code, out, errOut := runCmd("check", "a.go")
+		if code != exitFailed || !strings.Contains(out, "invalid rule "+id) || !strings.Contains(out, "no word: set") {
+			t.Errorf("check = %d, stdout %q, stderr %q; want 1 with the rule", code, out, errOut)
+		}
+	})
+
+	for name, v := range map[string]string{
+		"file not sent": `{"rule_id": "ID", "file": "other.go", "line": 1, "column": 1}`,
+		"line 0":        `{"rule_id": "ID", "file": "a.go", "line": 0, "column": 1}`,
+		"rule not sent": `{"rule_id": "nope", "file": "a.go", "line": 1, "column": 1}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			root, id := checkedProject(t)
+			withPluginChecker(t, root, "good", "", strings.ReplaceAll(v, "ID", id))
+			code, out, errOut := runCmd("check", "a.go")
+			if code != exitCantRun || !strings.Contains(errOut, "stele-checker-good check: plugin protocol error") {
+				t.Errorf("check = %d, stdout %q, stderr %q; want 2", code, out, errOut)
+			}
+		})
 	}
 }

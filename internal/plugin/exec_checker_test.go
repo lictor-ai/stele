@@ -130,6 +130,7 @@ func TestExecCheckerCheck(t *testing.T) {
 
 func TestExecCheckerRejectsAnswers(t *testing.T) {
 	for name, ans := range map[string]string{
+		"rule not sent": `{"protocol":1,"violations":[{"rule_id":"nope","file":"web/a.js","line":1,"column":1}]}`,
 		"file not sent": `{"protocol":1,"violations":[{"rule_id":"r1","file":"../etc/x","line":1,"column":1}]}`,
 		"line 0":        `{"protocol":1,"violations":[{"rule_id":"r1","file":"web/a.js","line":0,"column":1}]}`,
 		"column 0":      `{"protocol":1,"violations":[{"rule_id":"r1","file":"web/a.js","line":1,"column":0}]}`,
