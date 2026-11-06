@@ -1384,9 +1384,13 @@ are none, and refuses markers out of order and UTF-16; `ReadRules` and
 `startup` whose walk from the nearest `.git`, with none between root and the
 session's directory, reaches root's file, with no `AGENTS.override.md`, the
 section's end within Codex's 32 KiB cap (or a lower `project_doc_max_bytes`)
-and after no open HTML comment, and no AGENTS file written after the
-session's start, the time in its UUIDv7 id; a resume, compaction, clear or
-fork answers `Forget`. A shared rules file is checked
+and after no open HTML comment, and no AGENTS file of the walk, nor a
+directory from its top down to root (whose time a removal or a rename
+changes), less than 2 s older than the session's start, the time in its
+UUIDv7 id; a resume, compaction, clear or fork answers `Forget`. The
+`apply_patch` the guard reads names every file a header-looking line does,
+whatever the reader made of the patch, and the patch ends at its last
+non-blank line, as Codex's. A shared rules file is checked
 like any file until it holds stele's section.
 
 ### `internal/install`

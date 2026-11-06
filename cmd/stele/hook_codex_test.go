@@ -14,6 +14,18 @@ import (
 	"github.com/lictor-ai/stele/internal/journal"
 )
 
+// sessionAt is a UUIDv7 session id, as Codex's are, for a session that
+// began at at.
+func sessionAt(at time.Time) string {
+	u := uuid.Must(uuid.NewV7())
+	ms := at.UnixMilli()
+	for i := 5; i >= 0; i-- {
+		u[i] = byte(ms)
+		ms >>= 8
+	}
+	return u.String()
+}
+
 // codexOutput is Codex's view of the hook's stdout.
 type codexOutput struct {
 	Decision           string `json:"decision"`
@@ -216,8 +228,9 @@ func TestCodexInitAndPrimedSession(t *testing.T) {
 		t.Errorf("AGENTS.md:\n%s", agents)
 	}
 
-	// A session that began after AGENTS.md was written, as its UUIDv7 id says.
-	session := uuid.Must(uuid.NewV7()).String()
+	// A session that began a minute after AGENTS.md was written, as its
+	// UUIDv7 id says: Codex counts files within 2 s of the start as changed.
+	session := sessionAt(time.Now().Add(time.Minute))
 	start := codexPayload(t, "session-start", root, "")
 	start["session_id"] = session
 	if _, out := codexHook(t, start); !strings.Contains(out, "apply_patch") {

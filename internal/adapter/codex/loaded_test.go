@@ -32,10 +32,33 @@ func repo(t *testing.T, sub string) string {
 	return root
 }
 
-// startEv is a session start whose id, a UUIDv7 as Codex's are, says it
-// began now.
+// sessionAt is a UUIDv7 session id, as Codex's are, for a session that
+// began at at.
+func sessionAt(at time.Time) string {
+	u := uuid.Must(uuid.NewV7())
+	ms := at.UnixMilli()
+	for i := 5; i >= 0; i-- {
+		u[i] = byte(ms)
+		ms >>= 8
+	}
+	return u.String()
+}
+
+// started is when the sessions of these tests began: a minute from now, so
+// the files a test wrote are older than the start by more than the margin.
+var started = time.Now().Add(time.Minute)
+
+// startEv is a session start that began at started.
 func startEv(source, cwd string) adapter.Event {
-	return adapter.Event{Kind: adapter.SessionStart, SessionID: uuid.Must(uuid.NewV7()).String(), Cwd: cwd, Native: start{Source: source}}
+	return adapter.Event{Kind: adapter.SessionStart, SessionID: sessionAt(started), Cwd: cwd, Native: start{Source: source}}
+}
+
+// after sets path's time to d after the session's start: a change made then.
+func after(t *testing.T, path string, d time.Duration) {
+	t.Helper()
+	if err := os.Chtimes(path, started.Add(d), started.Add(d)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // AGENTS.md changed after the session started is not what Codex read: Codex
@@ -43,12 +66,21 @@ func startEv(source, cwd string) adapter.Event {
 func TestLoadedChangedSinceStart(t *testing.T) {
 	root := repo(t, "")
 	ev := startEv("startup", root)
-	time.Sleep(20 * time.Millisecond)
-	if err := os.WriteFile(filepath.Join(root, RulesFile), RenderRules(testRules[:1]), 0o644); err != nil {
-		t.Fatal(err)
+	if l := Loaded(ev, root); !l.Read {
+		t.Fatalf("unchanged: %+v", l)
 	}
+	after(t, filepath.Join(root, RulesFile), time.Second)
 	if l := Loaded(ev, root); l.Read || !l.Launch {
 		t.Errorf("AGENTS.md changed after the start: %+v", l)
+	}
+	// A time kept to 2 s, as a FAT disk keeps it, can read as before the
+	// start for a change made after it: the margin covers it.
+	coarse := started.Truncate(2 * time.Second)
+	if err := os.Chtimes(filepath.Join(root, RulesFile), coarse, coarse); err != nil {
+		t.Fatal(err)
+	}
+	if l := Loaded(ev, root); l.Read {
+		t.Errorf("a coarse time at the start: %+v", l)
 	}
 	ev.SessionID = "not-a-uuid"
 	if l := Loaded(ev, root); l.Read {
@@ -57,6 +89,51 @@ func TestLoadedChangedSinceStart(t *testing.T) {
 	if got, ok := sessionStarted("01a1a883-dc24-7932-8abd-64e03740d9f7"); !ok || got.UTC().Format("2006-01-02") != "2026-11-04" {
 		t.Errorf("recorded id's time = %v, %v", got, ok)
 	}
+}
+
+// A file removed or renamed after the start keeps its old time, or has
+// none: the directory's time tells.
+func TestLoadedRemovedOrRenamedSinceStart(t *testing.T) {
+	t.Run("A: an override removed", func(t *testing.T) {
+		root := repo(t, "")
+		over := filepath.Join(root, overrideFile)
+		if err := os.WriteFile(over, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(over); err != nil {
+			t.Fatal(err)
+		}
+		after(t, root, time.Second)
+		if l := Loaded(startEv("startup", root), root); l.Read {
+			t.Errorf("override removed after the start: %+v", l)
+		}
+	})
+	t.Run("B: a big file above root removed", func(t *testing.T) {
+		root := repo(t, "a")
+		top := filepath.Dir(root)
+		after(t, top, time.Second)
+		if l := Loaded(startEv("startup", root), root); l.Read {
+			t.Errorf("a file removed above root after the start: %+v", l)
+		}
+	})
+	t.Run("C: AGENTS.md renamed into place", func(t *testing.T) {
+		root := repo(t, "")
+		file := filepath.Join(root, RulesFile)
+		if err := os.Rename(file, file+".new"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(file+".new", file); err != nil {
+			t.Fatal(err)
+		}
+		old := started.Add(-time.Hour)
+		if err := os.Chtimes(file, old, old); err != nil {
+			t.Fatal(err)
+		}
+		after(t, root, time.Second)
+		if l := Loaded(startEv("startup", root), root); l.Read {
+			t.Errorf("AGENTS.md renamed in after the start: %+v", l)
+		}
+	})
 }
 
 // A .git between root and where Codex runs, a submodule, is where Codex's
