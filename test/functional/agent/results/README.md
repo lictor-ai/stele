@@ -17,6 +17,7 @@ regraded. Tokens are input + cache writes + cache reads + output, means per run.
 | `5-probes-haiku` | — | Haiku 5.5 | yes | claudemd only, 4 probes × 3, and 3 big × 2 |
 | `6-probes-8x` | `v1.0.0-dev.2` | Haiku / Sonnet | yes | the two probes where claudemd slipped, claudemd and stele × 8 |
 | `7-haiku-read-fix` | dev.2 + session text fix (branch `session-text-bash-reads`) | Haiku 5.5 | yes | stele only, `probe-local-style` × 8; claudemd reused from 6 |
+| `8-codex-d91354e` | `d91354e` (Codex adapter) | Codex 0.166.0, gpt-6-luna, effort medium | no | Codex: 3 big scenarios × none, agentsmd, stele × 6; `smoke/` holds the first pass, × 1 |
 | `smoke` | | | | single runs that checked the harness |
 | `invalid` | | | | not committed: a run cut short by a full disk, and one stopped by hand |
 | `analysis` | | | | why stele lost to CLAUDE.md in 1 and 2 |
@@ -100,3 +101,64 @@ Most runs now read with `cat`. Two things inflate the mean (330k):
 
 `task ok` is not comparable to 6: the grader now accepts any registration of
 the command, not only a literal `"version"`.
+
+## 8: Codex
+
+The 3 big scenarios (74 rules) with `-agent codex`: Codex CLI 0.166.0 on
+Windows, model `gpt-6-luna` at reasoning effort `medium`, 6 runs per scenario
+and arm. `agentsmd` is the rules pasted into `AGENTS.md`, the Codex
+counterpart of `claudemd`. Claude Code's numbers are from 2 and 3 (Sonnet 5.5,
+stele dev.2, 2 runs per scenario).
+
+| | none | agentsmd | stele |
+|---|---|---|---|
+| compliant | 6/18 | 12/18 | **18/18** |
+| task ok | 17/18 | 18/18 | 18/18 |
+| tokens | 200k | 311k | 397k |
+| turns | 11.1 | 13.1 | 14.4 |
+| time | 128 s | 171 s | 203 s |
+| denies | 0 | 0 | 0 |
+| blocks | 0 | 0 | 0.17 |
+
+| Big scenarios, compliant | none | rules file | stele |
+|---|---|---|---|
+| Claude Code (`CLAUDE.md`) | 0/6 | 6/6 | 6/6 |
+| Codex (`AGENTS.md`) | 6/18 | 12/18 | 18/18 |
+
+Per scenario, compliant runs:
+
+| | none | agentsmd | stele |
+|---|---|---|---|
+| `big-billing-refactor` | 0/6 | 5/6 | 6/6 |
+| `big-log-analyzer` | 6/6 | 6/6 | 6/6 |
+| `big-todo-service` | 0/6 | 1/6 | 6/6 |
+
+- **stele was compliant in every run; `AGENTS.md` in 12 of 18.** In
+  `big-todo-service`, 5 of the 6 `agentsmd` runs wrote "TODO" as a word in
+  doc comments ("in-memory TODO storage"), which the rule
+  `\b(TODO|FIXME|XXX|HACK)\b` forbids. No `stele` run wrote it, and none was
+  blocked for it: those agents wrote "todo". The one `agentsmd` miss in
+  `big-billing-refactor` read the time with `time.Now()` instead of the
+  injected clock.
+- **It costs more.** stele used 28% more tokens than `AGENTS.md` (397k
+  against 311k) and 19% more time, with 1.3 more turns. Its rules section
+  made the first request only about 600 tokens bigger, so most of the extra
+  is the extra turns. With Claude Code, stele dev.2 and `CLAUDE.md` used the
+  same tokens.
+- **The rules were loaded at session start, so nothing was denied.** In every
+  `stele` run the hooks ran, and the `SessionStart` context and stele's
+  `AGENTS.md` section reached the model. 3 writes were blocked after the fact
+  (two in `big-log-analyzer`, one in `big-billing-refactor`), and the agent
+  fixed each one.
+- **The hooks are approved by the harness.** `codex exec` skips hooks you
+  haven't approved, so the harness approves them with `-c hooks.state=…`,
+  from the hashes `codex app-server` reports. A user does this once with
+  `/hooks`.
+- **A harness artifact found in the smoke run:** stele counts `AGENTS.md` as
+  loaded only when nothing in the project changed in the 2 s before the
+  session started. The harness writes the tree just before it runs Codex, so
+  the first smoke run was denied once. The harness now waits 3 s.
+- Codex reports no cost, so the cost column is 0. The runs used a ChatGPT
+  plan's quota: about 16.3M tokens for the 54 runs (most of them cached
+  input), and 2.6M more for the 9 smoke runs and 75k for one run that checked the
+  harness (not kept). No quota error appeared.

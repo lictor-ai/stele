@@ -20,6 +20,7 @@ type Result struct {
 	Arm      string `json:"arm"`
 	Rep      int    `json:"rep"`
 	Model    string `json:"model"`
+	Agent    string `json:"agent,omitempty"` // empty for Claude Code, from before -agent
 
 	WallMS        int64   `json:"wall_ms"`
 	DurationMS    int64   `json:"duration_ms"`
@@ -55,6 +56,9 @@ type Result struct {
 // runOne runs one scenario in one arm and grades it.
 func runOne(cfg config, scenario, arm string, rep int) Result {
 	r := Result{Scenario: scenario, Arm: arm, Rep: rep, Model: cfg.model}
+	if cfg.agent != "claude-code" {
+		r.Agent = cfg.agent
+	}
 	work, err := os.MkdirTemp("", fmt.Sprintf("stele-eval-%s-%s-%d-", scenario, arm, rep))
 	if err != nil {
 		r.Error = err.Error()
@@ -72,7 +76,7 @@ func runOne(cfg config, scenario, arm string, rep int) Result {
 	env := runEnv(cfg, keys)
 
 	r.RTK = cfg.rtk
-	if err := setup(fixture, repo, arm, cfg.stele, cfg.rtk, env); err != nil {
+	if err := setup(fixture, repo, arm, cfg.agent, cfg.stele, cfg.rtk, env); err != nil {
 		r.Error = "setup: " + err.Error()
 		return r
 	}
@@ -89,8 +93,14 @@ func runOne(cfg config, scenario, arm string, rep int) Result {
 	if err != nil {
 		r.Error = err.Error()
 	}
-	sid := readStream(stream, &r)
-	readTranscript(sid, stream, &r)
+	if cfg.agent == "codex" {
+		// codex exec reports no durations: the wall time stands in.
+		r.DurationMS = r.WallMS
+		readRollout(cfg, readCodexStream(stream, &r), stream, &r)
+	} else {
+		sid := readStream(stream, &r)
+		readTranscript(sid, stream, &r)
+	}
 	if fi, err := os.Stat(filepath.Join(repo, ".stele", "state")); err == nil && fi.IsDir() {
 		entries, _ := os.ReadDir(filepath.Join(repo, ".stele", "state"))
 		r.HookFired = len(entries) > 0
@@ -120,8 +130,21 @@ func runEnv(cfg config, keys string) []string {
 		switch strings.ToUpper(k) {
 		case "PATH", "APPDATA", "XDG_CONFIG_HOME", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT":
 			continue
+		case "CODEX_HOME", "GOCACHE", "GOTMPDIR":
+			if cfg.agent == "codex" {
+				continue
+			}
 		}
 		env = append(env, kv)
+	}
+	if cfg.agent == "codex" {
+		// Codex's sandbox lets the agent write in the repository and in
+		// goDir, so Go's cache and temp files go there.
+		env = append(env,
+			"CODEX_HOME="+cfg.codexHome,
+			"GOCACHE="+filepath.Join(cfg.goDir, "cache"),
+			"GOTMPDIR="+filepath.Join(cfg.goDir, "tmp"),
+		)
 	}
 	return append(env,
 		"PATH="+filepath.Dir(cfg.stele)+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -131,9 +154,10 @@ func runEnv(cfg config, keys string) []string {
 }
 
 // setup copies the fixture to repo and sets up the arm: no rules at all,
-// the rules pasted into CLAUDE.md, or stele installed and compiled. The
-// result is committed, so the agent's changes are the diff from HEAD.
-func setup(fixture, repo, arm, stele string, rtk bool, env []string) error {
+// the rules pasted into CLAUDE.md or AGENTS.md, or stele installed for agent
+// and compiled. The result is committed, so the agent's changes are the diff
+// from HEAD.
+func setup(fixture, repo, arm, agent, stele string, rtk bool, env []string) error {
 	if err := copyTree(fixture, repo, nil); err != nil {
 		return err
 	}
@@ -143,20 +167,24 @@ func setup(fixture, repo, arm, stele string, rtk bool, env []string) error {
 		for _, f := range rules {
 			os.Remove(f)
 		}
-	case "claudemd":
+	case "claudemd", "agentsmd":
+		name := "CLAUDE.md"
+		if arm == "agentsmd" {
+			name = "AGENTS.md"
+		}
 		for _, f := range rules {
 			b, err := os.ReadFile(f)
 			if err != nil {
 				return err
 			}
 			md := "# Project rules\n\nFollow these rules for every change. Rules are separated by `---`; a `scope:` line lists the files a rule applies to (none means every file).\n\n" + string(b)
-			if err := os.WriteFile(filepath.Join(filepath.Dir(f), "CLAUDE.md"), []byte(md), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(filepath.Dir(f), name), []byte(md), 0o644); err != nil {
 				return err
 			}
 			os.Remove(f)
 		}
 	case "stele", "stele-tools":
-		if _, err := run(repo, env, stele, "init"); err != nil {
+		if _, err := run(repo, env, stele, "init", "--agent="+agent); err != nil {
 			return err
 		}
 		for _, f := range rules {
@@ -210,6 +238,9 @@ func addRTK(repo string) error {
 
 // runAgent runs headless Claude Code on prompt in repo, saving its stream.
 func runAgent(cfg config, repo, arm, prompt string, env []string, stream string) error {
+	if cfg.agent == "codex" {
+		return runCodex(cfg, repo, arm, prompt, env, stream)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
 	defer cancel()
 	out, err := os.Create(stream)
@@ -416,7 +447,7 @@ func writesFile(cmd string) bool {
 
 // rulesTouched reports whether the agent changed the rules or their setup.
 func rulesTouched(repo string, env []string) bool {
-	out, _ := run(repo, env, "git", "status", "--porcelain", "--", "stele.md", "**/stele.md", "CLAUDE.md", "**/CLAUDE.md", ".claude", "stele.json", ":(exclude).claude/rules/stele-rules.md")
+	out, _ := run(repo, env, "git", "status", "--porcelain", "--", "stele.md", "**/stele.md", "CLAUDE.md", "**/CLAUDE.md", ".claude", "AGENTS.md", "**/AGENTS.md", ".codex", "stele.json", ":(exclude).claude/rules/stele-rules.md")
 	return strings.TrimSpace(out) != ""
 }
 

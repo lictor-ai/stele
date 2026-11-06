@@ -204,7 +204,7 @@ func (c *gctx) onlyIn(rel, pattern string) bool {
 	only := true
 	filepath.WalkDir(c.repo, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
-			if d != nil && d.IsDir() && (d.Name() == ".git" || d.Name() == ".stele" || d.Name() == ".claude") {
+			if d != nil && d.IsDir() && (d.Name() == ".git" || d.Name() == ".stele" || d.Name() == ".claude" || d.Name() == ".codex") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -384,7 +384,7 @@ func checkRules(cfg config, fixture, repo string, env []string) ([]finding, erro
 	defer os.RemoveAll(graded)
 	skip := func(rel string, d fs.DirEntry) bool {
 		switch d.Name() {
-		case ".git", ".stele", ".claude", "CLAUDE.md", "stele.md", "stele.lock", "__pycache__":
+		case ".git", ".stele", ".claude", ".codex", "CLAUDE.md", "AGENTS.md", "stele.md", "stele.lock", "__pycache__":
 			return true
 		}
 		return false
@@ -499,13 +499,13 @@ func (c *gctx) grep(rel, pattern string) bool {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", ".stele", ".claude":
+			case ".git", ".stele", ".claude", ".codex":
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		switch d.Name() {
-		case "stele.md", "CLAUDE.md", "stele.lock":
+		case "stele.md", "CLAUDE.md", "AGENTS.md", "stele.lock":
 			return nil
 		}
 		if b, err := os.ReadFile(p); err == nil && re.Match(b) {
