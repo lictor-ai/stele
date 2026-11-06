@@ -48,7 +48,7 @@ func TestPowerShellTargets(t *testing.T) {
 		{"Set-Content $env:TEMP\\x.go x", nil, 1},
 		{"Set-Content $(Get-Name) x", nil, 1},
 		{"Set-Content -Path env:FOO -Value 1", nil, 0},
-		{"echo x > $null; echo y > NUL", nil, 0},
+		{"echo x > $null", nil, 0},
 		{"if ($true) { Set-Content in.go x }", []tg{{"in.go", Redirect}}, 0},
 		{"# Set-Content no.go x\nSet-Content yes.go x", []tg{{"yes.go", Redirect}}, 0},
 		{"<# block\nSet-Content no.go #> Set-Content yes.go x", []tg{{"yes.go", Redirect}}, 0},

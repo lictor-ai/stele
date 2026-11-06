@@ -126,7 +126,7 @@ func Parse(stdin []byte) (adapter.Event, error) {
 				e.Cwd = w
 			}
 		}
-		command, argvPatch := shellCommand(in.Command)
+		command, argvPatch, dialect := shellCommand(in.Command)
 		// Codex applies a patch run through its shell itself, measured on
 		// 0.166.0: apply_patch '<patch>' reaches the hooks as Bash. It is
 		// read as the patch it is.
@@ -147,12 +147,12 @@ func Parse(stdin []byte) (adapter.Event, error) {
 				// stele could not cut the patch out of the command, such as
 				// cd x && apply_patch … && echo > a.go: the command is read as
 				// a shell command too, for what else it writes.
-				e.Command, e.Dialect = command, shellDialect
+				e.Command, e.Dialect = command, dialect
 			}
 		case post:
 			e.Kind = adapter.Other // nothing runs after a shell command
 		default:
-			e.Command, e.Dialect = command, shellDialect
+			e.Command, e.Dialect = command, dialect
 		}
 	case e.Kind == adapter.PreTool || e.Kind == adapter.PostTool:
 		e.Edits = parsePatch(patchInput(p.ToolInput), p.Cwd)
@@ -187,24 +187,38 @@ var patchCommand = regexp.MustCompile(`^\s*(?:apply_patch|applypatch)(?:\s|$)`)
 // shellCommand is a Bash call's command: a string, or an argv whose last
 // word is the script a shell runs, such as ["bash", "-lc", "…"]. An argv
 // that runs apply_patch itself gives its patch instead, never as a command.
-func shellCommand(raw json.RawMessage) (command, patch string) {
+func shellCommand(raw json.RawMessage) (command, patch string, dialect adapter.Dialect) {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
-		return s, ""
+		return s, "", shellDialect
 	}
 	var argv []string
 	if json.Unmarshal(raw, &argv) != nil || len(argv) == 0 {
-		return "", ""
+		return "", "", shellDialect
 	}
 	name := strings.ToLower(filepath.Base(strings.ReplaceAll(argv[0], `\`, "/")))
 	name = strings.TrimSuffix(name, ".exe")
-	if name == "apply_patch" || name == "applypatch" {
+	switch name {
+	case "apply_patch", "applypatch":
 		if len(argv) > 1 {
-			return "", argv[1]
+			return "", argv[1], shellDialect
 		}
-		return "", " "
+		return "", " ", shellDialect
+	case "bash", "sh", "zsh", "dash", "git-bash", "wsl":
+		// bash -lc '…': the script, read as bash whatever the OS.
+		return argv[len(argv)-1], "", adapter.Bash
+	case "powershell", "pwsh":
+		return argv[len(argv)-1], "", adapter.PowerShell
 	}
-	return argv[len(argv)-1], ""
+	// A program run as it is: its words, quoted as the OS's shell reads them.
+	quoted := make([]string, len(argv))
+	for i, a := range argv {
+		quoted[i] = "'" + strings.ReplaceAll(a, "'", "''") + "'"
+		if shellDialect == adapter.Bash {
+			quoted[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+		}
+	}
+	return strings.Join(quoted, " "), "", shellDialect
 }
 
 // mentionsPatch matches a command that names apply_patch anywhere: after cd,

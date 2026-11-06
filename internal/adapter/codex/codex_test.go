@@ -210,6 +210,25 @@ func TestParseShellPatch(t *testing.T) {
 	}
 }
 
+// An argv's first word says which shell reads the script.
+func TestParseShellDialect(t *testing.T) {
+	for argv0, want := range map[string]adapter.Dialect{"bash": adapter.Bash, "/usr/bin/sh": adapter.Bash, `C:\Program Files\Git\bin\bash.exe`: adapter.Bash,
+		"wsl": adapter.Bash, "pwsh": adapter.PowerShell, "powershell.exe": adapter.PowerShell} {
+		data, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "cwd": t.TempDir(), "tool_name": "Bash",
+			"tool_input": map[string]any{"command": []string{argv0, "-c", "echo x > a.go"}}})
+		got, _ := Parse(data)
+		if got.Dialect != want || got.Command != "echo x > a.go" {
+			t.Errorf("%s: dialect %v, command %q", argv0, got.Dialect, got.Command)
+		}
+	}
+	// Any other program is its words, not its last one.
+	data, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "cwd": t.TempDir(), "tool_name": "Bash",
+		"tool_input": map[string]any{"command": []string{"git", "commit", "-m", "x y"}}})
+	if got, _ := Parse(data); !strings.Contains(got.Command, "'git' 'commit'") || got.Dialect != shellDialect {
+		t.Errorf("argv: %+v", got)
+	}
+}
+
 // tool_input may be the patch itself, a JSON string.
 func TestParsePatchInputString(t *testing.T) {
 	cwd := t.TempDir()
