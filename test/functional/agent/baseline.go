@@ -13,7 +13,7 @@ import (
 
 // steleFree are the arms that never run stele, so a new stele cannot change
 // their results. Only they are reused.
-var steleFree = []string{"none", "claudemd"}
+var steleFree = []string{"none", "claudemd", "agentsmd"}
 
 // loadBaseline reads earlier results from a JSONL file: the runs of the
 // chosen scenarios in arms not run now. Each is marked as a baseline, and

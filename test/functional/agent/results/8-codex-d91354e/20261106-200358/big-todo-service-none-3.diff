@@ -1,0 +1,502 @@
+diff --git a/cmd/server/main.go b/cmd/server/main.go
+new file mode 100644
+index 0000000..bc24168
+--- /dev/null
++++ b/cmd/server/main.go
+@@ -0,0 +1,31 @@
++package main
++
++import (
++	"context"
++	"flag"
++	"net/http"
++	"os"
++	"os/signal"
++	"syscall"
++	"time"
++
++	"example.com/app/internal/api"
++	"example.com/app/internal/todo"
++)
++
++func main() {
++	addr := flag.String("addr", ":8080", "HTTP listen address")
++	flag.Parse()
++	srv := &http.Server{Addr: *addr, Handler: api.New(todo.NewStore())}
++	stop, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
++	defer cancel()
++	go func() {
++		<-stop.Done()
++		ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
++		defer done()
++		_ = srv.Shutdown(ctx)
++	}()
++	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
++		panic(err)
++	}
++}
+diff --git a/internal/api/api.go b/internal/api/api.go
+new file mode 100644
+index 0000000..b29293b
+--- /dev/null
++++ b/internal/api/api.go
+@@ -0,0 +1,181 @@
++// Package api exposes the TODO HTTP API.
++package api
++
++import (
++	"encoding/json"
++	"errors"
++	"io"
++	"net/http"
++	"strconv"
++	"strings"
++
++	"example.com/app/internal/todo"
++)
++
++// Handler serves TODO routes.
++type Handler struct{ store *todo.Store }
++
++// New creates an HTTP handler backed by store.
++func New(store *todo.Store) http.Handler { return &Handler{store: store} }
++
++func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
++	if r.URL.Path == "/todos" {
++		switch r.Method {
++		case http.MethodPost:
++			h.create(w, r)
++		case http.MethodGet:
++			h.list(w, r)
++		default:
++			w.Header().Set("Allow", "GET, POST")
++			Error(w, http.StatusMethodNotAllowed, "method not allowed")
++		}
++		return
++	}
++	if strings.HasPrefix(r.URL.Path, "/todos/") {
++		id := strings.TrimPrefix(r.URL.Path, "/todos/")
++		if id == "" || strings.Contains(id, "/") {
++			Error(w, http.StatusNotFound, "todo not found")
++			return
++		}
++		switch r.Method {
++		case http.MethodGet:
++			t, ok := h.store.Get(id)
++			if !ok {
++				Error(w, http.StatusNotFound, "todo not found")
++				return
++			}
++			JSON(w, http.StatusOK, t)
++		case http.MethodPatch:
++			h.update(w, r, id)
++		case http.MethodDelete:
++			if !h.store.Delete(id) {
++				Error(w, http.StatusNotFound, "todo not found")
++				return
++			}
++			w.WriteHeader(http.StatusNoContent)
++		default:
++			w.Header().Set("Allow", "GET, PATCH, DELETE")
++			Error(w, http.StatusMethodNotAllowed, "method not allowed")
++		}
++		return
++	}
++	Error(w, http.StatusNotFound, "not found")
++}
++
++func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
++	dec := json.NewDecoder(r.Body)
++	if err := dec.Decode(dst); err != nil {
++		Error(w, http.StatusBadRequest, "invalid JSON body")
++		return false
++	}
++	var extra any
++	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
++		Error(w, http.StatusBadRequest, "invalid JSON body")
++		return false
++	}
++	return true
++}
++
++func validTitle(title string) (string, bool) {
++	title = strings.TrimSpace(title)
++	n := len([]rune(title))
++	return title, n >= 1 && n <= 200
++}
++
++func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
++	var req struct {
++		Title string `json:"title"`
++	}
++	if !decode(w, r, &req) {
++		return
++	}
++	title, ok := validTitle(req.Title)
++	if !ok {
++		Error(w, http.StatusBadRequest, "title must be 1 to 200 characters")
++		return
++	}
++	JSON(w, http.StatusCreated, h.store.Create(title))
++}
++
++func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
++	q := r.URL.Query()
++	var done *bool
++	if q.Has("done") {
++		v := q.Get("done")
++		b, err := strconv.ParseBool(v)
++		if err != nil || (v != "true" && v != "false") {
++			Error(w, http.StatusBadRequest, "done must be true or false")
++			return
++		}
++		done = &b
++	}
++	limit := 20
++	if q.Has("limit") {
++		n, err := strconv.Atoi(q.Get("limit"))
++		if err != nil || n < 1 || n > 100 {
++			Error(w, http.StatusBadRequest, "limit must be between 1 and 100")
++			return
++		}
++		limit = n
++	}
++	offset := 0
++	if q.Has("offset") {
++		n, err := strconv.Atoi(q.Get("offset"))
++		if err != nil || n < 0 {
++			Error(w, http.StatusBadRequest, "offset must be non-negative")
++			return
++		}
++		offset = n
++	}
++	JSON(w, http.StatusOK, h.store.List(todo.Filter{Done: done, Limit: limit, Offset: offset}))
++}
++
++func (h *Handler) update(w http.ResponseWriter, r *http.Request, id string) {
++	var req map[string]json.RawMessage
++	if !decode(w, r, &req) {
++		return
++	}
++	if len(req) == 0 {
++		Error(w, http.StatusBadRequest, "provide title and/or done")
++		return
++	}
++	var title *string
++	var done *bool
++	if raw, ok := req["title"]; ok {
++		var v string
++		if err := json.Unmarshal(raw, &v); err != nil {
++			Error(w, http.StatusBadRequest, "title must be a string")
++			return
++		}
++		v, valid := validTitle(v)
++		if !valid {
++			Error(w, http.StatusBadRequest, "title must be 1 to 200 characters")
++			return
++		}
++		title = &v
++	}
++	if raw, ok := req["done"]; ok {
++		var v bool
++		if err := json.Unmarshal(raw, &v); err != nil {
++			Error(w, http.StatusBadRequest, "done must be a boolean")
++			return
++		}
++		done = &v
++	}
++	for key := range req {
++		if key != "title" && key != "done" {
++			Error(w, http.StatusBadRequest, "unknown field")
++			return
++		}
++	}
++	if title == nil && done == nil {
++		Error(w, http.StatusBadRequest, "provide title and/or done")
++		return
++	}
++	t, ok := h.store.Update(id, title, done)
++	if !ok {
++		Error(w, http.StatusNotFound, "todo not found")
++		return
++	}
++	JSON(w, http.StatusOK, t)
++}
+diff --git a/internal/api/api_test.go b/internal/api/api_test.go
+new file mode 100644
+index 0000000..8fe3399
+--- /dev/null
++++ b/internal/api/api_test.go
+@@ -0,0 +1,77 @@
++package api
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"example.com/app/internal/todo"
++)
++
++func TestRoutes(t *testing.T) {
++	h := New(todo.NewStore())
++	call := func(method, path, body string) *httptest.ResponseRecorder {
++		t.Helper()
++		r := httptest.NewRequest(method, path, strings.NewReader(body))
++		w := httptest.NewRecorder()
++		h.ServeHTTP(w, r)
++		return w
++	}
++	created := call(http.MethodPost, "/todos", `{"title":"  write tests  "}`)
++	if created.Code != http.StatusCreated {
++		t.Fatalf("create: %d %s", created.Code, created.Body)
++	}
++	var item struct {
++		ID    string `json:"id"`
++		Title string `json:"title"`
++		Done  bool   `json:"done"`
++	}
++	if err := json.Unmarshal(created.Body.Bytes(), &item); err != nil || item.ID == "" || item.Title != "write tests" {
++		t.Fatalf("created body: %#v %v", item, err)
++	}
++	if got := call("GET", "/todos/"+item.ID, ""); got.Code != 200 {
++		t.Fatalf("get: %d", got.Code)
++	}
++	if got := call("PATCH", "/todos/"+item.ID, `{"done":true,"title":"done"}`); got.Code != 200 || !strings.Contains(got.Body.String(), `"done":true`) {
++		t.Fatalf("patch: %d %s", got.Code, got.Body)
++	}
++	if got := call("GET", "/todos?done=true&limit=1&offset=0", ""); got.Code != 200 || !strings.Contains(got.Body.String(), item.ID) {
++		t.Fatalf("list: %d %s", got.Code, got.Body)
++	}
++	if got := call("DELETE", "/todos/"+item.ID, ""); got.Code != 204 {
++		t.Fatalf("delete: %d", got.Code)
++	}
++	if got := call("GET", "/todos/"+item.ID, ""); got.Code != 404 || !strings.Contains(got.Body.String(), `"error"`) {
++		t.Fatalf("missing get: %d %s", got.Code, got.Body)
++	}
++}
++
++func TestRouteErrors(t *testing.T) {
++	h := New(todo.NewStore())
++	cases := []struct {
++		method, path, body string
++		status             int
++	}{
++		{"POST", "/todos", `{"title":"  "}`, 400},
++		{"POST", "/todos", `{`, 400},
++		{"GET", "/todos?done=maybe", "", 400},
++		{"GET", "/todos?limit=101", "", 400},
++		{"GET", "/todos?offset=-1", "", 400},
++		{"PATCH", "/todos/unknown", `{"done":true}`, 404},
++		{"PATCH", "/todos/unknown", `{}`, 400},
++		{"DELETE", "/todos/unknown", "", 404},
++		{"GET", "/missing", "", 404},
++	}
++	for _, tc := range cases {
++		t.Run(tc.method+tc.path, func(t *testing.T) {
++			r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
++			w := httptest.NewRecorder()
++			h.ServeHTTP(w, r)
++			if w.Code != tc.status || !strings.Contains(w.Body.String(), `"error"`) {
++				t.Fatalf("got %d %s", w.Code, w.Body)
++			}
++		})
++	}
++}
+diff --git a/internal/todo/todo.go b/internal/todo/todo.go
+new file mode 100644
+index 0000000..a64893f
+--- /dev/null
++++ b/internal/todo/todo.go
+@@ -0,0 +1,122 @@
++// Package todo provides a concurrent in-memory TODO store.
++package todo
++
++import (
++	"errors"
++	"sort"
++	"sync"
++	"time"
++
++	"example.com/app/internal/clock"
++	"example.com/app/internal/id"
++)
++
++var ErrNotFound = errors.New("todo not found")
++
++// Todo is one task.
++type Todo struct {
++	ID        string    `json:"id"`
++	Title     string    `json:"title"`
++	Done      bool      `json:"done"`
++	CreatedAt time.Time `json:"created_at"`
++	UpdatedAt time.Time `json:"updated_at"`
++}
++
++// Filter selects todos by completion state and page window.
++type Filter struct {
++	Done   *bool
++	Limit  int
++	Offset int
++}
++
++// Store is safe for concurrent use.
++type Store struct {
++	mu    sync.RWMutex
++	items map[string]Todo
++	now   func() time.Time
++	newID func() string
++}
++
++// NewStore creates an in-memory store using the system clock and random IDs.
++func NewStore() *Store { return NewStoreWith(clock.Real{}, id.New) }
++
++// NewStoreWith creates a store with injectable clock and ID generator.
++func NewStoreWith(c clock.Clock, newID func() string) *Store {
++	return &Store{items: make(map[string]Todo), now: c.Now, newID: newID}
++}
++
++// Create inserts a new todo.
++func (s *Store) Create(title string) Todo {
++	now := s.now()
++	t := Todo{ID: s.newID(), Title: title, CreatedAt: now, UpdatedAt: now}
++	s.mu.Lock()
++	s.items[t.ID] = t
++	s.mu.Unlock()
++	return t
++}
++
++// Get returns a todo by ID.
++func (s *Store) Get(id string) (Todo, bool) {
++	s.mu.RLock()
++	t, ok := s.items[id]
++	s.mu.RUnlock()
++	return t, ok
++}
++
++// Update changes provided fields. Nil fields are left unchanged.
++func (s *Store) Update(id string, title *string, done *bool) (Todo, bool) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	t, ok := s.items[id]
++	if !ok {
++		return Todo{}, false
++	}
++	if title != nil {
++		t.Title = *title
++	}
++	if done != nil {
++		t.Done = *done
++	}
++	t.UpdatedAt = s.now()
++	s.items[id] = t
++	return t, true
++}
++
++// Delete removes a todo.
++func (s *Store) Delete(id string) bool {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if _, ok := s.items[id]; !ok {
++		return false
++	}
++	delete(s.items, id)
++	return true
++}
++
++// List returns matching todos newest first, applying limit and offset.
++func (s *Store) List(f Filter) []Todo {
++	s.mu.RLock()
++	all := make([]Todo, 0, len(s.items))
++	for _, t := range s.items {
++		if f.Done == nil || t.Done == *f.Done {
++			all = append(all, t)
++		}
++	}
++	s.mu.RUnlock()
++	sort.Slice(all, func(i, j int) bool {
++		if all[i].CreatedAt.Equal(all[j].CreatedAt) {
++			return all[i].ID > all[j].ID
++		}
++		return all[i].CreatedAt.After(all[j].CreatedAt)
++	})
++	if f.Offset >= len(all) {
++		return []Todo{}
++	}
++	if f.Offset > 0 {
++		all = all[f.Offset:]
++	}
++	if f.Limit > 0 && len(all) > f.Limit {
++		all = all[:f.Limit]
++	}
++	return all
++}
+diff --git a/internal/todo/todo_test.go b/internal/todo/todo_test.go
+new file mode 100644
+index 0000000..483a02c
+--- /dev/null
++++ b/internal/todo/todo_test.go
+@@ -0,0 +1,61 @@
++package todo
++
++import (
++	"fmt"
++	"sync"
++	"testing"
++	"time"
++
++	"example.com/app/internal/clock"
++)
++
++func TestCRUDAndList(t *testing.T) {
++	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
++	n := 0
++	s := NewStoreWith(clock.Fixed{T: base}, func() string { n++; return fmt.Sprint(n) })
++	a := s.Create("first")
++	b := s.Create("second")
++	done := true
++	updated, ok := s.Update(a.ID, nil, &done)
++	if !ok || !updated.Done {
++		t.Fatal("update failed")
++	}
++	if got := s.List(Filter{Done: &done, Limit: 1}); len(got) != 1 || got[0].ID != a.ID {
++		t.Fatalf("filtered list: %#v", got)
++	}
++	if got := s.List(Filter{Limit: 1}); len(got) != 1 || got[0].ID != b.ID {
++		t.Fatalf("newest first: %#v", got)
++	}
++	if got := s.List(Filter{Offset: 2}); len(got) != 0 {
++		t.Fatalf("offset past end: %#v", got)
++	}
++	if _, ok := s.Get(b.ID); !ok {
++		t.Fatal("get failed")
++	}
++	if !s.Delete(a.ID) || s.Delete(a.ID) {
++		t.Fatal("delete semantics incorrect")
++	}
++	if _, ok := s.Get(a.ID); ok {
++		t.Fatal("deleted todo remains")
++	}
++}
++
++func TestConcurrentUse(t *testing.T) {
++	s := NewStore()
++	var wg sync.WaitGroup
++	for i := 0; i < 16; i++ {
++		wg.Add(1)
++		go func(i int) {
++			defer wg.Done()
++			for j := 0; j < 100; j++ {
++				x := s.Create(fmt.Sprintf("%d-%d", i, j))
++				s.Get(x.ID)
++				d := true
++				s.Update(x.ID, nil, &d)
++				s.List(Filter{Limit: 5})
++				s.Delete(x.ID)
++			}
++		}(i)
++	}
++	wg.Wait()
++}

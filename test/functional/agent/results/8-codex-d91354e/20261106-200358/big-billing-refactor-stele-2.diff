@@ -1,0 +1,251 @@
+diff --git a/internal/billing/billing.go b/internal/billing/billing.go
+index 2367cf6..bd36844 100644
+--- a/internal/billing/billing.go
++++ b/internal/billing/billing.go
+@@ -20,19 +20,19 @@ type Invoice struct {
+ 	Lines      []Line    `json:"lines"`
+ 	TotalCents int64     `json:"total_cents"`
+ 	IssuedAt   time.Time `json:"issued_at"`
++	Region          string    `json:"region"`
++	DiscountCents   int64     `json:"discount_cents"`
++	TaxCents        int64     `json:"tax_cents"`
++	GrandTotalCents int64     `json:"grand_total_cents"`
+ }
+ 
+ // Compute builds an invoice for a customer.
+ func Compute(id, customer string, lines []Line) Invoice {
+-	if customer == "" {
+-		panic("billing: no customer")
+-	}
+ 	var total int64
+ 	for _, l := range lines {
+ 		total += int64(l.Quantity) * l.UnitCents
+ 	}
+-	fmt.Printf("computed invoice %s for %s: %d\n", id, customer, total)
+-	return Invoice{ID: id, Customer: customer, Lines: lines, TotalCents: total, IssuedAt: time.Now()}
++	return Invoice{ID: id, Customer: customer, Lines: lines, TotalCents: total, GrandTotalCents: total}
+ }
+ 
+ // Describe returns a one-line summary of an invoice.
+@@ -41,4 +41,4 @@ func Describe(inv Invoice) string {
+ }
+ 
+ // Meta holds free-form invoice metadata.
+-type Meta map[string]interface{}
++type Meta map[string]any
+diff --git a/internal/billing/errors.go b/internal/billing/errors.go
+new file mode 100644
+index 0000000..5f3e2f1
+--- /dev/null
++++ b/internal/billing/errors.go
+@@ -0,0 +1,10 @@
++package billing
++
++import "errors"
++
++var (
++	ErrInvalidDiscount = errors.New("invalid discount")
++	ErrDiscountExpired = errors.New("discount expired")
++	ErrDiscountUsed = errors.New("discount already used by customer")
++	ErrUnknownRegion = errors.New("unknown tax region")
++)
+diff --git a/internal/billing/export.go b/internal/billing/export.go
+new file mode 100644
+index 0000000..0b81f17
+--- /dev/null
++++ b/internal/billing/export.go
+@@ -0,0 +1,38 @@
++package billing
++
++import (
++	"context"
++	"encoding/csv"
++	"fmt"
++	"io"
++	"strconv"
++)
++
++// WriteCSV writes invoices as CSV, with all monetary values in cents.
++func WriteCSV(ctx context.Context, w io.Writer, invoices []Invoice) error {
++	if w == nil {
++		return fmt.Errorf("write invoice CSV: nil writer")
++	}
++	writer := csv.NewWriter(w)
++	if err := writer.Write([]string{"id", "customer", "region", "issued_at", "total", "discount", "tax", "grand_total"}); err != nil {
++		return fmt.Errorf("write invoice CSV header: %w", err)
++	}
++	for _, inv := range invoices {
++		if err := ctx.Err(); err != nil {
++			return fmt.Errorf("write invoice CSV: %w", err)
++		}
++		record := []string{
++			inv.ID, inv.Customer, inv.Region, inv.IssuedAt.Format("2006-01-02T15:04:05Z07:00"),
++			strconv.FormatInt(inv.TotalCents, 10), strconv.FormatInt(inv.DiscountCents, 10),
++			strconv.FormatInt(inv.TaxCents, 10), strconv.FormatInt(inv.GrandTotalCents, 10),
++		}
++		if err := writer.Write(record); err != nil {
++			return fmt.Errorf("write invoice %q to CSV: %w", inv.ID, err)
++		}
++	}
++	writer.Flush()
++	if err := writer.Error(); err != nil {
++		return fmt.Errorf("flush invoice CSV: %w", err)
++	}
++	return nil
++}
+diff --git a/internal/billing/export_test.go b/internal/billing/export_test.go
+new file mode 100644
+index 0000000..ac90351
+--- /dev/null
++++ b/internal/billing/export_test.go
+@@ -0,0 +1,21 @@
++package billing
++
++import (
++	"context"
++	"strings"
++	"testing"
++	"time"
++)
++
++func TestWriteCSV(t *testing.T) {
++	issued := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
++	inv := Invoice{ID: "i1", Customer: "acme", Region: "US-CA", IssuedAt: issued, TotalCents: 1200, DiscountCents: 200, TaxCents: 100, GrandTotalCents: 1100}
++	var out strings.Builder
++	if err := WriteCSV(context.Background(), &out, []Invoice{inv}); err != nil {
++		t.Fatalf("WriteCSV() error = %v, want nil", err)
++	}
++	want := "id,customer,region,issued_at,total,discount,tax,grand_total\ni1,acme,US-CA,2026-03-04T05:06:07Z,1200,200,100,1100\n"
++	if out.String() != want {
++		t.Errorf("WriteCSV() = %q, want %q", out.String(), want)
++	}
++}
+diff --git a/internal/billing/pricing.go b/internal/billing/pricing.go
+new file mode 100644
+index 0000000..211bad3
+--- /dev/null
++++ b/internal/billing/pricing.go
+@@ -0,0 +1,69 @@
++package billing
++
++import (
++	"fmt"
++	"time"
++)
++
++// DiscountCode describes a percentage or fixed amount discount.
++type DiscountCode struct {
++	PercentBPS  int64
++	AmountCents int64
++	ExpiresAt   *time.Time
++	UsedBy      map[string]bool
++}
++
++// Price applies one optional discount and region tax to an invoice.
++func Price(inv *Invoice, code *DiscountCode, now time.Time, taxRates map[string]int64) error {
++	if inv == nil {
++		return fmt.Errorf("price invoice: %w", ErrInvalidDiscount)
++	}
++	rate, ok := taxRates[inv.Region]
++	if !ok || rate < 0 {
++		return fmt.Errorf("tax region %q: %w", inv.Region, ErrUnknownRegion)
++	}
++	discount := int64(0)
++	if code != nil {
++		if (code.PercentBPS > 0) == (code.AmountCents > 0) || code.PercentBPS < 0 || code.AmountCents < 0 || code.PercentBPS > 10000 {
++			return fmt.Errorf("discount code: %w", ErrInvalidDiscount)
++		}
++		if code.ExpiresAt != nil && now.After(*code.ExpiresAt) {
++			return fmt.Errorf("discount code: %w", ErrDiscountExpired)
++		}
++		if code.UsedBy != nil && code.UsedBy[inv.Customer] {
++			return fmt.Errorf("customer %q: %w", inv.Customer, ErrDiscountUsed)
++		}
++		if code.PercentBPS > 0 {
++			discount = roundBasisPoints(inv.TotalCents, code.PercentBPS)
++		} else {
++			discount = code.AmountCents
++		}
++		if discount > inv.TotalCents {
++			discount = inv.TotalCents
++		}
++	}
++	if discount < 0 {
++		discount = 0
++	}
++	postDiscount := inv.TotalCents - discount
++	tax := roundBasisPoints(postDiscount, rate)
++	inv.DiscountCents = discount
++	inv.TaxCents = tax
++	inv.GrandTotalCents = postDiscount + tax
++	if code != nil {
++		if code.UsedBy == nil {
++			code.UsedBy = make(map[string]bool)
++		}
++		code.UsedBy[inv.Customer] = true
++	}
++	return nil
++}
++
++func roundBasisPoints(amount, bps int64) int64 {
++	product := amount * bps
++	if product >= 0 {
++		return (product + 5000) / 10000
++	}
++	return (product - 5000) / 10000
++}
++
+diff --git a/internal/billing/pricing_test.go b/internal/billing/pricing_test.go
+new file mode 100644
+index 0000000..41d68bf
+--- /dev/null
++++ b/internal/billing/pricing_test.go
+@@ -0,0 +1,48 @@
++package billing
++
++import (
++	"errors"
++	"testing"
++	"time"
++)
++
++func TestPriceDiscountCases(t *testing.T) {
++	now := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
++	expired := now.Add(-time.Second)
++	cases := []struct {
++		name string
++		total int64
++		code *DiscountCode
++		wantDiscount int64
++		wantErr error
++	}{
++		{name: "expired", total: 1000, code: &DiscountCode{AmountCents: 100, ExpiresAt: &expired}, wantErr: ErrDiscountExpired},
++		{name: "reuse", total: 1000, code: &DiscountCode{AmountCents: 100, UsedBy: map[string]bool{"acme": true}}, wantErr: ErrDiscountUsed},
++		{name: "floor at zero", total: 50, code: &DiscountCode{AmountCents: 100}, wantDiscount: 50},
++		{name: "percent rounds half up", total: 150, code: &DiscountCode{PercentBPS: 1000}, wantDiscount: 15},
++		{name: "fraction rounds up", total: 1, code: &DiscountCode{PercentBPS: 5000}, wantDiscount: 1},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			inv := Invoice{Customer: "acme", Region: "FR", TotalCents: tc.total}
++			err := Price(&inv, tc.code, now, map[string]int64{"FR": 0})
++			if !errors.Is(err, tc.wantErr) {
++				t.Fatalf("Price() error = %v, want %v", err, tc.wantErr)
++			}
++			if err == nil && inv.DiscountCents != tc.wantDiscount {
++				t.Errorf("Price() discount = %d, want %d", inv.DiscountCents, tc.wantDiscount)
++			}
++		})
++	}
++}
++
++func TestPriceTaxAfterDiscount(t *testing.T) {
++	inv := Invoice{Customer: "acme", Region: "DE", TotalCents: 1000}
++	code := &DiscountCode{AmountCents: 100}
++	if err := Price(&inv, code, time.Time{}, map[string]int64{"DE": 1900}); err != nil {
++		t.Fatalf("Price() error = %v, want nil", err)
++	}
++	if inv.DiscountCents != 100 || inv.TaxCents != 171 || inv.GrandTotalCents != 1071 {
++		t.Errorf("Price() totals = discount %d, tax %d, grand total %d; want 100, 171, 1071", inv.DiscountCents, inv.TaxCents, inv.GrandTotalCents)
++	}
++}
