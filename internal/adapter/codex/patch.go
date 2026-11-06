@@ -42,21 +42,33 @@ var fileLine = regexp.MustCompile(`\*\*\* (Add File|Update File|Delete File|Move
 // accepts: <<'EOF', <<"EOF" or <<EOF, maybe after apply_patch.
 var heredoc = regexp.MustCompile(`^\s*(?:apply_?patch\s+)?<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)['"]?[ \t]*\r?$`)
 
+// headerLine finds a line that is a file header, maybe indented: what a
+// lenient reader could take as one.
+var headerLine = regexp.MustCompile(`(?m)^[ \t]*\*\*\* (Add File|Update File|Delete File|Move to): ([^\r\n]+)`)
+
 // parsePatch returns the files patch touches, paths taken relative to cwd,
-// in the patch's order. A patch stele cannot follow still gives every file a
-// header anywhere in it names, so the guard and the rules see them; only
-// their new text is lost.
+// in the patch's order. Every file a header-looking line names is among
+// them, whatever stele read the patch as: a reader that disagreed with
+// Codex on where a file or the patch ends must not hide one from the guard.
+// A patch stele cannot follow gives every file a header anywhere in it
+// names; only their new text is lost.
 func parsePatch(patch, cwd string) []adapter.Edit {
-	patch = unwrap(patch)
-	if edits, ok := readPatch(patch, cwd); ok {
-		return edits
+	whole := patch // the union reads it all: a wrapper's end may be a guess
+	edits, ok := readPatch(unwrap(patch), cwd)
+	re := headerLine
+	if !ok {
+		edits, re = nil, fileLine
 	}
-	var edits []adapter.Edit
-	for _, m := range fileLine.FindAllStringSubmatch(patch, -1) {
+	seen := map[string]bool{}
+	for _, e := range edits {
+		seen[e.File] = true
+	}
+	for _, m := range re.FindAllStringSubmatch(whole, -1) {
 		f, ok := patchPath(m[2], cwd)
-		if !ok {
+		if !ok || seen[f] {
 			continue
 		}
+		seen[f] = true
 		if m[1] == "Delete File" {
 			edits = append(edits, adapter.Edit{File: f, Removes: true})
 		} else {
@@ -91,38 +103,48 @@ type patchReader struct {
 	adding bool          // cur is an added file: its lines are its content
 	body   []string      // an added file's lines, or the new side of a hunk
 	plus   bool          // the hunk being read adds a line
+	inHunk bool          // an update's hunk is being read: its lines are content
 }
 
-// readPatch reads a patch in Codex's format. ok is false for anything else.
+// readPatch reads a patch in Codex's format. As Codex does, the patch is
+// what lies between its first and its last line that are not blank, which
+// must be the begin and end markers. ok is false for anything else.
 func readPatch(patch, cwd string) (edits []adapter.Edit, ok bool) {
 	lines := strings.Split(strings.ReplaceAll(patch, "\r\n", "\n"), "\n")
-	i := 0
-	for i < len(lines) && strings.TrimSpace(lines[i]) == "" {
-		i++
+	first, last := 0, len(lines)-1
+	for first <= last && strings.TrimSpace(lines[first]) == "" {
+		first++
 	}
-	if i == len(lines) || strings.TrimSpace(lines[i]) != beginPatch {
+	for last >= first && strings.TrimSpace(lines[last]) == "" {
+		last--
+	}
+	if first >= last || strings.TrimSpace(lines[first]) != beginPatch || strings.TrimSpace(lines[last]) != endPatch {
 		return nil, false
 	}
 	r := &patchReader{cwd: cwd}
-	for _, line := range lines[i+1:] {
-		if strings.TrimSpace(line) == endPatch {
-			r.done()
-			return r.edits, true
-		}
+	for _, line := range lines[first+1 : last] {
 		if !r.line(line) {
 			return nil, false
 		}
 	}
-	return nil, false // no end
+	r.done()
+	return r.edits, true
 }
 
 // line reads one line of the patch; false is a line the format has no place
 // for.
 func (r *patchReader) line(line string) bool {
-	// Codex trims a header line, so an indented one is a header too.
+	// Codex trims a header line, so an indented one is a header too; but in
+	// a file's body a line opening with a space, + or - is content, whatever
+	// follows.
 	h := strings.TrimSpace(line)
-	if !strings.HasPrefix(h, "*** ") {
+	body := r.adding || r.inHunk
+	content := r.cur != nil && body && line != "" && strings.ContainsRune(" +-", rune(line[0]))
+	if content || !strings.HasPrefix(h, "*** ") {
 		h = ""
+	}
+	if h == endPatch || h == beginPatch {
+		return false // a marker inside the patch: not stele's to guess
 	}
 	switch {
 	case strings.HasPrefix(h, addFile):
@@ -160,16 +182,18 @@ func (r *patchReader) line(line string) bool {
 		}
 		r.body = append(r.body, line[1:])
 		return true
-	case strings.HasPrefix(strings.TrimLeft(line, " \t"), "@@"):
+	case !content && strings.HasPrefix(strings.TrimLeft(line, " \t"), "@@"):
 		r.hunk()
+		r.inHunk = true
 		return true
 	case strings.HasPrefix(line, "+"):
-		r.body, r.plus = append(r.body, line[1:]), true
+		r.body, r.plus, r.inHunk = append(r.body, line[1:]), true, true
 		return true
 	case strings.HasPrefix(line, " "):
-		r.body = append(r.body, line[1:])
+		r.body, r.inHunk = append(r.body, line[1:]), true
 		return true
 	case strings.HasPrefix(line, "-"):
+		r.inHunk = true
 		return true
 	case line == "":
 		r.body = append(r.body, "") // a blank context line, its space trimmed
@@ -185,7 +209,7 @@ func (r *patchReader) start(p string, adding bool) bool {
 	if !ok {
 		return false
 	}
-	r.cur, r.adding = &adapter.Edit{File: f, Writes: true, Whole: adding}, adding
+	r.cur, r.adding, r.inHunk = &adapter.Edit{File: f, Writes: true, Whole: adding}, adding, false
 	return true
 }
 
@@ -211,7 +235,7 @@ func (r *patchReader) done() {
 		r.hunk()
 	}
 	r.edits = append(r.edits, *r.cur)
-	r.cur, r.adding = nil, false
+	r.cur, r.adding, r.inHunk = nil, false, false
 }
 
 // patchPath is a path in a patch, relative to cwd unless absolute, cleaned.

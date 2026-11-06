@@ -48,12 +48,19 @@ func (p *project) useCodexHook() {
 }
 
 // codexSessions are each project's session id, a UUIDv7 as Codex's are,
-// made at its first event: the session starts after init wrote AGENTS.md.
+// for a session that began a minute after its first event: well after init
+// wrote AGENTS.md, as stele needs to count it as read.
 var codexSessions = map[string]string{}
 
 func codexSession(dir string) string {
 	if _, ok := codexSessions[dir]; !ok {
-		codexSessions[dir] = uuid.Must(uuid.NewV7()).String()
+		u := uuid.Must(uuid.NewV7())
+		ms := time.Now().Add(time.Minute).UnixMilli()
+		for i := 5; i >= 0; i-- {
+			u[i] = byte(ms)
+			ms >>= 8
+		}
+		codexSessions[dir] = u.String()
 	}
 	return codexSessions[dir]
 }
