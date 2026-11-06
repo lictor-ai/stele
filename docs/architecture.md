@@ -47,7 +47,10 @@ internal/stats/       stele stats: counts from log.jsonl — pure logic (D70)
 internal/matcher/     request / corpus / fetch — pure logic
 internal/backstop/    the hook decision — pure logic
 internal/serve/       MCP wiring over the SDK
-internal/plugin/      registry of built-in and external plugins, exec protocol, sinks
+internal/plugin/      registry of built-in and external plugins, protocol 1, sinks — pure, processes behind Runner (ADR-0013)
+  plugintest/         a fake plugin for tests: the test binary under a plugin's name
+internal/pluginexec/  the one plugin.Runner: finds a plugin on PATH outside the project and runs it (D80)
+internal/printable/   text from outside stele made one printable line — pure
 internal/status/      stele status: describe the install as JSON
 internal/publish/     stele publish: stele.md to a git repository as a merge request (D64–D66)
 internal/gitexec/     git for what reaches a remote: stele publish and the git source (ADR-0011)
@@ -829,36 +832,83 @@ built-in sink: every real destination is a network call, and the engine stays
 offline (ADR-0003). The one network path is `stele publish`, in
 `internal/publish` (ADR-0007).
 
-**Externals are resolved by one function**, and it is the security boundary
-(D43):
+**Processes stay behind an interface** (ADR-0013). `internal/plugin` is on the
+hook's path, so it imports no `os/exec`. It defines `Runner`; the one
+implementation is `internal/pluginexec`, and only `cmd/stele/sources.go` hands
+it over, for `stele compile`, `stele check` and `stele init`. A source or
+checker that runs a process exists only when a `Runner` is passed in, so the
+hook, which never has one, cannot start a plugin (D79).
 
-1. The name must match `^[a-z][a-z0-9-]*$`. No separators, no dots, so no path.
-2. It must not be a built-in name.
-3. `exec.LookPath("stele-source-" + name)` (or `stele-checker-`). Go already
-   refuses a result found through a relative `PATH` entry such as `.`
-   (`exec.ErrDot`); stele does not override that.
-4. The resolved path, after `filepath.EvalSymlinks`, must not be inside the
-   project root. A `PATH` that names `./bin` by absolute path is caught here.
+```go
+type Kind string // "source", "checker", "sink"
+type Runner interface {
+    Find(kind Kind, name string) (bin string, err error)
+    Run(ctx context.Context, bin string, req []byte, max int, timeout time.Duration) ([]byte, error)
+}
+func ValidName(name string) error
+func Request(op string, fields map[string]any) ([]byte, error) // adds "protocol": 1
+func DecodeAnswer(data []byte, v any) error                     // one object, protocol 1, "error" is ErrAnswer
+func Describe(ctx context.Context, run Runner, kind Kind, name string) (Info, error)
+type Error struct{ Kind Kind; Name, List, Exe, Op string; Err error } // names the executable
+```
+
+**Externals are resolved by one function**, `pluginexec.Runner.Find`, and it is
+the security boundary (D43, D80):
+
+1. The name must match `^[a-z][a-z0-9-]{0,63}$`. No separators, no dots, so no
+   path.
+2. It must not be a built-in name: `stelemd`, `git` or `regex`, for any kind.
+3. `stele-source-<name>` (or `stele-checker-`, `stele-sink-`) is looked up
+   on the `PATH` the plugin gets: `toolpath.PluginEnv` has taken out every
+   entry that is empty, relative or inside the project root or the
+   repository that holds it, so a copy a clone put there is passed over,
+   not run and not in the way. Unlike `exec.LookPath` on Windows, the
+   current directory is never searched.
+4. On Windows only `<exe>.exe` and `<exe>.com` are looked for: a `.bat` or
+   `.cmd` runs through `cmd.exe`. Finding only one of those is refused, with
+   that reason.
+5. `toolpath.Vet`: the path, where its links lead, must not be inside the
+   project root or the repository that holds it.
 
 A failure at any step is `ErrPluginNotFound` or `ErrPluginRefused`, and the
 message names the executable it looked for. Nothing is ever run from a path
 written in `stele.json`, because `stele.json` is committed and a clone must not
 run code it brought with it.
 
+**`Run`** starts the executable with no arguments and no shell, in
+`stele/plugins` under the user's cache directory (`pluginexec.WorkBase`, else
+the temp directory), never the project: on Windows a program's working
+directory is searched first for its DLLs and for programs started by bare
+name. The environment is the user's, with `PATH` and the loaders' paths cut
+by `toolpath.PluginEnv`. stdout is capped (an answer over the cap is
+`ErrProtocol`, never cut short); stderr is passed through to the writer
+`cmd/` gives, each line cleaned (`internal/printable`) and prefixed with the
+executable's name, at most 200 lines, and its end kept for the error. The
+plugin runs in its own process group on Unix and in a job object with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` on Windows; when the call ends, however
+it ends, the group is killed or the job closed, so nothing it started lives
+on. Past the timeout it is stopped (`ErrTimeout`); a cancelled context is
+`ErrCancelled`; one that exited 0 but left a process holding its output, past
+`WaitDelay`, is `ErrProtocol`; a non-zero exit is `*ExitError`.
+
 **The protocol, version 1.** One process per call: stele writes one JSON request
-to stdin and closes it, the plugin writes one JSON response to stdout and exits 0.
+to stdin and closes it, the plugin writes one JSON object to stdout, nothing
+after it, and exits 0. Fields stele does not know are ignored; a missing one is
+`ErrProtocol`.
 
 | `op` | Request | Response |
 | :-- | :-- | :-- |
 | `describe` | — | `{"kind": "source" \| "checker" \| "sink", "protocols": [1], "version": "1.4.0"}` |
 | `fingerprint` | `root`, `config` | `{"fingerprint": "…"}` |
-| `read` | `root`, `config` | `{"fingerprint": "…", "rules": [{file, position, line, description, tags, scope, body, meta}]}` |
-| `validate` | `config`, `rules: [{id, meta}]` | `{"problems": [{"rule_id", "message"}]}` |
-| `check` | `root`, `config`, `files`, `rules: [{id, body, scope, meta}]` | `{"violations": [{rule_id, file, line, column, message}]}`, line and column 1-based, column in characters |
+| `read` | `root`, `config` | `{"fingerprint": "…", "rules": [{file, line, description, tags, scope, body, meta, id}]}` |
+| `validate` | `config`, `rules: [{id, body, scope, meta}]` | `{"problems": [{"rule_id", "message"}]}` |
+| `check` | `root`, `config`, `files`, `rules: [{id, body, scope, meta}]` | `{"violations": [{rule_id, file, line, column, message}], "skipped": [{file, reason}]}`, line and column 1-based, column in characters |
 | `push` | `config`, `project`, `records: [...]` — log entries and check reports, each with its own `v` | `{"accepted": n}` |
 
 A `read` response may set `id` on a rule; only a source that owns its ids should
-(D52).
+(D52), and it must be a canonical UUID. A rule's position is its place in the
+list; a `position` the plugin sends is ignored. A body may not hold a line that
+marks a rule in a generated file.
 
 **Sinks** (ADR-0003). `stele push` reads `.stele/log.jsonl` from the offset
 stored in `.stele/push/<sink>.json`, sends the new entries, and advances the
@@ -868,14 +918,18 @@ from every record before it is sent. Neither runs from `stele hook` or
 `stele mcp`.
 
 Every request and response carries `"protocol": 1`. A plugin sent a version it
-does not speak answers `{"protocol": 1, "error": "unsupported protocol 2; speaks [1]"}`.
-Any response may be `{"error": "…"}` instead of a result. stderr is passed
-through to the user. A non-zero exit, invalid JSON or a missing field is
-`ErrProtocol`, naming the plugin.
+does not speak answers `{"protocol": 2, "error": "unsupported protocol 1; speaks [2]"}`.
+Any response may be `{"protocol": 1, "error": "…"}` instead of a result
+(`ErrAnswer`). Invalid JSON, more after the answer, another protocol or a
+missing field is `ErrProtocol`; a non-zero exit is `*ExitError`. Every one
+names the plugin's executable, and makes the command exit 2.
 
-Each call has a timeout: 30 seconds for `read` and `check`, 5 for the rest,
-overridable per plugin in `stele.json` (`"timeout": "2m"`). `describe` runs once
-per process, before the first real call, so a plugin of the wrong kind fails
+Each call has a timeout: 10 seconds for `describe`, `fingerprint` and
+`validate`, 1 minute for `read`, 5 for `check`; an entry's `"timeout"` in
+`stele.json` (`"2m"`, from 1 second to 30 minutes) sets `read`'s, `check`'s and
+`push`'s. Answers are capped at 1 MiB for `describe`, `fingerprint` and
+`validate`, 32 MiB for `read` and `check`. `describe` runs once per process,
+before the first real call, so a plugin of the wrong kind or protocol fails
 early and clearly.
 
 The adapter between the protocol and the interfaces — `execSource` and
@@ -1894,9 +1948,12 @@ var (
     ErrNoIndex        = errors.New("no index")             // index
     ErrDuplicateID    = errors.New("duplicate rule id")    // lock
     ErrInvalid        = errors.New("invalid")              // lock: not a plain file, too large, bad JSON, version, project or id
-    ErrPluginNotFound = errors.New("plugin not found")     // plugin
-    ErrPluginRefused  = errors.New("plugin refused")       // plugin: inside the repo, bad name
-    ErrProtocol       = errors.New("plugin protocol error") // plugin
+    ErrPluginNotFound = errors.New("not found on PATH")     // plugin
+    ErrPluginRefused  = errors.New("refused")               // plugin: inside the project, relative PATH entry, bad name, not .exe on Windows
+    ErrProtocol       = errors.New("plugin protocol error") // plugin: bad JSON, more after it, another protocol, over the cap
+    ErrTimeout        = errors.New("no answer")             // plugin: stopped after its timeout
+    ErrAnswer         = errors.New("the plugin reported an error") // plugin: its {"error": …}
+    ErrCancelled      = errors.New("cancelled")             // plugin: Ctrl-C or a signal stopped the call
 )
 ```
 
@@ -1973,7 +2030,7 @@ string literals scattered through the code, so they can be revised and diffed.
 | `lock.Reconcile` | Table-driven with a stub `newID`. Reorder, reword, insert, delete, reword-plus-reorder — the case that mismatches — and a rule moving between two sources. |
 | `compile.Plan` / `Apply` | Temp directory with a real `stele.md` and a fake second source. Round-trip, then edit and recompile to check ids carry over. `Plan` asserted to write nothing. `EnsureFresh` asserted never to call a non-built-in source. |
 | `plugin` resolution | Temp `PATH`. Found, not found, bad name, built-in name reused, executable inside the root, symlink into the root. |
-| `plugin` protocol | A tiny Go test plugin built by `TestMain`, scripted by an env var: good answer, wrong protocol, `error` field, invalid JSON, non-zero exit, timeout. |
+| `plugin` protocol | `plugintest`: the test binary itself, hard-linked or copied into a temp directory as `stele-<kind>-<mode>`, answers as its mode says when `TestMain` sees that name — good answer, wrong protocol or kind, `error` field, invalid JSON, more after the answer, non-zero exit, timeout, an answer over the cap, noisy stderr. No plugin is built, on any OS. Most of `internal/plugin` uses an in-memory `Runner`. |
 | `check.Run` | Table-driven with a fake checker. Grouping by `check`, `scope` filtering, `blocking` default, unknown checker, exit codes. |
 | `lock.Reconcile`, ids from a source | Supplied id kept, clash is an error, `Project` minted once and never changed. |
 | sinks / `stele push` | The test plugin as a sink: offset advances only on success, no record sent twice, `brief` stripped unless `share_briefs`. |

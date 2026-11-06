@@ -234,6 +234,12 @@ need no entry.
 > external source it runs at `stele compile`, `stele check` and `stele init`
 > only, and the hook keeps its rules from the index.
 
+> **Amended by ADR-0013 (D78–D81).** Protocol 1 and the program that
+> finds and runs a plugin are built; ADR-0013 records them, and the limits on
+> where a plugin is found and how it runs. External sources are to run at
+> `stele compile`, `stele check` and `stele init`, external checkers at
+> `stele check` only; the hook and `stele stats` never start one.
+
 **External plugins never run on the hot path** (D45). `stele compile` and
 `stele check` run them. `request` refreshes built-in sources only, and keeps the
 rules each external source produced at the last compile. The hook never runs a
@@ -683,6 +689,11 @@ until there is data.
 > key and a project with `.stele/`, `stele check` appends one line to the log.
 > In CI it still writes nothing.
 
+> **Amended by ADR-0013 (D79).** `stele check` runs the external sources and
+> checkers `stele.json` lists, and asks each external checker to `validate`
+> its rules before it checks. `stele compile` and the hook know a listed
+> checker by its name only: a rule naming one is valid there and is not run.
+
 The hook and the MCP tools put rules in front of the agent before it writes.
 `stele check` is the other half: it checks code against those rules in CI, after
 it is written. It is how rules that can be checked by a tool get checked (D47).
@@ -820,7 +831,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D55 | Org-wide rules reach a repository only through a source plugin. | — |
 | D56 | `stele.md` follows Markdown where it can: a `---` inside a fenced code block or an HTML comment does not separate rules, and HTML comments before a rule's metadata are skipped. | — |
 | D57 | stele trusts only the generated files it wrote on this machine. `index.json` and session state carry an HMAC-SHA256 made with a per-user key kept outside every repository (the user config directory, owner-only); a file that does not verify is rebuilt or started afresh. `stele.lock` is shared on purpose and not signed. Malware running as the user is out of scope. | follows from D24 and D45: `.stele/` is not covered by the repository's `.gitignore`, so a repository could otherwise commit an index the agent is served |
-| D58 | v1 is for one developer. Rules are chosen by `scope`, not by a model: a `PreToolUse` hook denies a write that brings rules not yet shown this turn, with those rules as the reason; a `PostToolUse` hook runs built-in checks on the written file and reports violations. The MCP server, matcher subagent, logging, plugins and sinks move to the "team" milestone, with D12–D15, D30, D33–D35 and D39; D16, D29 and D37 are amended. *Amended by D69: a local log comes back.* | ADR-0004 |
+| D58 | v1 is for one developer. Rules are chosen by `scope`, not by a model: a `PreToolUse` hook denies a write that brings rules not yet shown this turn, with those rules as the reason; a `PostToolUse` hook runs built-in checks on the written file and reports violations. The MCP server, matcher subagent, logging, plugins and sinks move to the "team" milestone, with D12–D15, D30, D33–D35 and D39; D16, D29 and D37 are amended. *Amended by D69: a local log comes back. Amended by D78: external plugins come back.* | ADR-0004 |
 | D59 | A `scope` item starting with `!` excludes: a rule applies to a file that matches no exclusion and at least one other item; a scope of only exclusions applies to every other file. Order does not matter. A broken exclusion excludes nothing. | e2e 2026-10-23, What to change 1 (#39) |
 | D60 | `init` also registers `stele hook` on `SessionStart` and `SubagentStart`. In a stele project it answers with context telling the agent to create and change files with Write and Edit only, never through Bash, which skips both hooks; the deny and violation messages say it too. Bash writes are still not seen. | tests of v1.0.0-dev.0 (#50) |
 | D61 | `init` also registers `stele hook` on `PreToolUse` for Bash. The hook lexes the command, never runs it, and finds the files it writes by redirection, `tee`, `sed -i` and `perl -i`. A write into a file a scoped rule covers is denied once per file, per agent, per turn, with the rules not yet shown and a pointer to Write and Edit; run again, it goes through unchecked. A write, removal or copy onto one of stele's own files asks. Nothing runs after a Bash command, and a failure of stele only warns. | tests of v1.0.0-dev.0 (#57) |
@@ -840,6 +851,10 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D75 | **Amends D62.** Codex's rules go in a section of `AGENTS.md` fenced by `<!-- stele:begin … -->` and `<!-- stele:end -->`; stele writes only between them, in the line end of the begin line, appends them to a file with none, and leaves a file whose markers are out of order, or a UTF-16 one, alone. `uninstall` removes the section, and the file when nothing else is left. The blocks and their hash are Claude Code's (`internal/rulesblock`). Rules count as loaded only at a `startup` whose walk reaches root's file: no `.git` between root and the session's directory, no `AGENTS.override.md`, the section within 32 KiB and after no open HTML comment, and neither an AGENTS file of the walk nor a directory from the walk's top down to root, whose time a removal or rename changes, less than 2 s older than the session's start, the time in its UUIDv7 id (Codex reads them then, and runs `SessionStart` at the first turn). Any other start forgets what was loaded. `AGENTS.md` is checked like any file until it holds the section, and a write to it asks no one (ADR-0012). | #99 |
 | D76 | **Amends D68's `Event`.** One tool call may touch several files: an `Event` carries `Edits`, one per file. Before a write, any of stele's own files among them asks; otherwise each project decides once over the rules of all its files, the same files again being the retry, and a removal shows no rules. After it, each file written is checked, the answers merged under the message cap. An agent that cannot ask (`Words.NoAsk`) is refused with a message telling it to leave the change to the user (ADR-0012). | #99 |
 | D77 | A shell command a session's agent runs in PowerShell, Codex's shell on Windows (`Event.Dialect`, or an argv starting with `powershell` or `pwsh`; `bash`, `sh` or `wsl` reads as bash), is read as PowerShell, never run, best effort: redirections after any word, the file cmdlets (`Set-Content`, `Add-Content`, `Out-File`, `Tee-Object`, `New-Item` with links, `Clear-Content`, `Copy-Item` and `Move-Item` into a directory too, `Rename-Item`, `Remove-Item`, `Export-Csv`, `Export-Clixml`, `Start-Transcript`, `Invoke-WebRequest -OutFile`) by alias or module-qualified name, with abbreviated, colon-joined and common parameters, `[IO.File]`'s methods and their Async forms, `IO.StreamWriter`, here-strings, array literals, casts and parenthesised or assigned commands, `Set-Location`, `Push-Location` and `Pop-Location`, variables set to a literal at the top level, and nested `powershell`, `pwsh`, `bash` or `cmd /c` with a literal script. Its files are decided as a bash command's are (#57). What it cannot resolve is unknown: `$(...)`, `env:` and unknown variables, one set in a block or from a command, expressions as paths, splatting, paths from the pipeline, unknown parameters, `Invoke-Expression` and `Start-Process`. | #99 |
+| D78 | **Amends D42, D58; ADR-0002 and ADR-0004 (ADR-0013).** External sources and checkers are listed in `stele.json` under `sources` and `checkers` (`name`, optional `config`, optional `timeout`). A name is lower-case letters, digits and dashes, starting with a letter, at most 64, not a built-in name (`stelemd`, `git`, `regex`), listed once. The executable is `stele-<kind>-<name>`. Protocol 1: one JSON request on stdin, one JSON object on stdout, `"protocol": 1` on both, unknown fields ignored, `{"error": …}` for a failure; `describe` (kind, protocols, version) once per process before the first other call; `read` and `fingerprint` for a source, `validate` and `check` for a checker, `push` for a sink (#17). A source's rule positions come from their order. | #14 |
+| D79 | **Amends D45.** External sources run at `stele compile`, `stele check` and `stele init`; external checkers at `stele check` only; never in `stele hook` or `stele stats`. Only `internal/pluginexec` starts a plugin, and only `cmd/stele/sources.go` hands it over. The hook and `stele compile` know a listed checker by name only: a rule naming one is valid and is not run there. The post-write hook runs built-in checkers only. | #14 |
+| D80 | **Amends D43.** A plugin is found on `PATH`, never through a relative entry, never inside the project root or the repository that holds it (links followed), and on Windows only as an `.exe` or `.com`. It is looked up on `PATH` cut as below, so a copy in the project is passed over. It runs with no arguments and no shell, in a directory outside the project (`stele/plugins` under the user's cache directory, or the temp directory), never the project root, with the user's environment and `PATH`, `LD_LIBRARY_PATH`, the `DYLD_` paths, `PYTHONPATH`, `NODE_PATH`, `PERL5LIB`, `PERLLIB`, `RUBYLIB`, `GEM_PATH` and `GEM_HOME` cut to entries that are absolute and outside the project. What it starts stops with it: its process group on Unix, a job on Windows; a plugin that leaves a process holding its output fails. A cancelled run (Ctrl-C) stops it and says so. Answers are capped (1 MiB for `describe`, `fingerprint`, `validate`; 32 MiB for `read`, `check`); calls are timed (10 s for `describe`, `fingerprint`, `validate`; 1 min `read`; 5 min `check`; an entry's `timeout` from 1 s to 30 min sets `read`, `check` and `push`); stderr is passed through cleaned and prefixed with the executable's name. A missing, refused, failed or wrong plugin is exit 2, naming the executable. | #14 |
+| D81 | **Amends D71.** The hook never rewrites a generated file from an index that lacks the rules of a source `stele.lock` holds rules for, or of a pinned source. | #14 |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 
@@ -897,8 +912,8 @@ requirement, not answered in general.
 
 Extracting rules from guideline prose, or inferring structure from `CLAUDE.md`,
 `AGENTS.md` or `.cursor/rules` — post-v1, paid (ADR-0002) ·
-sources other than `stele.md` and the `git` source (D71) and checkers other
-than `regex` — the slots ship in v1, more plugins come after · paid plugins · LLM-judged checks ·
+sources other than `stele.md`, the `git` source (D71) and external sources (D78), and checkers other
+than `regex` and external checkers (D78) — the slots ship in v1, more plugins come after · paid plugins · LLM-judged checks ·
 checking changed lines only · exit-time verification (design doc §8.1) · the
 read ledger and situated context (`O-CTX-SOURCE`, `O-CTX-RES`) · acting on log
 signals (`O-LOGSIG`) · ranking by past selection (`O-ENTRENCH`) · corpus-wide

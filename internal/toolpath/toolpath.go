@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/lictor-ai/stele/internal/safefile"
@@ -56,7 +57,24 @@ func Vet(name, found, root string) (string, error) {
 // Vet still finds what it starts, git its ssh, on PATH. With nothing left the
 // variable goes: an empty PATH can mean the current directory. An empty root
 // returns env as it is.
-func Env(env []string, root string) []string {
+func Env(env []string, root string) []string { return cut(env, root, nil) }
+
+// LoadPaths are the variables that name directories a dynamic loader or an
+// interpreter loads code from. An empty or relative entry in one means the
+// working directory.
+var LoadPaths = []string{
+	"LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
+	"PYTHONPATH", "NODE_PATH", "PERL5LIB", "PERLLIB", "RUBYLIB", "GEM_PATH", "GEM_HOME",
+}
+
+// PluginEnv is Env for an external plugin: PATH and each of LoadPaths are
+// cut the same way, since a plugin can be any program in any language
+// (D80).
+func PluginEnv(env []string, root string) []string { return cut(env, root, LoadPaths) }
+
+// cut returns env with PATH, and each variable in lists, cut down to entries
+// outside the project at root. A variable with nothing left goes.
+func cut(env []string, root string, lists []string) []string {
 	if root == "" {
 		return env
 	}
@@ -64,13 +82,20 @@ func Env(env []string, root string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		name, value, _ := strings.Cut(kv, "=")
-		if !isPath(name) {
+		if !isPath(name) && !listed(lists, name) {
 			out = append(out, kv)
 		} else if kept := p.outside(value); kept != "" {
 			out = append(out, name+"="+kept)
 		}
 	}
 	return out
+}
+
+// listed reports whether name is one of lists, in any case on Windows.
+func listed(lists []string, name string) bool {
+	return slices.ContainsFunc(lists, func(l string) bool {
+		return l == name || runtime.GOOS == "windows" && strings.EqualFold(l, name)
+	})
 }
 
 // isPath reports whether name is PATH, which Windows spells in any case.
