@@ -22,6 +22,22 @@ func psFiles(t *testing.T, cmd, cwd string) ([]string, int) {
 	return out, unknown
 }
 
+// PowerShell takes \ as a separator on every OS, pwsh on Linux too.
+func TestPowerShellBackslashOnEveryOS(t *testing.T) {
+	if got, want := psPath(`internal\db.go`), filepath.Join("internal", "db.go"); got != want {
+		t.Errorf("psPath = %q, want %q", got, want)
+	}
+	cwd := t.TempDir()
+	if err := os.Mkdir(filepath.Join(cwd, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := psFiles(t, `Copy-Item sub\stele.md dir; Rename-Item -Path sub\a.go -NewName b.go; New-Item -Path sub -Name c.go`, cwd)
+	want := []string{"dir/stele.md", "sub/a.go", "sub/b.go", "sub/c.go"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
 // NUL is a device on Windows only.
 func TestPowerShellNULDevice(t *testing.T) {
 	old := windows

@@ -753,7 +753,7 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 						p.res.unknown++
 						continue
 					}
-					p.addTok(psTok{text: filepath.Join(dv, nv), quoted: true}, k, true)
+					p.addTok(psTok{text: filepath.Join(psPath(dv), psPath(nv)), quoted: true}, k, true)
 				}
 			}
 			return
@@ -782,7 +782,7 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 			// Into the current directory, each under its own name.
 			for _, s := range ps {
 				if v, ok := p.value(s); ok {
-					p.addTok(psTok{text: filepath.Base(filepath.FromSlash(v)), quoted: true}, Copy, true)
+					p.addTok(psTok{text: filepath.Base(psPath(v)), quoted: true}, Copy, true)
 				} else {
 					p.res.unknown++
 				}
@@ -796,7 +796,7 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 				// Into a directory that is there: each under its own name.
 				for _, s := range ps {
 					if v, ok := p.value(s); ok {
-						p.res.add(filepath.Join(dpath, filepath.Base(filepath.FromSlash(v))), Copy)
+						p.res.add(filepath.Join(dpath, filepath.Base(psPath(v))), Copy)
 					} else {
 						p.res.unknown++
 					}
@@ -822,7 +822,7 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 				}
 				// The new name is in the item's directory, unless it is a path.
 				if !strings.ContainsAny(nv, `/\`) {
-					nv = filepath.Join(filepath.Dir(sv), nv)
+					nv = filepath.Join(filepath.Dir(psPath(sv)), psPath(nv))
 				}
 				p.addTok(psTok{text: nv, quoted: true}, Copy, true)
 			}
@@ -1101,11 +1101,15 @@ func (p *psReader) glob(pattern string, k Kind) {
 	}
 }
 
+// psPath is a PowerShell path in the OS's separators: PowerShell takes \ and
+// / as separators on every OS, pwsh on Linux and macOS too.
+func psPath(v string) string { return filepath.FromSlash(strings.ReplaceAll(v, `\`, "/")) }
+
 // abs resolves a PowerShell path against the directory: absolute, ~ for the
 // home directory, else relative. A path from the current drive's root, \x, is
 // unknown, as is one with no directory to resolve against.
 func (p *psReader) abs(v string) (string, bool) {
-	v = filepath.FromSlash(v)
+	v = psPath(v)
 	if v == "~" || strings.HasPrefix(v, "~"+string(filepath.Separator)) {
 		home, err := os.UserHomeDir()
 		if err != nil {
