@@ -36,7 +36,7 @@ internal/source/      the Source slot: Rule, the Source interface
 internal/lock/        stele.lock: identity, reconciliation
 internal/safefile/    crash-safe replace, create-if-absent, lock files, safe dirs and bounded reads (§7)
 internal/scope/       scope globs: which rules apply to a file
-internal/shell/       the files a Bash command writes, read from its text — pure logic (#57)
+internal/shell/       the files a Bash or PowerShell command writes, read from its text — pure logic (#57, D77)
 internal/sign/        the per-machine key that signs generated files (D57)
 internal/index/       index.json: load, save
 internal/compile/     the one place that turns sources into an index
@@ -1563,6 +1563,13 @@ state.
  "tool_input": {"command": "cat > a.go <<'EOF'\n…\nEOF", "description": "…",
                 "run_in_background": false}}
 ```
+
+A command whose `Event.Dialect` is PowerShell, Codex's shell on Windows, is
+read by `shell.PowerShellTargets` instead (D77): its quotes and backtick
+escapes, `;`, `|`, `&&`, `||` and script blocks, redirections, the file
+cmdlets and their aliases with abbreviated parameters, `[IO.File]` methods,
+`Set-Location` and literal variables; the targets go through the same
+decision.
 
 The hook reads the command, never runs it: `internal/shell` lexes it (quotes,
 heredoc bodies skipped but for an unquoted one's substitutions, `$(…)` and

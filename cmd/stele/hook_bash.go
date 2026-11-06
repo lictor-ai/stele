@@ -21,7 +21,11 @@ import (
 // write does (#52). stele reads the command; it never runs it, and a
 // command that writes nothing costs a parse.
 func beforeBash(ev adapter.Event, sw adapter.Switches) adapter.Answer {
-	targets, _ := shell.Targets(ev.Command, ev.Cwd)
+	read := shell.Targets
+	if ev.Dialect == adapter.PowerShell {
+		read = shell.PowerShellTargets // Codex's shell on Windows (D77)
+	}
+	targets, _ := read(ev.Command, ev.Cwd)
 	var asks, roots []string
 	rels := map[string][]string{}
 	for _, t := range targets {
