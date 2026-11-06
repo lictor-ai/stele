@@ -46,7 +46,7 @@ func steleJSON(t *testing.T, content string) string {
 }
 
 func TestSourcesNoSteleJSON(t *testing.T) {
-	srcs, err := Sources(t.TempDir(), noGit{t}, gitrepo.Pinned)
+	srcs, err := Sources(t.TempDir(), noGit{t}, gitrepo.Pinned, nil)
 	if err != nil || len(srcs) != 1 || srcs[0].Name() != "stelemd" {
 		t.Errorf("Sources = %v, %v; want the builtins", srcs, err)
 	}
@@ -57,7 +57,7 @@ func TestSourcesListsGitSources(t *testing.T) {
 		{"name": "git", "config": {"repo": "git@github.com:acme/g.git"}},
 		{"name": "git", "config": {"repo": "git@github.com:acme/g.git", "ref": "v1", "path": "go/stele.md"}}
 	]}`)
-	srcs, err := Sources(root, noGit{t}, gitrepo.Pinned)
+	srcs, err := Sources(root, noGit{t}, gitrepo.Pinned, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,16 @@ func TestSourcesListsGitSources(t *testing.T) {
 
 func TestSourcesRefusals(t *testing.T) {
 	for name, content := range map[string]string{
-		"external":    `{"sources": [{"name": "cursor-rules"}]}`,
+		"built in":    `{"sources": [{"name": "stelemd"}]}`,
+		"regex":       `{"sources": [{"name": "regex"}]}`,
+		"bad name":    `{"sources": [{"name": "../x"}]}`,
+		"dots":        `{"sources": [{"name": "a.b"}]}`,
+		"ext twice":   `{"sources": [{"name": "docs"}, {"name": "docs"}]}`,
+		"git timeout": `{"sources": [{"name": "git", "config": {"repo": "git@github.com:a/g.git"}, "timeout": "2m"}]}`,
+		"bad timeout": `{"sources": [{"name": "docs", "timeout": "soon"}]}`,
+		"short":       `{"sources": [{"name": "docs", "timeout": "10ms"}]}`,
+		"long":        `{"sources": [{"name": "docs", "timeout": "31m"}]}`,
+		"ext key":     `{"sources": [{"name": "docs", "timeot": "2m"}]}`,
 		"unknown key": `{"sources": [{"name": "git", "config": {"repo": "git@github.com:a/g.git", "branch": "main"}}]}`,
 		"entry key":   `{"sources": [{"name": "git", "confg": {"repo": "git@github.com:a/g.git"}}]}`,
 		"no repo":     `{"sources": [{"name": "git", "config": {}}]}`,
@@ -85,7 +94,7 @@ func TestSourcesRefusals(t *testing.T) {
 		"not json":    `{`,
 		"too many":    `{"sources": [` + strings.TrimSuffix(strings.Repeat(`{"name": "git", "config": {"repo": "git@h:a/g.git", "path": "x.md"}},`, 17), ",") + `]}`,
 	} {
-		_, err := Sources(steleJSON(t, content), noGit{t}, gitrepo.Pinned)
+		_, err := Sources(steleJSON(t, content), noGit{t}, gitrepo.Pinned, &fakeRunner{})
 		if err == nil {
 			t.Errorf("%s: accepted", name)
 			continue
@@ -97,7 +106,7 @@ func TestSourcesRefusals(t *testing.T) {
 }
 
 func TestSourcesNamesTheEntry(t *testing.T) {
-	_, err := Sources(steleJSON(t, `{"sources": [{"name": "git", "config": {"repo": "git@github.com:a/g.git"}}, {"name": "nope"}]}`), noGit{t}, gitrepo.Pinned)
+	_, err := Sources(steleJSON(t, `{"sources": [{"name": "git", "config": {"repo": "git@github.com:a/g.git"}}, {"name": "No.pe"}]}`), noGit{t}, gitrepo.Pinned, &fakeRunner{})
 	if err == nil || !strings.Contains(err.Error(), "sources[1]") {
 		t.Errorf("err = %v, want it to name sources[1]", err)
 	}

@@ -1,22 +1,29 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/lictor-ai/stele/internal/gitexec"
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/plugin"
+	"github.com/lictor-ai/stele/internal/pluginexec"
 	"github.com/lictor-ai/stele/internal/source"
 	"github.com/lictor-ai/stele/internal/source/gitrepo"
 )
 
 // This file is the one in cmd/stele that reaches git for the git source
-// (ADR-0011). runCompile, runCheck and init call sources; stele hook and
-// stele stats never do: TestHookCallsNeverReachGit and
-// TestStatsNeverReachesNetwork follow their calls.
+// (ADR-0011) and starts external plugins (ADR-0013). runCompile, runCheck
+// and init call sources; stele hook and stele stats never do:
+// TestHookCallsNeverReachGit and TestStatsNeverReachesNetwork follow their
+// calls.
 
 // gitCacheDir is where the git source keeps its clones: the user's cache
 // directory. Tests point it at a temp directory.
@@ -28,12 +35,20 @@ var gitCacheDir = os.UserCacheDir
 var localRemotes map[string]string
 
 // sources is every source compile reads under root: the builtins, then the
-// git sources stele.json lists, which treat their pins as mode says.
-func sources(root string, mode gitrepo.Mode) ([]source.Source, error) {
+// sources stele.json lists: git sources, which treat their pins as mode
+// says, and external ones, whose stderr goes to stderr.
+func sources(root string, mode gitrepo.Mode, stderr io.Writer) ([]source.Source, error) {
 	f := gitexec.NewFetcher(root)
 	f.CacheDir = gitCacheDir
 	f.Remotes = localRemotes
-	return plugin.Sources(root, f, mode)
+	return plugin.Sources(root, f, mode, pluginexec.New(root, stderr))
+}
+
+// interruptible is the context of a command that runs plugins: Ctrl-C, or a
+// signal to stop, cancels it, which stops the plugin and what it started,
+// and the call says it was cancelled (D80). The hook never uses it.
+func interruptible() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
 // printPins says, for each pinned source, which commit it was read at, and
@@ -75,4 +90,20 @@ func short(commit string) string {
 		return commit[:7]
 	}
 	return commit
+}
+
+// pluginFault reports whether err, from planning srcs, is a duplicate id an
+// external source supplied: the plugin's fault, so stele check exits 2, not
+// 1 as for a project's own rule files.
+func pluginFault(srcs []source.Source, err error) bool {
+	var de *lock.DuplicateError
+	if !errors.As(err, &de) {
+		return false
+	}
+	for _, s := range srcs {
+		if plugin.IsExternal(s) && slices.Contains(de.Sources, s.Name()) {
+			return true
+		}
+	}
+	return false
 }
