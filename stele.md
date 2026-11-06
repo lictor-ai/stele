@@ -85,11 +85,12 @@ stele push or stele check --push (D53), or from stele publish to the repo in
 stele.json (D66, ADR-0007); v1 has no sinks. Network code lives in
 internal/publish, the only package that imports net/http. internal/gitexec
 imports net/url only to check a remote's URL: git does the network
-(ADR-0011). Every other package imports no net package.
+(ADR-0011). Every other package imports no net package. A plugin is the
+user's own program: stele itself sends nothing through one (ADR-0013).
 
 ---
 
-scope: ["cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,journal,jsonedit,lock,plugin,rulesblock,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
+scope: ["cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,journal,jsonedit,lock,plugin,printable,rulesblock,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
 check: regex
 pattern: (?m)^\s*(import\s+)?([\w.]+\s+)?"os/exec"\s*$
 message: no subprocess on the hook's path (D45)
@@ -99,23 +100,26 @@ external plugins never run on the hot path (D45), and only plugins listed in
 stele.json and found on PATH ever run, never one inside the repository
 (D43). os/exec belongs to stele check (cmd/stele/check.go), stele init's
 agent version probe (cmd/stele/agentversion.go), stele publish
-(internal/publish) and internal/gitexec, which runs git for stele publish
-and the git source (ADR-0011). Only cmd/stele/sources.go hands gitexec to
-the git source, and only runCompile, runCheck and init call it: a file the
-hook reaches, compile.go included, may hold such a caller but imports
-neither os/exec nor gitexec. stele hook and stele stats never call it;
-cmd/stele/hookreach_test.go follows their calls to check it.
+(internal/publish), internal/gitexec, which runs git for stele publish
+and the git source (ADR-0011), and internal/pluginexec, which runs
+external plugins (ADR-0013). Only cmd/stele/sources.go hands gitexec to the
+git source and pluginexec to internal/plugin, and only runCompile, runCheck
+and init call it: a file the hook reaches, compile.go included, may hold
+such a caller but imports neither os/exec, gitexec nor pluginexec. stele
+hook and stele stats never call it; cmd/stele/hookreach_test.go follows
+their calls to check it.
 
 ---
 
-scope: ["cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,journal,jsonedit,lock,plugin,rulesblock,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
+scope: ["cmd/stele/{hook,hook_bash,hook_log,hook_rules,hook_session,agents,guard,rulesfile,compile,root,main,version}.go", "internal/{adapter,backstop,check,compile,enforce,index,journal,jsonedit,lock,plugin,printable,rulesblock,safefile,scope,session,sign,source}/**/*.go", "internal/install/{assets,install,doc}.go"]
 check: regex
-pattern: "github\.com/lictor-ai/stele/internal/(publish|gitexec)"
-message: stele hook never reaches stele publish or git (D45, D66, ADR-0011)
+pattern: "github\.com/lictor-ai/stele/internal/(publish|gitexec|pluginexec)"
+message: stele hook never reaches stele publish, git or a plugin (D45, D66, D79)
 
 stele publish and internal/gitexec talk to the network and start processes,
-so nothing on the hook's path imports them. cmd/stele/hookreach_test.go
-checks the whole import graph of stele hook, and what runHook calls.
+and internal/pluginexec starts plugins (D79), so nothing on the hook's path
+imports them. cmd/stele/hookreach_test.go checks the whole import graph of
+stele hook, and what runHook calls.
 
 ---
 

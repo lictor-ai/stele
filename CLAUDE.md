@@ -48,7 +48,12 @@ Guideline enforcement for coding agents. Go, single binary.
     several files (`Event.Edits`), an agent that cannot ask, and the rules in a
     marked section of the user's `AGENTS.md`. It amends ADR-0005 and ADR-0009.
     The spec carries it as D73–D77.
-13. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+13. `docs/adr/0013-external-plugins.md` — external sources and checkers:
+    protocol 1, the registry in `stele.json`, how a plugin is found and run,
+    and where (sources at compile, check and init; checkers at check only;
+    never the hook or stats). It amends ADR-0002 and ADR-0004, and D42, D43,
+    D45, D58 and D71. The spec carries it as D78–D81.
+14. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
@@ -67,7 +72,9 @@ enterprise idea. Do not implement it or use it as a v1 format.
 - External plugins never run on the hot path: not in `stele hook`, not in
   `stele mcp` (D45). Nor does the `git` source, nor anything that starts git:
   only `internal/gitexec` and `cmd/stele/check.go` run git, and the hook and
-  `stele stats` never reach them (D71).
+  `stele stats` never reach them (D71). Only `internal/pluginexec` starts a
+  plugin, and only `cmd/stele/sources.go` hands it to `internal/plugin`
+  (D79).
 - Only `internal/adapter/<agent>`, `cmd/stele/agents.go` and
   `internal/install/agent_test.go` (the install tests, which check the real
   adapter's output) import an agent adapter; nothing else names Claude Code's
