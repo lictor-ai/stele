@@ -45,15 +45,21 @@ func TestFindNotFound(t *testing.T) {
 	}
 }
 
-func TestFindRefusesInsideProject(t *testing.T) {
+// A copy inside the project is passed over, not run and not in the way: the
+// real plugin later on PATH is found.
+func TestFindPassesOverProjectCopy(t *testing.T) {
 	root := t.TempDir()
+	real := installPlugin(t, outside(t), "checker", "good")
 	installPlugin(t, filepath.Join(root, "bin"), "checker", "good")
-	_, err := New(root, nil).Find(plugin.KindChecker, "good")
-	if !errors.Is(err, plugin.ErrPluginRefused) || !strings.Contains(err.Error(), "inside the project") {
-		t.Fatalf("Find = %v, want refused inside the project", err)
+	got, err := New(root, nil).Find(plugin.KindChecker, "good")
+	if err != nil || !sameFile(t, got, real) {
+		t.Fatalf("Find = %s, %v; want %s", got, err, real)
+	}
+	t.Setenv("PATH", filepath.Join(root, "bin"))
+	if _, err := New(root, nil).Find(plugin.KindChecker, "good"); !errors.Is(err, plugin.ErrPluginNotFound) {
+		t.Fatalf("Find with only the project's copy = %v, want not found", err)
 	}
 }
-
 func TestFindRefusesLinkIntoProject(t *testing.T) {
 	root := t.TempDir()
 	real := installPlugin(t, filepath.Join(root, "bin"), "checker", "good")
@@ -72,17 +78,20 @@ func TestFindRefusesLinkIntoProject(t *testing.T) {
 	}
 }
 
-func TestFindRefusesRelativePathEntry(t *testing.T) {
+// A relative PATH entry, and on Windows the current directory, which
+// exec.LookPath searches, are never looked in.
+func TestFindSkipsRelativeAndCurrentDirectory(t *testing.T) {
 	dir := t.TempDir()
 	installPlugin(t, filepath.Join(dir, "rel"), "checker", "good")
+	installPlugin(t, dir, "checker", "good")
+	real := installPlugin(t, outside(t), "checker", "good")
 	t.Chdir(dir)
-	t.Setenv("PATH", "rel")
-	_, err := New(t.TempDir(), nil).Find(plugin.KindChecker, "good")
-	if !errors.Is(err, plugin.ErrPluginRefused) {
-		t.Fatalf("Find = %v, want refused", err)
+	t.Setenv("PATH", "rel"+string(os.PathListSeparator)+filepath.Dir(real))
+	got, err := New(t.TempDir(), nil).Find(plugin.KindChecker, "good")
+	if err != nil || !sameFile(t, got, real) {
+		t.Fatalf("Find = %s, %v; want %s", got, err, real)
 	}
 }
-
 func TestFindRefusesBatchOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows only: a .bat runs through cmd.exe")
@@ -121,7 +130,9 @@ func TestRunWritesRequestReadsAnswer(t *testing.T) {
 	}
 }
 
-func TestRunInRootWithNoProjectPath(t *testing.T) {
+// A plugin runs outside the project, where no DLL or program a clone
+// brought is found first, with PATH and the loaders' paths cut (D80).
+func TestRunOutsideTheProject(t *testing.T) {
 	root := t.TempDir()
 	bin := installPlugin(t, outside(t), "checker", "env")
 	inside := filepath.Join(root, "tools")
@@ -134,8 +145,8 @@ func TestRunInRootWithNoProjectPath(t *testing.T) {
 	if err := json.Unmarshal(out, &a); err != nil {
 		t.Fatal(err)
 	}
-	if !sameFile(t, a.Cwd, root) {
-		t.Errorf("cwd = %s, want %s", a.Cwd, root)
+	if rel, err := filepath.Rel(root, a.Cwd); err == nil && !strings.HasPrefix(rel, "..") {
+		t.Errorf("cwd = %s, inside the project %s", a.Cwd, root)
 	}
 	for _, e := range filepath.SplitList(a.Path) {
 		if strings.EqualFold(filepath.Clean(strings.Trim(e, `"`)), filepath.Clean(inside)) {
@@ -144,6 +155,15 @@ func TestRunInRootWithNoProjectPath(t *testing.T) {
 	}
 }
 
+func TestRunCancelled(t *testing.T) {
+	bin := installPlugin(t, outside(t), "checker", "slow")
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(500*time.Millisecond, cancel)
+	_, err := New(t.TempDir(), nil).Run(ctx, bin, describeReq(t), plugin.SmallAnswer, 30*time.Second)
+	if !errors.Is(err, plugin.ErrCancelled) {
+		t.Fatalf("Run = %v, want ErrCancelled", err)
+	}
+}
 func TestRunNonZeroExitKeepsStderrTail(t *testing.T) {
 	bin := installPlugin(t, outside(t), "checker", "crash")
 	var seen bytes.Buffer
@@ -169,33 +189,57 @@ func TestRunTimeout(t *testing.T) {
 	}
 }
 
-func TestRunTimeoutWithOrphanHoldingStdout(t *testing.T) {
-	// The child outlives the test for a while and keeps its executable and
-	// its working directory, the root, in use, which Windows will not
-	// delete: not a t.TempDir, and a copy of the test binary, not a link.
-	dir, err := os.MkdirTemp("", "stele-orphan-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	bin := copyPlugin(t, filepath.Join(dir, "bin"), "checker", "orphan")
-	root := filepath.Join(dir, "root")
-	if err := os.Mkdir(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	start := time.Now()
-	out, err := New(root, nil).Run(context.Background(), bin, describeReq(t), plugin.SmallAnswer, time.Second)
-	if d := time.Since(start); d > 15*time.Second {
-		t.Errorf("Run took %v: a child holding stdout kept it waiting", d)
-	}
-	if err == nil {
-		var info plugin.Info
-		if err := plugin.DecodeAnswer(out, &info); !errors.Is(err, plugin.ErrProtocol) {
-			t.Errorf("no answer decodes as %v, want ErrProtocol", err)
+// orphanRun runs mode, which starts a child holding stdout, and reports
+// whether the child lived to write its marker.
+func orphanRun(t *testing.T, mode string, timeout time.Duration) (err error, took time.Duration, survived bool) {
+	t.Helper()
+	dir := t.TempDir()
+	bin := copyPlugin(t, filepath.Join(dir, "bin"), "checker", mode)
+	marker := filepath.Join(dir, "alive")
+	t.Setenv("STELE_FAKE_MARKER", marker)
+	// Registered after t.TempDir, so it runs first: wait for the binary to
+	// be free, should a child still hold it.
+	t.Cleanup(func() {
+		for i := 0; i < 50 && os.Remove(bin) != nil; i++ {
+			time.Sleep(100 * time.Millisecond)
 		}
+	})
+	start := time.Now()
+	_, err = New(t.TempDir(), nil).Run(context.Background(), bin, describeReq(t), plugin.SmallAnswer, timeout)
+	took = time.Since(start)
+	time.Sleep(4 * time.Second) // past the child's 3 s
+	_, statErr := os.Stat(marker)
+	return err, took, statErr == nil
+}
+
+// A plugin that answers and exits but leaves a child holding stdout: the
+// call fails, naming why, and the child is stopped.
+func TestRunAnswerWithAHelperLeftBehind(t *testing.T) {
+	err, took, survived := orphanRun(t, "orphan", 10*time.Second)
+	if !errors.Is(err, plugin.ErrProtocol) || !strings.Contains(err.Error(), "left a process holding its output") {
+		t.Errorf("Run = %v, want the helper named", err)
+	}
+	if took > 15*time.Second {
+		t.Errorf("Run took %v", took)
+	}
+	if survived {
+		t.Error("the helper outlived the call")
 	}
 }
 
+// A plugin that times out with a child: both are stopped.
+func TestRunTimeoutStopsTheChild(t *testing.T) {
+	err, took, survived := orphanRun(t, "orphanslow", time.Second)
+	if !errors.Is(err, plugin.ErrTimeout) {
+		t.Errorf("Run = %v, want ErrTimeout", err)
+	}
+	if took > 15*time.Second {
+		t.Errorf("Run took %v", took)
+	}
+	if survived {
+		t.Error("the child outlived the timeout")
+	}
+}
 func TestRunOutputOverCap(t *testing.T) {
 	bin := installPlugin(t, outside(t), "checker", "huge")
 	_, err := New(t.TempDir(), nil).Run(context.Background(), bin, describeReq(t), plugin.SmallAnswer, 30*time.Second)
