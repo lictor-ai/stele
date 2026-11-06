@@ -502,8 +502,9 @@ stele compile: source "paragraphs": stele-source-paragraphs not found on PATH: i
 | `config` | Passed to the plugin as it is. |
 | `timeout` | How long a read may take: `"2m"`, from `1s` to `30m`. Default 1 minute. |
 
-- **Only from `PATH`, never from the project.** A plugin found inside the project, or inside the git repository that holds it, or through a relative `PATH` entry such as `.`, is refused, links followed. On Windows it must be an `.exe` or `.com`.
-- **Run with no shell, in the project's root.** It gets your environment, with `PATH` cut to entries outside the project. What it writes on stderr is shown, each line starting with its name.
+- **Only from `PATH`, never from the project.** stele looks only in `PATH` entries that are absolute and outside the project and the git repository that holds it, so a copy inside the project is passed over, never run; on Windows the current directory isn't searched. One that links into the project is refused. On Windows it must be an `.exe` or `.com`.
+- **Run with no shell, outside the project.** It runs in a directory of stele's own, `stele/plugins` in your user cache directory, and finds the project through the `root` stele sends it. It gets your environment, with `PATH` and the library and module paths (`LD_LIBRARY_PATH`, `PYTHONPATH`, `NODE_PATH` and the like) cut to entries outside the project. What it writes on stderr is shown, each line starting with its name.
+- **What it starts stops with it.** After each call stele stops whatever the plugin left running. Ctrl-C stops the plugin too, and stele says the call was cancelled.
 - **Never in the hook.** Plugins run at `stele compile`, `stele check` and `stele init` only. The hook uses the rules of the last one on your machine.
 
 Writing one takes a few lines in any language: [docs/plugin-protocol.md](docs/plugin-protocol.md) describes the protocol, with the `paragraphs` example above.
@@ -653,7 +654,9 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 ### Plugins
 
-**A plugin runs as you.** It can read your files, use your environment, tokens included, and reach the network. stele checks where it comes from, not what it does: install only plugins you trust.
+**A plugin runs as you.** It can read your files, use your environment, tokens included, and reach the network. stele checks where it comes from, not what it does: install only plugins you trust. A plugin that changes into the project and starts programs by bare name can run what the project brought; that is the plugin's doing.
+
+**On Windows, a process a plugin starts at once can outlive it.** stele puts the plugin in a job that stops everything in it, but a process it starts in the instant before it joins is not in the job.
 
 **A cloned project chooses which plugins run.** Its `stele.json` names them, and stele runs the ones of those names on your `PATH`. It can't bring a plugin of its own, but it can make one you installed run with its `config`.
 

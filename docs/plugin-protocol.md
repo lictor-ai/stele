@@ -30,8 +30,17 @@ A project lists it in `stele.json`:
 stele runs it only if it is listed, and only from `PATH`: never from inside
 the project, the git repository that holds it, or a relative `PATH` entry. On
 Windows it must be an `.exe` or `.com`. It runs with no arguments and no
-shell, in the project's root, with your environment and `PATH` cut to
+shell, with your environment, `PATH` and the library and module paths cut to
 entries outside the project.
+
+Your working directory is not the project: it is a directory of stele's own.
+Use `root` from the request to find the project's files. If you change into
+it and start programs by bare name, you may run one the project brought:
+that is your risk.
+
+Whatever you start stops when your call ends: stele stops your process
+group on Unix and your job on Windows. Don't leave a process holding your
+stdout; stele treats that as a failure.
 
 ## Every call
 

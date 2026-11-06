@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -26,6 +25,9 @@ import (
 // id, and the valid rules are enforced. --update moves every git source's
 // pin to its ref's tip (D72).
 func runCompile(args []string, stdout, stderr io.Writer) int {
+	// Ctrl-C stops the plugins this runs (D80).
+	ctx, stop := interruptible()
+	defer stop()
 	var update bool
 	root, ok := setupFlags("compile", args, stderr, func(fs *flag.FlagSet) {
 		fs.BoolVar(&update, "update", false, "pin every git source at its ref's tip")
@@ -48,7 +50,7 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 		return exitCantRun
 	}
 	prev := committedPins(root)
-	r, err := compile.Compile(context.Background(), root, srcs, generated(root), uuid.NewString, key)
+	r, err := compile.Compile(ctx, root, srcs, generated(root), uuid.NewString, key)
 	if err != nil {
 		fmt.Fprintf(stderr, "stele compile: %v\n", err)
 		return exitCantRun

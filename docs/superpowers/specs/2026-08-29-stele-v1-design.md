@@ -234,11 +234,12 @@ need no entry.
 > external source it runs at `stele compile`, `stele check` and `stele init`
 > only, and the hook keeps its rules from the index.
 
-> **Amended by ADR-0013 (D78–D81).** Protocol 1 and the program that
-> finds and runs a plugin are built; ADR-0013 records them, and the limits on
-> where a plugin is found and how it runs. External sources are to run at
-> `stele compile`, `stele check` and `stele init`, external checkers at
-> `stele check` only; the hook and `stele stats` never start one.
+> **Amended by ADR-0013 (D78–D81).** Protocol 1, the program that
+> finds and runs a plugin, and external sources are built; ADR-0013 records
+> them, and the limits on where a plugin is found and how it runs. External
+> sources run at `stele compile`, `stele check` and `stele init`; external
+> checkers, to come, at `stele check` only; the hook and `stele stats` never
+> start one.
 
 **External plugins never run on the hot path** (D45). `stele compile` and
 `stele check` run them. `request` refreshes built-in sources only, and keeps the

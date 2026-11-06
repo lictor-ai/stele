@@ -127,13 +127,20 @@ func TestCompileExternalSourceFailures(t *testing.T) {
 	}
 }
 
-func TestCompilePluginRefusedInsideProject(t *testing.T) {
+// A plugin inside the project is passed over, never run: with no other on
+// PATH, it is not found; with the real one later on PATH, that one runs.
+func TestCompilePassesOverAPluginInsideProject(t *testing.T) {
 	root := project(t, hookRules)
 	installPlugin(t, filepath.Join(root, "tools"), "source", "good")
 	withPluginSource(t, root, "good", "v1", pluginRule)
 	code, _, errOut := runCmd("compile")
-	if code != exitCantRun || !strings.Contains(errOut, "refused") || !strings.Contains(errOut, "inside the project") {
-		t.Errorf("compile = %d, stderr %q; want 2, refused inside the project", code, errOut)
+	if code != exitCantRun || !strings.Contains(errOut, "stele-source-good not found on PATH") {
+		t.Errorf("compile = %d, stderr %q; want 2, not found", code, errOut)
+	}
+	real := installPlugin(t, filepath.Join(t.TempDir(), "bin"), "source", "good")
+	t.Setenv("PATH", filepath.Join(root, "tools")+string(os.PathListSeparator)+filepath.Dir(real))
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Errorf("compile with the real plugin later on PATH = %d, stderr %q", code, errOut)
 	}
 }
 

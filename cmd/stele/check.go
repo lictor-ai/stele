@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -37,6 +36,9 @@ import (
 // violation, and 2 when it could not run. A root with no rule files has
 // nothing to check: exit 0 (#49).
 func runCheck(args []string, stdout, stderr io.Writer) int {
+	// Ctrl-C stops the plugins this runs (D80).
+	ctx, stop := interruptible()
+	defer stop()
 	fs := flag.NewFlagSet("stele check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	base := fs.String("base", "", "check the files changed between `ref` and HEAD (in CI: origin/main)")
@@ -77,7 +79,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return cantRun("%v", err)
 		}
-		r, err = compile.Plan(context.Background(), root, srcs, generated(root), uuid.NewString)
+		r, err = compile.Plan(ctx, root, srcs, generated(root), uuid.NewString)
 		if errors.Is(err, source.ErrUnpinned) {
 			return ruleFileProblem(root, *format, fmt.Sprintf("%s is out of date with %s: run stele compile and commit %s",
 				lock.FileName, enforce.FileName, lock.FileName), stdout, stderr)
@@ -123,7 +125,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	files, subs := ownedFiles(root, files)
 	rep := check.NewReport("")
 	if !none {
-		if rep, err = check.Run(context.Background(), root, r.Index, files, plugin.BuiltinCheckers()); err != nil {
+		if rep, err = check.Run(ctx, root, r.Index, files, plugin.BuiltinCheckers()); err != nil {
 			return cantRun("%v", err)
 		}
 	}

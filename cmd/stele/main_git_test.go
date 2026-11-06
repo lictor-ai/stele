@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/lictor-ai/stele/internal/plugin/plugintest"
+	"github.com/lictor-ai/stele/internal/pluginexec"
 )
 
 // TestMain makes every git the tests run, and every git stele runs for
@@ -37,6 +38,8 @@ func testMain(m *testing.M) int {
 	}
 	os.Setenv("GIT_CONFIG_GLOBAL", global)
 	os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	// Plugins run in a directory of their own: here, not the user's cache.
+	pluginexec.WorkBase = func() (string, error) { return dir, nil }
 	return m.Run()
 }
 
