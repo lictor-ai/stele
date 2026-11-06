@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/lictor-ai/stele/internal/check"
 	"github.com/lictor-ai/stele/internal/gitexec"
@@ -45,6 +48,13 @@ func sources(root string, mode gitrepo.Mode, stderr io.Writer) ([]source.Source,
 // runCheck calls it (D79).
 func checkers(root string, stderr io.Writer) (map[string]check.Checker, error) {
 	return plugin.Checkers(root, pluginexec.New(root, stderr))
+}
+
+// interruptible is the context of a command that runs plugins: Ctrl-C, or a
+// signal to stop, cancels it, which stops the plugin and what it started,
+// and the call says it was cancelled (D80). The hook never uses it.
+func interruptible() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
 // printPins says, for each pinned source, which commit it was read at, and
