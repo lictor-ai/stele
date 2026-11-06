@@ -202,12 +202,21 @@ func shellCommand(raw json.RawMessage) (command, patch string) {
 	return argv[len(argv)-1], ""
 }
 
+// mentionsPatch matches a command that names apply_patch anywhere: after cd,
+// in a pipe, in a script.
+var mentionsPatch = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(?:apply_patch|applypatch)(?:[^A-Za-z0-9_]|$)`)
+
 // shellPatch reads the patch of a shell command that runs apply_patch: a
-// heredoc, apply_patch <<'EOF' …, or a quoted argument. ok is false for any
-// other command. One whose patch stele cannot cut out still gives its text,
-// so the headers in it name the files.
+// heredoc, apply_patch <<'EOF' …, a PowerShell here-string, apply_patch
+// @'…'@, or a quoted argument. ok is false for a command that never names
+// apply_patch. One whose patch stele cannot cut out, such as cd x &&
+// apply_patch … or … | apply_patch, gives the whole command, so every header
+// in it names a file for the guard.
 func shellPatch(command string) (patch string, ok bool) {
 	if !patchCommand.MatchString(command) {
+		if mentionsPatch.MatchString(command) {
+			return command, true
+		}
 		return "", false
 	}
 	rest := strings.TrimLeft(command, " \t")
@@ -215,6 +224,13 @@ func shellPatch(command string) (patch string, ok bool) {
 	switch {
 	case strings.HasPrefix(rest, "<<"):
 		return unwrap(command), true
+	case strings.HasPrefix(rest, "@'"), strings.HasPrefix(rest, `@"`):
+		end := "\n" + rest[1:2] + "@"
+		body := strings.TrimPrefix(strings.TrimPrefix(rest[2:], "\r"), "\n")
+		if i := strings.Index(body, end); i >= 0 {
+			return strings.TrimSuffix(body[:i], "\r"), true
+		}
+		return command, true
 	case strings.HasPrefix(rest, "'"):
 		var b strings.Builder
 		for i := 1; i < len(rest); i++ {
@@ -233,7 +249,7 @@ func shellPatch(command string) (patch string, ok bool) {
 			return s, true
 		}
 	}
-	return rest, true
+	return command, true
 }
 
 // firstQuoted is the double-quoted string at the start of s.
