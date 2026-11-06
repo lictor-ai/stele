@@ -385,6 +385,7 @@ Optional, committed next to `stele.md`. This is the default:
 | Key | Effect |
 |---|---|
 | `sources` | Rules from another git repository, see [Shared rules](#shared-rules-from-another-repository), or from a program you install, see [Plugins](#plugins). |
+| `checkers` | Programs you install that `stele check` runs for rules that name them: see [Checker plugins](#checker-plugins). |
 | `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. It applies only to a part of the hook that is on: with `--remind=off` or `--check=off`, that part's failures only warn. |
 
 `backstop` is no longer read: use `stele init --remind=off`. `stele init` says so when `stele.json` still sets it, and leaves the file as it is:
@@ -464,7 +465,11 @@ stele needs read access to git@github.com:acme/guidelines.git: check that git ls
 
 ## Plugins
 
-A plugin is a program you install that gives stele rules it can't read itself. List it under `sources` in `stele.json`, by name:
+A plugin is a program you install that does what stele can't do itself: a source plugin gives it rules, a checker plugin checks code against them in `stele check`.
+
+### Source plugins
+
+List a source plugin under `sources` in `stele.json`, by name:
 
 ```json
 {
@@ -502,9 +507,44 @@ stele compile: source "paragraphs": stele-source-paragraphs not found on PATH: i
 | `config` | Passed to the plugin as it is. |
 | `timeout` | How long a read may take: `"2m"`, from `1s` to `30m`. Default 1 minute. |
 
+### Checker plugins
+
+A rule's `check:` can name a checker plugin instead of `regex`. List it under `checkers` in `stele.json`; the rule's other keys are its settings:
+
+```markdown
+scope: ["**/*.go"]
+check: word
+word: TODO
+
+Finish the work before you merge it: no TODO in Go code.
+```
+
+```json
+{
+  "checkers": [
+    { "name": "word" }
+  ]
+}
+```
+
+`stele check` runs `stele-checker-word` on the files the rule's `scope` covers:
+
+```
+$ stele check main.go
+main.go:4:5: error c7fd8772-d0d3-48df-bf70-f8b41868cf84 "Finish the work before you merge it: no TODO in Go code."
+1 rule valid
+checked 1 file: 1 error
+```
+
+The keys are those of a source plugin: `name`, `config` and `timeout`, where `timeout` is how long one check may take, 5 minutes by default. stele first asks the checker whether each rule's settings are right; a rule it rejects is invalid, as one `regex` can't compile is. A rule that names a checker `stele.json` doesn't list is invalid too. Every checker listed must be installed, even one no rule names yet.
+
+A checker plugin runs only in `stele check`, never after a write: the hook and `stele compile` know it by name, and the agent learns of its violations from CI.
+
+### Every plugin
+
 - **Only from `PATH`, never from the project.** A plugin found inside the project, or inside the git repository that holds it, or through a relative `PATH` entry such as `.`, is refused, links followed. On Windows it must be an `.exe` or `.com`.
 - **Run with no shell, in the project's root.** It gets your environment, with `PATH` cut to entries outside the project. What it writes on stderr is shown, each line starting with its name.
-- **Never in the hook.** Plugins run at `stele compile`, `stele check` and `stele init` only. The hook uses the rules of the last one on your machine.
+- **Never in the hook.** Source plugins run at `stele compile`, `stele check` and `stele init`, checker plugins at `stele check`, and that's all. The hook uses the rules of the last compile, check or init on your machine.
 
 Writing one takes a few lines in any language: [docs/plugin-protocol.md](docs/plugin-protocol.md) describes the protocol, with the `paragraphs` example above.
 
@@ -661,7 +701,9 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **A plugin's rules aren't pinned.** `stele check` asks the plugin again, so if it reads something outside the project that changed, `stele check` fails until you run `stele compile`.
 
-**A teammate without the plugin can't compile or check.** A listed plugin missing from `PATH` is exit 2 for `stele compile` and `stele check`, and a note at `stele init`.
+**A teammate without the plugin can't compile or check.** A listed source plugin missing from `PATH` is exit 2 for `stele compile` and `stele check`, and a note at `stele init`; a listed checker plugin missing is exit 2 for `stele check`.
+
+**A checker plugin never runs after a write.** Its rules are shown to the agent like any rule, but only `stele check` checks them, so the agent hears of their violations from CI, not right after it writes.
 
 ### Projects
 

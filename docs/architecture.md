@@ -2083,9 +2083,9 @@ read is exit 2.
 `check` exits 0 when the rules are valid and nothing blocking was found, 1 for an
 invalid rule or a blocking violation, and 2 when stele or a plugin could not run
 (spec §8). It needs `git` on `PATH`, outside the project (`internal/toolpath`),
-unless explicit paths are given. In v1 it
-runs only the built-in `regex` checker and has no `--push`: plugins and sinks are
-in the team milestone (ADR-0004).
+unless explicit paths are given. It runs the built-in `regex` checker and the
+external checkers `stele.json` lists (ADR-0013), found on `PATH` before any
+rule is read. It has no `--push`: sinks are #17.
 
 **Dependencies: two.** `github.com/modelcontextprotocol/go-sdk` and
 `github.com/google/uuid`, plus `go-cmp` in tests. Config is JSON rather than TOML
