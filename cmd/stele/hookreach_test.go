@@ -103,6 +103,14 @@ func TestForbiddenNamesGitexec(t *testing.T) {
 	}
 }
 
+// A plugin is a process stele starts, whatever it does (D79).
+func TestForbiddenNamesPluginexec(t *testing.T) {
+	got := forbidden(map[string]bool{module + "/internal/pluginexec": true, module + "/internal/plugin": true})
+	if len(got) != 1 || got[0] != module+"/internal/pluginexec" {
+		t.Errorf("forbidden = %v, want internal/pluginexec alone", got)
+	}
+}
+
 // The walk sees through files: a declaration's own imports count, its
 // file's others do not.
 func TestDeclReach(t *testing.T) {
@@ -237,13 +245,15 @@ func reached(t *testing.T, repo string, start []string) map[string]bool {
 }
 
 // forbidden are the packages in seen that reach the network or a process:
-// internal/gitexec runs git, which talks to remotes (ADR-0011).
+// internal/gitexec runs git, which talks to remotes (ADR-0011), and
+// internal/pluginexec runs plugins (ADR-0013).
 func forbidden(seen map[string]bool) []string {
 	var out []string
 	for p := range seen {
 		switch {
 		case p == module+"/internal/publish",
 			p == module+"/internal/gitexec",
+			p == module+"/internal/pluginexec",
 			p == "net", strings.HasPrefix(p, "net/"),
 			p == "os/exec":
 			out = append(out, p)
