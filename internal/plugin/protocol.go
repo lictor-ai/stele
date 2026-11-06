@@ -44,6 +44,9 @@ var (
 	ErrTimeout = errors.New("no answer")
 	// ErrAnswer is a plugin that answered with an error of its own.
 	ErrAnswer = errors.New("the plugin reported an error")
+	// ErrCancelled is a call stopped because stele was: Ctrl-C, or a
+	// signal to stop.
+	ErrCancelled = errors.New("cancelled")
 )
 
 // Runner finds and starts plugin executables. internal/pluginexec is the only
@@ -103,6 +106,9 @@ func DecodeAnswer(data []byte, v any) error {
 	if _, err := dec.Token(); err != io.EOF {
 		return fmt.Errorf("%w: more after the answer", ErrProtocol)
 	}
+	if err := envelopeKeys(raw); err != nil {
+		return err
+	}
 	var env struct {
 		Protocol *int   `json:"protocol"`
 		Error    string `json:"error"`
@@ -120,6 +126,38 @@ func DecodeAnswer(data []byte, v any) error {
 	}
 	if err := json.Unmarshal(raw, v); err != nil {
 		return fmt.Errorf("%w: %v", ErrProtocol, err)
+	}
+	return nil
+}
+
+// envelopeKeys refuses an answer whose top-level "protocol" or "error" is
+// spelled in another case, or given twice: Go's decoder would take any case,
+// and the last of two, so the answer could say one thing to stele and
+// another to whatever else reads it.
+func envelopeKeys(raw json.RawMessage) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if _, err := dec.Token(); err != nil { // {
+		return fmt.Errorf("%w: %v", ErrProtocol, err)
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrProtocol, err)
+		}
+		key, _ := t.(string)
+		for _, k := range []string{"protocol", "error"} {
+			if strings.EqualFold(key, k) {
+				if key != k || seen[k] {
+					return fmt.Errorf("%w: %q must be given once, in lower case", ErrProtocol, k)
+				}
+				seen[k] = true
+			}
+		}
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return fmt.Errorf("%w: %v", ErrProtocol, err)
+		}
 	}
 	return nil
 }

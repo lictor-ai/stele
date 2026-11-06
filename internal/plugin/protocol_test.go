@@ -63,6 +63,9 @@ func TestDecodeAnswer(t *testing.T) {
 		{"not an object", `[1]`, "not valid JSON", ErrProtocol},
 		{"trailing", `{"protocol":1,"fingerprint":"x"} {}`, "after the answer", ErrProtocol},
 		{"empty", ``, "no answer", ErrProtocol},
+		{"upper case", `{"Protocol":1,"fingerprint":"x"}`, "lower case", ErrProtocol},
+		{"twice", `{"protocol":2,"protocol":1,"fingerprint":"x"}`, "once", ErrProtocol},
+		{"error case", `{"protocol":1,"ERROR":"x","fingerprint":"x"}`, "lower case", ErrProtocol},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

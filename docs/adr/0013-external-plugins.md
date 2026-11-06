@@ -66,18 +66,38 @@ plugin's name. A rule body may not hold a line stele uses to mark a rule in
 a generated file, and an `id` must be a canonical UUID (D52).
 
 **How a plugin runs** (D80). Only plugins listed in `stele.json` run (D43),
-and only from `PATH`: one found through a relative entry, inside the project
-root or the repository that holds it, by name or through a link, is refused,
-and so on Windows is anything but an `.exe` or `.com`, which would run
-through `cmd.exe`. stele starts it with no arguments and no shell, in the
-project root, with the user's environment and `PATH` cut to entries outside
-the project. An answer over its cap (1 MiB for `describe`, `fingerprint`
+and only from `PATH`, looked up on `PATH` with every entry that is empty,
+relative or inside the project root or the repository that holds it taken
+out: a copy a clone put there is passed over, never run, and never in the
+way of the real one; on Windows the current directory is not searched
+either. One that leads into the project through a link is refused, and so
+on Windows is anything but an `.exe` or `.com`, which would run through
+`cmd.exe`. stele starts it with no arguments and no shell, in a directory
+of its own outside the project (`stele/plugins` under the user's cache
+directory, else the temp directory), never in the project root: on Windows
+a program finds DLLs and programs it starts by bare name in its working
+directory first, and a clone could bring both. `root` travels in every
+request. The plugin gets the user's environment with `PATH`, and the
+variables a loader or interpreter reads directories from
+(`LD_LIBRARY_PATH`, the `DYLD_` paths, `PYTHONPATH`, `NODE_PATH`,
+`PERL5LIB`, `PERLLIB`, `RUBYLIB`, `GEM_PATH`, `GEM_HOME`), cut the same way.
+A plugin that changes into `root` and starts programs by bare name does so
+at its own risk.
+
+What a plugin starts stops with it. On Unix it runs in its own process
+group, which is killed when the call ends, however it ends; on Windows it
+runs in a job that kills its processes when stele closes it. A child the
+plugin starts in the instant before it joins the job is not in it. A
+plugin that answers but leaves a process holding its output fails the call.
+`stele compile`, `stele check` and `stele init` stop on Ctrl-C or a signal
+to stop, stopping the plugin, and say the call was cancelled. An answer over its cap (1 MiB for `describe`, `fingerprint`
 and `validate`, 32 MiB for `read` and `check`) is a protocol error, never
 cut short. Each call has a time limit: 10 seconds for `describe`,
 `fingerprint` and `validate`, 1 minute for `read`, 5 for `check`; an entry's
 `"timeout"` in `stele.json`, between 1 second and 30 minutes, sets `read`'s,
-`check`'s and `push`'s. A plugin past it is stopped, with what it started on
-Unix. What a plugin writes on stderr is passed through, each line cleaned
+`check`'s and `push`'s. A plugin past it is stopped, with what it started.
+The answer's `protocol` and `error` must be spelled in lower case and given
+once. What a plugin writes on stderr is passed through, each line cleaned
 and prefixed with its name, at most 200 lines a call; the end of it goes into
 the error when it fails. A missing, refused, crashed, timed-out or wrong
 plugin, or one that answers with an error, makes the command exit 2 with a
@@ -117,4 +137,6 @@ again, and fails if its rules changed since `stele compile`.
 * A plugin runs as the user, with their files, environment and network: stele
   vets where it comes from, not what it does.
 * External checkers never run right after a write, only in `stele check`.
+* On Windows, a process a plugin starts before it joins its job, in the
+  instant after it starts, outlives it.
 * One process per call costs a start each time.

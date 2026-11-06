@@ -858,29 +858,38 @@ the security boundary (D43, D80):
 1. The name must match `^[a-z][a-z0-9-]{0,63}$`. No separators, no dots, so no
    path.
 2. It must not be a built-in name: `stelemd`, `git` or `regex`, for any kind.
-3. `exec.LookPath("stele-source-" + name)` (or `stele-checker-`,
-   `stele-sink-`). A result found through a relative `PATH` entry such as `.`
-   (`exec.ErrDot`) is refused.
-4. On Windows the result must be an `.exe` or a `.com`: a `.bat` or `.cmd`
-   runs through `cmd.exe`, which looks for commands in the working directory,
-   the project.
-5. `toolpath.Vet`: the path, as spelled and where its links lead, must not be
-   inside the project root or the repository that holds it. A `PATH` that
-   names `./bin` by absolute path is caught here.
+3. `stele-source-<name>` (or `stele-checker-`, `stele-sink-`) is looked up
+   on the `PATH` the plugin gets: `toolpath.PluginEnv` has taken out every
+   entry that is empty, relative or inside the project root or the
+   repository that holds it, so a copy a clone put there is passed over,
+   not run and not in the way. Unlike `exec.LookPath` on Windows, the
+   current directory is never searched.
+4. On Windows only `<exe>.exe` and `<exe>.com` are looked for: a `.bat` or
+   `.cmd` runs through `cmd.exe`. Finding only one of those is refused, with
+   that reason.
+5. `toolpath.Vet`: the path, where its links lead, must not be inside the
+   project root or the repository that holds it.
 
 A failure at any step is `ErrPluginNotFound` or `ErrPluginRefused`, and the
 message names the executable it looked for. Nothing is ever run from a path
 written in `stele.json`, because `stele.json` is committed and a clone must not
 run code it brought with it.
 
-**`Run`** starts the executable with no arguments and no shell, in the project
-root, with the user's environment and `PATH` cut by `toolpath.Env`. stdout is
-capped (an answer over the cap is `ErrProtocol`, never cut short); stderr is
-passed through to the writer `cmd/` gives, each line cleaned
-(`internal/printable`) and prefixed with the executable's name, at most 200
-lines, and its end kept for the error. Past the timeout the plugin is stopped,
-with its process group on Unix; `WaitDelay` keeps a child that holds the
-pipes from keeping stele waiting. A non-zero exit is `*ExitError`.
+**`Run`** starts the executable with no arguments and no shell, in
+`stele/plugins` under the user's cache directory (`pluginexec.WorkBase`, else
+the temp directory), never the project: on Windows a program's working
+directory is searched first for its DLLs and for programs started by bare
+name. The environment is the user's, with `PATH` and the loaders' paths cut
+by `toolpath.PluginEnv`. stdout is capped (an answer over the cap is
+`ErrProtocol`, never cut short); stderr is passed through to the writer
+`cmd/` gives, each line cleaned (`internal/printable`) and prefixed with the
+executable's name, at most 200 lines, and its end kept for the error. The
+plugin runs in its own process group on Unix and in a job object with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` on Windows; when the call ends, however
+it ends, the group is killed or the job closed, so nothing it started lives
+on. Past the timeout it is stopped (`ErrTimeout`); a cancelled context is
+`ErrCancelled`; one that exited 0 but left a process holding its output, past
+`WaitDelay`, is `ErrProtocol`; a non-zero exit is `*ExitError`.
 
 **The protocol, version 1.** One process per call: stele writes one JSON request
 to stdin and closes it, the plugin writes one JSON object to stdout, nothing
@@ -1944,6 +1953,7 @@ var (
     ErrProtocol       = errors.New("plugin protocol error") // plugin: bad JSON, more after it, another protocol, over the cap
     ErrTimeout        = errors.New("no answer")             // plugin: stopped after its timeout
     ErrAnswer         = errors.New("the plugin reported an error") // plugin: its {"error": …}
+    ErrCancelled      = errors.New("cancelled")             // plugin: Ctrl-C or a signal stopped the call
 )
 ```
 

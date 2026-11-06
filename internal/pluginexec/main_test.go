@@ -1,11 +1,13 @@
 package pluginexec
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,26 +15,41 @@ import (
 )
 
 // TestMain makes this test binary the fake plugin when it is started under a
-// plugin's name (plugintest). orphan, only here, starts a child that holds
-// stdout open and sleeps, then exits without answering.
+// plugin's name (plugintest), and points the plugins' working directory at a
+// temp directory. Two modes live only here, since they start a process:
+// orphan answers, then exits, leaving a child holding stdout; orphanslow
+// starts such a child and never answers. The child writes the file
+// $STELE_FAKE_SLEEPER names after 3 s, unless it was stopped.
 func TestMain(m *testing.M) {
-	if os.Getenv("STELE_FAKE_SLEEPER") != "" {
-		time.Sleep(20 * time.Second)
+	if marker := os.Getenv("STELE_FAKE_SLEEPER"); marker != "" {
+		time.Sleep(3 * time.Second)
+		_ = os.WriteFile(marker, []byte("alive"), 0o644)
 		os.Exit(0)
 	}
 	if plugintest.Is(os.Args[0]) {
-		base := filepath.Base(os.Args[0])
-		if base == "stele-checker-orphan" || base == "stele-checker-orphan.exe" {
+		switch strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") {
+		case "stele-checker-orphan", "stele-checker-orphanslow":
 			io.Copy(io.Discard, os.Stdin)
 			c := exec.Command(os.Args[0])
-			c.Env = append(os.Environ(), "STELE_FAKE_SLEEPER=1")
+			c.Env = append(os.Environ(), "STELE_FAKE_SLEEPER="+os.Getenv("STELE_FAKE_MARKER"))
 			c.Stdout = os.Stdout
 			_ = c.Start()
+			if strings.HasSuffix(filepath.Base(os.Args[0]), "slow") || strings.HasSuffix(filepath.Base(os.Args[0]), "slow.exe") {
+				time.Sleep(30 * time.Second)
+			}
+			json.NewEncoder(os.Stdout).Encode(map[string]any{"protocol": 1, "kind": "checker", "protocols": []int{1}, "version": "1"})
 			os.Exit(0)
 		}
 		os.Exit(plugintest.Serve(os.Args[0], os.Stdin, os.Stdout, os.Stderr))
 	}
-	os.Exit(m.Run())
+	dir, err := os.MkdirTemp("", "stele-pluginexec-test")
+	if err != nil {
+		panic(err)
+	}
+	WorkBase = func() (string, error) { return dir, nil }
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 // installPlugin puts this test binary in dir as the plugin of kind with mode,
@@ -54,8 +71,9 @@ func installPlugin(t *testing.T, dir, kind, mode string) string {
 	return dst
 }
 
-// copyPlugin is installPlugin with a copy, never a link: for a plugin that
-// leaves a process running, which would hold the test binary itself.
+// copyPlugin is installPlugin with a copy, never a link, and no change to
+// PATH: for a plugin that starts a child, which would hold the test binary
+// itself for as long as it runs.
 func copyPlugin(t *testing.T, dir, kind, mode string) string {
 	t.Helper()
 	name := "stele-" + kind + "-" + mode

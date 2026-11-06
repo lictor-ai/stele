@@ -467,3 +467,28 @@ func TestVet(t *testing.T) {
 		t.Errorf("Vet = %q, %v, want %q", got, err, found)
 	}
 }
+
+// A plugin gets the variables a loader reads directories from cut as PATH
+// is: an empty or relative entry there means the working directory.
+func TestPluginEnvCutsLoadPaths(t *testing.T) {
+	root := t.TempDir()
+	out := t.TempDir()
+	inside := filepath.Join(root, "lib")
+	var env []string
+	for _, name := range LoadPaths {
+		env = append(env, name+"="+strings.Join([]string{out, inside, "", "rel"}, sep))
+	}
+	env = append(env, "OTHER="+inside)
+	got := PluginEnv(env, root)
+	for i, name := range LoadPaths {
+		if want := name + "=" + out; got[i] != want {
+			t.Errorf("%s: got %q, want %q", name, got[i], want)
+		}
+	}
+	if got[len(got)-1] != "OTHER="+inside {
+		t.Errorf("OTHER changed: %q", got[len(got)-1])
+	}
+	if g := Env([]string{"LD_LIBRARY_PATH=" + inside}, root); g[0] != "LD_LIBRARY_PATH="+inside {
+		t.Errorf("Env, for git, changed LD_LIBRARY_PATH: %q", g)
+	}
+}
