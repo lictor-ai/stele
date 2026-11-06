@@ -55,7 +55,7 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if err == nil {
-		c, n := initCompile(root)
+		c, n := initCompile(root, stderr)
 		changes, notes = appendNew(changes, c...), appendNew(notes, n...)
 		for _, a := range chosen {
 			notes = appendNew(notes, probeVersion(a, root)...)
@@ -194,7 +194,7 @@ func appendNew(list []string, add ...string) []string {
 
 // initCompile compiles the rules init set up. A failure is a note, not an
 // error: the hooks are installed, and the next stele compile writes the rest.
-func initCompile(root string) (changes, notes []string) {
+func initCompile(root string, stderr io.Writer) (changes, notes []string) {
 	var files []string
 	for _, a := range activeAgents(root) {
 		files = append(files, a.RulesFile())
@@ -204,7 +204,7 @@ func initCompile(root string) (changes, notes []string) {
 	if err != nil {
 		return nil, []string{fmt.Sprintf("%v: %s", err, later)}
 	}
-	srcs, err := sources(root, gitrepo.Pinned)
+	srcs, err := sources(root, gitrepo.Pinned, stderr)
 	if err != nil {
 		return nil, []string{fmt.Sprintf("%v: fix it and %s", err, later)}
 	}

@@ -9,14 +9,16 @@ import (
 	"github.com/lictor-ai/stele/internal/gitexec"
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/plugin"
+	"github.com/lictor-ai/stele/internal/pluginexec"
 	"github.com/lictor-ai/stele/internal/source"
 	"github.com/lictor-ai/stele/internal/source/gitrepo"
 )
 
 // This file is the one in cmd/stele that reaches git for the git source
-// (ADR-0011). runCompile, runCheck and init call sources; stele hook and
-// stele stats never do: TestHookCallsNeverReachGit and
-// TestStatsNeverReachesNetwork follow their calls.
+// (ADR-0011) and starts external plugins (ADR-0013). runCompile, runCheck
+// and init call sources; stele hook and stele stats never do:
+// TestHookCallsNeverReachGit and TestStatsNeverReachesNetwork follow their
+// calls.
 
 // gitCacheDir is where the git source keeps its clones: the user's cache
 // directory. Tests point it at a temp directory.
@@ -28,12 +30,13 @@ var gitCacheDir = os.UserCacheDir
 var localRemotes map[string]string
 
 // sources is every source compile reads under root: the builtins, then the
-// git sources stele.json lists, which treat their pins as mode says.
-func sources(root string, mode gitrepo.Mode) ([]source.Source, error) {
+// sources stele.json lists: git sources, which treat their pins as mode
+// says, and external ones, whose stderr goes to stderr.
+func sources(root string, mode gitrepo.Mode, stderr io.Writer) ([]source.Source, error) {
 	f := gitexec.NewFetcher(root)
 	f.CacheDir = gitCacheDir
 	f.Remotes = localRemotes
-	return plugin.Sources(root, f, mode)
+	return plugin.Sources(root, f, mode, pluginexec.New(root, stderr))
 }
 
 // printPins says, for each pinned source, which commit it was read at, and

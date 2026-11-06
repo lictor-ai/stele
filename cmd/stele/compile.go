@@ -42,7 +42,7 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 	if update {
 		mode = gitrepo.Update
 	}
-	srcs, err := sources(root, mode)
+	srcs, err := sources(root, mode, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "stele compile: %v\n", err)
 		return exitCantRun

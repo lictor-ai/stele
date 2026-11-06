@@ -73,7 +73,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	var r compile.Result
 	if !none {
 		// The git sources read their pinned commits and never move them (D72).
-		srcs, err := sources(root, gitrepo.Frozen)
+		srcs, err := sources(root, gitrepo.Frozen, stderr)
 		if err != nil {
 			return cantRun("%v", err)
 		}

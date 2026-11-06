@@ -7,12 +7,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lictor-ai/stele/internal/plugin/plugintest"
 )
 
 // TestMain makes every git the tests run, and every git stele runs for
 // them, hermetic: a global config made here and no system config, so the
-// user's settings, hooks and credential helpers never apply.
+// user's settings, hooks and credential helpers never apply. Started under a
+// plugin's name, this test binary is the fake plugin (plugintest).
 func TestMain(m *testing.M) {
+	if plugintest.Is(os.Args[0]) {
+		os.Exit(plugintest.Serve(os.Args[0], os.Stdin, os.Stdout, os.Stderr))
+	}
 	os.Exit(testMain(m))
 }
 
