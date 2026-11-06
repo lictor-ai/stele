@@ -59,6 +59,22 @@ func TestPatchEndInsideAHunk(t *testing.T) {
 	}
 }
 
+// A patch stele cannot cut out of its command leaves the command to be read
+// as a shell command too; one it can cut out does not.
+func TestShellPatchKeepsTheCommand(t *testing.T) {
+	cwd := t.TempDir()
+	for command, keep := range map[string]bool{
+		"apply_patch '" + bypass + "'":                     false,
+		"cd . && apply_patch '" + bypass + "' && echo > a": true,
+	} {
+		data, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "cwd": cwd, "tool_name": "Bash", "tool_input": map[string]any{"command": command}})
+		got, _ := Parse(data)
+		if (got.Command != "") != keep || got.Kind != adapter.PreTool || len(got.Edits) == 0 {
+			t.Errorf("%.40q: command %q, kind %v, %d edits", command, got.Command, got.Kind, len(got.Edits))
+		}
+	}
+}
+
 // A marker or header repeated where Codex would not end the patch never
 // hides what follows.
 func TestPatchMarkersInside(t *testing.T) {
