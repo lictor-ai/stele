@@ -111,6 +111,75 @@ func TestStatusPluginsOnAndOffline(t *testing.T) {
 	}
 }
 
+// A key that is there but cannot be read is said, not taken for no key.
+func TestStatusCorruptKey(t *testing.T) {
+	compiled(t, rules)
+	dir, err := keyDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "key"), []byte("not a key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runCmd("status")
+	if code != exitOK || !strings.Contains(out, "key cannot be read") {
+		t.Errorf("status = %d, %q, %q", code, out, errOut)
+	}
+}
+
+// A plugin that is there but refused shows why, not "not found".
+func TestStatusTextShowsTheReason(t *testing.T) {
+	no := false
+	st := status.Status{Plugins: []status.Plugin{{Kind: "checker", Name: "lint", Found: &no,
+		Error: `checker "lint": refused: it is inside the project`}}}
+	var b strings.Builder
+	printStatus(&b, t.TempDir(), st)
+	if !strings.Contains(b.String(), "refused: it is inside the project") || strings.Contains(b.String(), "not found") {
+		t.Errorf("text = %q", b.String())
+	}
+}
+
+// After a pull that changed stele.lock, status says the index is stale, as
+// the hook would rebuild it.
+func TestStatusStaleAfterALockChange(t *testing.T) {
+	root := compiled(t, rules)
+	path := filepath.Join(root, "stele.lock")
+	data, _ := os.ReadFile(path)
+	id := projectID(t, root)
+	if err := os.WriteFile(path, []byte(strings.Replace(string(data), id, "00000000-0000-4000-8000-000000000000", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := statusJSON(t)
+	if st.Index.Fresh == nil || *st.Index.Fresh {
+		t.Errorf("index = %+v, want stale", st.Index)
+	}
+	if !strings.Contains(strings.Join(st.Notes, "\n"), id) {
+		t.Errorf("notes = %v, want the project mismatch", st.Notes)
+	}
+}
+
+// stele status writes nothing: not the tree, not .stele/, not the key.
+func TestStatusWritesNothing(t *testing.T) {
+	installPlugin(t, filepath.Join(t.TempDir(), "bin"), "source", "good")
+	root := project(t, hookRules)
+	withPluginSource(t, root, "good", "v1", pluginRule)
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile: %s", errOut)
+	}
+	dir, _ := keyDir()
+	for _, args := range [][]string{{"status"}, {"status", "--offline"}, {"status", "--format", "json"}} {
+		before, keyBefore := snapshot(t, root), snapshot(t, dir)
+		logBefore, _ := os.ReadFile(filepath.Join(root, ".stele", "log.jsonl"))
+		if code, _, errOut := runCmd(args...); code != exitOK {
+			t.Fatalf("%v = %d: %s", args, code, errOut)
+		}
+		logAfter, _ := os.ReadFile(filepath.Join(root, ".stele", "log.jsonl"))
+		if snapshot(t, root) != before || snapshot(t, dir) != keyBefore || string(logAfter) != string(logBefore) {
+			t.Errorf("%v wrote something", args)
+		}
+	}
+}
+
 func TestStatusBadArgs(t *testing.T) {
 	project(t, rules)
 	for _, args := range [][]string{{"status", "--format", "xml"}, {"status", "extra"}} {

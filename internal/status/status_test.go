@@ -152,6 +152,68 @@ func TestStatusIndexStale(t *testing.T) {
 	}
 }
 
+// A listed source that is missing is still the source the index holds rules
+// of: its freshness is unknown, and the index is not stale for it.
+func TestStatusMissingSourceIsUnknown(t *testing.T) {
+	root := t.TempDir()
+	k := key(t)
+	saveIndex(t, root, k, map[string]string{"stelemd": "fp1", "docs": "d1"},
+		index.Entry{ID: "r1", Source: "stelemd"}, index.Entry{ID: "r2", Source: "docs"})
+	st, err := Collect(context.Background(), root, Input{
+		Items: []plugin.Item{
+			{Kind: plugin.KindSource, Name: "stelemd", Builtin: true, Source: fakeSource{"stelemd", "fp1"}},
+			{Kind: plugin.KindSource, Name: "docs", Err: &plugin.Error{Kind: plugin.KindSource, Name: "docs", Err: plugin.ErrPluginNotFound}},
+		},
+		Key: k,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range st.Notes {
+		if strings.Contains(n, "no longer lists") {
+			t.Errorf("note %q for a source stele.json lists", n)
+		}
+	}
+	var docs *Source
+	for i := range st.Sources {
+		if st.Sources[i].Name == "docs" {
+			docs = &st.Sources[i]
+		}
+	}
+	if docs == nil || docs.Rules != 1 || docs.Fresh != nil {
+		t.Errorf("docs = %+v, want 1 rule, freshness unknown", docs)
+	}
+	if st.Index.Fresh != nil {
+		t.Errorf("index fresh = %v, want unknown", *st.Index.Fresh)
+	}
+}
+
+// The index is stale when stele.lock no longer agrees with it, as the hook
+// sees it, even with every fingerprint unchanged: a pull changed the lock.
+func TestStatusStaleWhenTheLockDisagrees(t *testing.T) {
+	root := t.TempDir()
+	k := key(t)
+	saveIndex(t, root, k, map[string]string{"stelemd": "fp1"}, index.Entry{ID: "r1", Source: "stelemd", BodyHash: "h1"})
+	write(t, root, "stele.lock", `{"version": 1, "project": "p2", "rules": [{"id": "r1", "source": "stelemd", "hash": "h1", "position": 0}]}`)
+	st, err := Collect(context.Background(), root, Input{
+		Items: []plugin.Item{{Kind: plugin.KindSource, Name: "stelemd", Builtin: true, Source: fakeSource{"stelemd", "fp1"}}},
+		Key:   k,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Index.Fresh == nil || *st.Index.Fresh {
+		t.Errorf("index fresh = %v, want stale", st.Index.Fresh)
+	}
+	found := false
+	for _, n := range st.Notes {
+		found = found || strings.Contains(n, "p1") && strings.Contains(n, "p2")
+	}
+	if !found {
+		t.Errorf("notes = %v, want the project mismatch", st.Notes)
+	}
+}
+
 func TestStatusNoKeyNoIndex(t *testing.T) {
 	st, err := Collect(context.Background(), t.TempDir(), Input{})
 	if err != nil {
