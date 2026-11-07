@@ -52,6 +52,23 @@ func checkers(root string, stderr io.Writer) (map[string]check.Checker, error) {
 	return plugin.Checkers(root, pluginexec.New(root, stderr))
 }
 
+// inventory is every plugin of the install under root, for stele status:
+// with offline nothing is looked up and no runner is handed out; else each
+// external plugin is found, and the runner returned starts them. Only
+// runStatus calls it.
+func inventory(root string, offline bool, stderr io.Writer) ([]plugin.Item, plugin.Runner, error) {
+	f := gitexec.NewFetcher(root)
+	f.CacheDir = gitCacheDir
+	f.Remotes = localRemotes
+	if offline {
+		items, err := plugin.Inventory(root, f, nil)
+		return items, nil, err
+	}
+	run := pluginexec.New(root, stderr)
+	items, err := plugin.Inventory(root, f, run)
+	return items, run, err
+}
+
 // interruptible is the context of a command that runs plugins: Ctrl-C, or a
 // signal to stop, cancels it, which stops the plugin and what it started,
 // and the call says it was cancelled (D80). The hook never uses it.

@@ -327,6 +327,40 @@ Too little data to judge the rules: 6 turns with a write logged, stats need 30. 
 
 `stele stats` exits 0, or 2 when it can't run. It reads the log, `stele.md` and, for [shared rules](#shared-rules-from-another-repository), the rules from your last `stele compile`; it writes nothing and makes no network call. Lines it can't use are counted at the end: lines not signed on this machine, lines from another project, lines in a newer format.
 
+## What's installed: stele status
+
+`stele status` tells you what stele has set up in a repository, and whether its rules are up to date:
+
+```
+$ stele status
+stele devel in /home/you/project, project 0f1f82a6-f72c-4110-8133-1867a9f868b3
+
+agents
+  claude-code  hooks in .claude/settings.json (devel), remind on, check on, .claude/rules/stele-rules.md
+  codex        not set up
+
+plugins
+  source   stelemd                        built in
+  checker  regex                          built in
+  checker  semgrep                        stele-checker-semgrep not found on PATH
+
+sources
+  stelemd                                1 rule, fresh
+
+index: fresh
+```
+
+- **agents**: for each agent, whether stele's hooks are installed, the version they were installed by, the two switches, and whether the rules file holds stele's rules.
+- **plugins**: the built-in ones, and each [plugin](#plugins) `stele.json` lists, with the version it reports or what is wrong with it.
+- **sources**: how many rules each source has in the index, and whether it changed since the last `stele compile`. **index** is fresh when every source is.
+
+| Flag | |
+|---|---|
+| `--format json` | The same as JSON, with `"v": 1` and the project id |
+| `--offline` | Start no plugin: plugin versions, and whether a plugin source is fresh, show as unknown |
+
+`stele status` writes nothing. To learn a plugin's version it runs the plugin, and it asks each plugin source whether it changed, unless you pass `--offline`. It exits 0 whenever it could describe the install, a missing plugin included, and 2 when it can't run (no project, or a `stele.json` it can't read).
+
 ## CI: stele check
 
 | Command | Checks |
@@ -724,6 +758,8 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 **A teammate without the plugin can't compile or check.** A listed source plugin missing from `PATH` is exit 2 for `stele compile` and `stele check`, and a note at `stele init`; a listed checker plugin missing is exit 2 for `stele check`.
 
 **A checker plugin never runs after a write.** Its rules are shown to the agent like any rule, but only `stele check` checks them, so the agent hears of their violations from CI, not right after it writes.
+
+**`stele status` runs plugins.** It asks each listed plugin its version and each plugin source whether it changed, so a plugin runs as it would at `stele compile`. `stele status --offline` runs none.
 
 ### Projects
 

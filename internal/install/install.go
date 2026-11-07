@@ -247,12 +247,19 @@ func Init(a adapter.Adapter, root, version string, set Set) (changes, notes []st
 // InstalledSwitches returns the switches agent a's stele hooks under root
 // carry. ok is false when there are none, or the settings cannot be read.
 func InstalledSwitches(a adapter.Adapter, root string) (sw adapter.Switches, ok bool) {
+	_, sw, ok = Hooks(a, root)
+	return sw, ok
+}
+
+// Hooks returns the version stamped on agent a's stele hooks under root and
+// their switches. ok is false when there are none, or the settings cannot be
+// read.
+func Hooks(a adapter.Adapter, root string) (version string, sw adapter.Switches, ok bool) {
 	data, _, err := readSettings(filepath.Join(root, a.SettingsFile()))
 	if err != nil {
-		return adapter.Switches{}, false
+		return "", adapter.Switches{}, false
 	}
-	_, sw, ok = a.Installed(data)
-	return sw, ok
+	return a.Installed(data)
 }
 
 // Uninstall removes what Init and stele compile wrote for agent a: stele's
