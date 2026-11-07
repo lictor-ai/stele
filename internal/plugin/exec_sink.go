@@ -36,15 +36,21 @@ type Sink struct {
 	config  json.RawMessage
 	timeout time.Duration
 	run     Runner
+	missing error // not found or refused on PATH
 
 	once sync.Once
 	derr error
 }
 
-// Sinks is every sink stele.json lists under root, in its order, each found
-// on PATH with run, so a missing one fails before anything is sent. There
-// is no built-in sink. Only stele push, stele check --push and stele status
-// call it; without a runner it fails.
+// Missing is why the sink cannot run: not found on PATH, or refused. nil
+// for a sink that was found.
+func (s *Sink) Missing() error { return s.missing }
+
+// Sinks is every sink stele.json lists under root, in its order, each looked
+// up on PATH with run. A sink not found or refused is still listed, with its
+// Missing error, which its Push returns: the others can still be pushed to.
+// A bad entry fails the list. There is no built-in sink. Without a runner it
+// fails.
 func Sinks(root string, run Runner) ([]*Sink, error) {
 	msgs, err := listedRaw(root, "sinks", ErrSinks)
 	if err != nil {
@@ -57,18 +63,21 @@ func Sinks(root string, run Runner) ([]*Sink, error) {
 		if err := strict(m, &e); err != nil {
 			return nil, fmt.Errorf("%w: sinks[%d]: %v", ErrSinks, i, err)
 		}
-		p, err := external(KindSink, "sinks", entry{Name: e.Name, Config: e.Config, Timeout: e.Timeout}, PushTimeout, run)
-		if err != nil {
-			var pe *Error
-			if errors.As(err, &pe) {
-				return nil, err
-			}
-			return nil, fmt.Errorf("%w: sinks[%d]: %v", ErrSinks, i, err)
-		}
 		if j, ok := seen[e.Name]; ok {
 			return nil, fmt.Errorf("%w: sinks[%d]: %q is listed twice, as sinks[%d]", ErrSinks, i, e.Name, j)
 		}
 		seen[e.Name] = i
+		p, err := external(KindSink, "sinks", entry{Name: e.Name, Config: e.Config, Timeout: e.Timeout}, PushTimeout, run)
+		if err != nil {
+			var pe *Error
+			if errors.As(err, &pe) {
+				// Not found or refused: this sink fails, the others still
+				// get their lines (D83).
+				out = append(out, &Sink{Name: e.Name, ShareBriefs: e.ShareBriefs, missing: err})
+				continue
+			}
+			return nil, fmt.Errorf("%w: sinks[%d]: %v", ErrSinks, i, err)
+		}
 		out = append(out, &Sink{Name: p.name, ShareBriefs: e.ShareBriefs, bin: p.bin, config: p.config, timeout: p.timeout, run: run})
 	}
 	return out, nil
@@ -102,6 +111,9 @@ func (s *Sink) fail(op string, err error) error {
 // Push hands records to the sink, for project. accepted is how many it
 // took: the first accepted of them, in order (D82).
 func (s *Sink) Push(ctx context.Context, project string, records []json.RawMessage) (accepted int, err error) {
+	if s.missing != nil {
+		return 0, s.missing
+	}
 	s.once.Do(func() { _, s.derr = describe(ctx, s.run, KindSink, s.Name, s.bin) })
 	if s.derr != nil {
 		return 0, s.derr

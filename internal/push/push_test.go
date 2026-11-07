@@ -225,6 +225,89 @@ func TestPushLockBusy(t *testing.T) {
 	}
 }
 
+// The lock is refreshed before each sink call, so a call that outlasts the
+// stale time is not taken over by a second push.
+func TestPushRefreshesTheLock(t *testing.T) {
+	root := project(t)
+	old := maxBatch
+	maxBatch = 1
+	t.Cleanup(func() { maxBatch = old })
+	log(t, root, "p1", "a", "b")
+	lockPath := filepath.Join(root, index.Dir, LockName)
+	long := time.Now().Add(-time.Hour)
+	calls := 0
+	target := Target{Name: "s", Push: func(context.Context, string, []json.RawMessage) (int, error) {
+		calls++
+		info, err := os.Stat(lockPath)
+		if err != nil {
+			t.Fatalf("no lock during a call: %v", err)
+		}
+		if time.Since(info.ModTime()) > time.Minute {
+			t.Errorf("call %d: the lock is %v old: not refreshed", calls, time.Since(info.ModTime()))
+		}
+		// The call takes "an hour".
+		os.Chtimes(lockPath, long, long)
+		return 1, nil
+	}}
+	if _, err := Run(context.Background(), root, testKey, "p1", []Target{target}, now); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Errorf("%d calls, want 2", calls)
+	}
+}
+
+// A cursor never moves back: one further on was written by another push.
+func TestCursorNeverMovesBack(t *testing.T) {
+	root := project(t)
+	ahead := &cursor{V: cursorVersion, Sink: "s", Project: "p1", Pos: journal.Pos{File: "f", Offset: 100, Last: "x"}, Pushed: 5}
+	if err := saveCursor(root, testKey, ahead); err != nil {
+		t.Fatal(err)
+	}
+	behind := *ahead
+	behind.Pos.Offset, behind.Pushed = 50, 3
+	if err := saveCursor(root, testKey, &behind); !errors.Is(err, ErrCursor) {
+		t.Errorf("err = %v, want ErrCursor", err)
+	}
+	if c, _ := loadCursor(root, testKey, "s", "p1"); c.Pushed != 5 {
+		t.Errorf("cursor = %+v, moved back", c)
+	}
+}
+
+func TestCursorOfAnotherProject(t *testing.T) {
+	root := project(t)
+	log(t, root, "p1", "a")
+	run(t, root, &fake{name: "s"})
+	f := &fake{name: "s"}
+	res, err := Run(context.Background(), root, testKey, "p2", []Target{f.target()}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(res.Sinks[0].Err, ErrCursor) || !strings.Contains(res.Sinks[0].Err.Error(), "p1") || f.calls != 0 {
+		t.Errorf("result = %+v, %d calls", res.Sinks[0], f.calls)
+	}
+}
+
+// After two rotations with nothing new, the gap is said once.
+func TestPushGapSaidOnce(t *testing.T) {
+	root := project(t)
+	log(t, root, "p1", "a")
+	run(t, root, &fake{name: "s"})
+	dir := filepath.Join(root, index.Dir)
+	if err := os.Remove(filepath.Join(dir, journal.FileName)); err != nil {
+		t.Fatal(err)
+	}
+	if res := run(t, root, &fake{name: "s"}); !res.Sinks[0].Gap {
+		t.Fatalf("first push after the log went = %+v, want a gap", res.Sinks[0])
+	}
+	if res := run(t, root, &fake{name: "s"}); res.Sinks[0].Gap {
+		t.Errorf("second push = %+v, the gap said again", res.Sinks[0])
+	}
+	if c, _ := loadCursor(root, testKey, "s", "p1"); !c.TS.Equal(at) {
+		t.Errorf("cursor TS = %v: changed with nothing sent", c.TS)
+	}
+}
+
 func TestPending(t *testing.T) {
 	root := project(t)
 	log(t, root, "p1", "a", "b")

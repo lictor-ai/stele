@@ -2,12 +2,14 @@ package journal
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/lictor-ai/stele/internal/index"
+	"github.com/lictor-ai/stele/internal/safefile"
 )
 
 // sessions reads the sessions of the lines after pos, with the pos of the
@@ -80,7 +82,7 @@ func TestReadAfterResumes(t *testing.T) {
 func TestReadAfterAcrossRotation(t *testing.T) {
 	root := project(t)
 	appendSessions(t, root, "a", "b")
-	_, pos, _, _ := sessions(t, root, &Pos{}) // a cursor of nothing: a gap, everything
+	_, pos, _, _ := sessions(t, root, &Pos{}) // a cursor of nothing: from the start
 	appendSessions(t, root, "c")
 	rotate(t, root)
 	appendSessions(t, root, "d")
@@ -120,6 +122,57 @@ func TestReadAfterEditedFileScansForTheLine(t *testing.T) {
 	got, _, _, gap := sessions(t, root, pos)
 	if strings.Join(got, ",") != "c" || gap {
 		t.Errorf("got %v, gap %v; want c", got, gap)
+	}
+}
+
+func readAfterErr(root string, after *Pos) error {
+	_, _, err := ReadAfter(root, testKey, after, func(Kind, []byte, []byte, Pos) error { return nil })
+	return err
+}
+
+// A cursor whose line was edited out of its file is an error, not a reread.
+func TestReadAfterLineGoneIsAnError(t *testing.T) {
+	root := project(t)
+	appendSessions(t, root, "a", "b")
+	_, pos, _, _ := sessions(t, root, nil)
+	path := filepath.Join(root, index.Dir, FileName)
+	data, _ := os.ReadFile(path)
+	first, _, _ := strings.Cut(string(data), "\n")
+	if err := os.WriteFile(path, []byte(first+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := readAfterErr(root, pos); !errors.Is(err, ErrCursorLost) {
+		t.Errorf("err = %v, want ErrCursorLost", err)
+	}
+}
+
+// Two files starting with the same line cannot be told apart.
+func TestReadAfterSameFirstLineIsAnError(t *testing.T) {
+	root := project(t)
+	appendSessions(t, root, "a")
+	dir := filepath.Join(root, index.Dir)
+	data, _ := os.ReadFile(filepath.Join(dir, FileName))
+	if err := os.WriteFile(filepath.Join(dir, Rotated), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := readAfterErr(root, &Pos{File: "x", Offset: 1, Last: "y"}); !errors.Is(err, ErrCursorLost) {
+		t.Errorf("err = %v, want ErrCursorLost", err)
+	}
+}
+
+// A log file too large to read may hold the cursor: an error, not a gap.
+func TestReadAfterTooLargeIsAnError(t *testing.T) {
+	root := project(t)
+	appendSessions(t, root, "a")
+	_, pos, _, _ := sessions(t, root, nil)
+	rotate(t, root)
+	appendSessions(t, root, "b")
+	old := maxRead
+	f, _ := os.Stat(filepath.Join(root, index.Dir, Rotated))
+	maxRead = f.Size() - 1
+	t.Cleanup(func() { maxRead = old })
+	if err := readAfterErr(root, pos); !errors.Is(err, safefile.ErrTooLarge) {
+		t.Errorf("err = %v, want ErrTooLarge", err)
 	}
 }
 

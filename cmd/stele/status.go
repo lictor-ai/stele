@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"strings"
 	"time"
 
@@ -47,8 +49,11 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		return cantRun("%v", err)
 	}
 	in := status.Input{Version: binaryVersion(), Agents: agents, Items: items, Run: run}
-	if key, err := loadExistingKey(); err == nil {
+	switch key, err := loadExistingKey(); {
+	case err == nil:
 		in.Key = key
+	case !errors.Is(err, fs.ErrNotExist):
+		in.KeyError = err
 	}
 	in.Sinks = statusSinks(root, in.Key)
 	ctx, stop := interruptible()
@@ -102,10 +107,10 @@ func printStatus(w io.Writer, root string, st status.Status) {
 		switch {
 		case p.Builtin && p.Error == "":
 			state = "built in"
-		case p.Found != nil && !*p.Found:
-			state = plugin.Exe(p.Kind, p.Name) + " not found on PATH"
 		case p.Error != "":
 			state = p.Error
+		case p.Found != nil && !*p.Found:
+			state = plugin.Exe(p.Kind, p.Name) + " not found on PATH"
 		case p.Found == nil:
 			state = "not looked up (--offline)"
 		default:
@@ -158,18 +163,19 @@ func statusSinks(root string, key sign.Key) []status.Sink {
 	if err != nil {
 		return []status.Sink{{Name: "sinks", Error: err.Error()}}
 	}
-	project := ""
-	if f, err := lock.Load(root); err == nil {
-		project = f.Project
-	}
+	f, lerr := lock.Load(root)
 	var out []status.Sink
 	for _, name := range names {
 		s := status.Sink{Name: name}
 		switch {
+		case lerr != nil:
+			s.Error = lerr.Error()
+		case f.Project == "":
+			s.Error = "stele.lock has no project id yet: run stele compile"
 		case key == nil:
 			s.Error = "no log on this machine"
 		default:
-			n, last, err := push.Pending(root, key, project, name)
+			n, last, err := push.Pending(root, key, f.Project, name)
 			s.Pending = n
 			if err != nil {
 				s.Error = err.Error()

@@ -68,6 +68,13 @@ func Lock(name string, wait, stale time.Duration) (unlock func(), err error) {
 	}
 }
 
+// Refresh marks the lock file name as still held, so a holder that keeps it
+// past its stale time is not taken over. It touches only the file's time.
+func Refresh(name string) error {
+	t := time.Now()
+	return os.Chtimes(name, t, t)
+}
+
 // create makes the lock file exclusively, holding token.
 func create(name, token string) error {
 	f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)

@@ -105,6 +105,32 @@ func TestPushExitCodes(t *testing.T) {
 	}
 }
 
+// A sink missing from PATH fails; the others still get their lines (D83).
+func TestPushOneSinkMissingOthersPushed(t *testing.T) {
+	installPlugin(t, filepath.Join(t.TempDir(), "bin"), "sink", "good")
+	root := pushProject(t)
+	out := filepath.Join(t.TempDir(), "received.jsonl")
+	writeAt(t, root, "stele.json", `{"sinks": [{"name": "missing"}, {"name": "good", "config": {"out": `+jsonString(out)+`}}]}`+"\n")
+	code, stdout, errOut := runCmd("push")
+	if code != exitCantRun || !strings.Contains(errOut, "stele-sink-missing not found") {
+		t.Errorf("push = %d, %q", code, errOut)
+	}
+	if !strings.Contains(stdout, "good: sent 3 lines") || len(received(t, out)) != 3 {
+		t.Errorf("stdout = %q, %d received; want the good sink pushed", stdout, len(received(t, out)))
+	}
+}
+
+// An unreadable stele.lock is said in status, not taken for nothing pending.
+func TestStatusSinksBadLock(t *testing.T) {
+	root := pushProject(t)
+	withSink(t, root, "good", filepath.Join(t.TempDir(), "x"), "")
+	writeAt(t, root, "stele.lock", "<<<<<<< conflict\n")
+	st := statusJSON(t, "--offline")
+	if len(st.Sinks) != 1 || st.Sinks[0].Error == "" {
+		t.Errorf("sinks = %+v, want the lock's error", st.Sinks)
+	}
+}
+
 func TestPushNoKeyNoLog(t *testing.T) {
 	installPlugin(t, filepath.Join(t.TempDir(), "bin"), "sink", "good")
 	root := project(t, rules)

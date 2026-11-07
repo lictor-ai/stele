@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 
 	"github.com/lictor-ai/stele/internal/index"
+	"github.com/lictor-ai/stele/internal/safefile"
 	"github.com/lictor-ai/stele/internal/sign"
 )
 
@@ -27,13 +29,22 @@ type Pos struct {
 // ReadAfter calls fn with each line of root's log that key signed and that
 // comes after after, oldest first: line is the signed line as written,
 // without its newline, body its JSON without the MAC, and at the Pos just
-// past it. A nil after reads the whole log. When after's file is no longer
-// there (the log rotated twice since, or was deleted), the whole log is read
-// and gap is true. A line that does not verify is skipped and counted in bad.
+// past it. A nil after, or one with no File, reads the whole log. When
+// after's file is no longer there (the log rotated twice since, or was
+// deleted), the whole log is read and gap is true. A line that does not
+// verify is skipped and counted in bad.
+//
+// It is an error, and nothing is read, when after cannot be placed for sure:
+// a log file too large to read may hold it (ErrTooLarge), both files start
+// with the same line (ErrCursorLost), or its file is there but its line is
+// not (ErrCursorLost: the log was edited).
 //
 // Both files are read under the writers' lock, which is released before fn
 // is called: what fn does never holds up the hook.
 func ReadAfter(root string, key sign.Key, after *Pos, fn func(kind Kind, line, body []byte, at Pos) error) (bad int, gap bool, err error) {
+	if after != nil && after.File == "" {
+		after = nil
+	}
 	dir := filepath.Join(root, index.Dir)
 	if info, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) || (err == nil && !info.IsDir()) {
 		return 0, after != nil, nil
@@ -46,6 +57,9 @@ func ReadAfter(root string, key sign.Key, after *Pos, fn func(kind Kind, line, b
 	for i, f := range files {
 		ids[i] = firstMAC(key, f.data)
 	}
+	if len(ids) == 2 && ids[0] != "" && ids[0] == ids[1] {
+		return bad, false, fmt.Errorf("%w: %s and %s start with the same line", ErrCursorLost, Rotated, FileName)
+	}
 
 	startFile, startAt := 0, int64(0)
 	if after != nil {
@@ -55,11 +69,16 @@ func ReadAfter(root string, key sign.Key, after *Pos, fn func(kind Kind, line, b
 				found = i
 			}
 		}
-		if found < 0 {
-			gap = true
-		} else {
+		switch {
+		case found >= 0:
 			startFile = found
-			startAt, gap = resume(files[found].data, after)
+			if startAt, err = resume(files[found].data, after); err != nil {
+				return bad, false, fmt.Errorf("%w: %s", err, files[found].name)
+			}
+		case unread(files) != "":
+			return bad, false, fmt.Errorf("%s: %w", unread(files), safefile.ErrTooLarge)
+		default:
+			gap = true
 		}
 	}
 
@@ -96,14 +115,28 @@ func ReadAfter(root string, key sign.Key, after *Pos, fn func(kind Kind, line, b
 	return bad, gap, nil
 }
 
+// ErrCursorLost is a position ReadAfter cannot place in the log: its line
+// was edited out, or the files cannot be told apart.
+var ErrCursorLost = errors.New("the log was changed by hand since the last push")
+
+// unread is the name of a log file left unread for its size, or "".
+func unread(files []logFile) string {
+	for _, f := range files {
+		if f.tooLarge {
+			return f.name
+		}
+	}
+	return ""
+}
+
 // resume is where to start reading data, the file after names, to read what
 // comes after after's line. The line is looked for where after says; a file
 // changed by hand since moves it, and then the last copy of the line is
-// looked for. With neither, the whole file is read and gap is true.
-func resume(data []byte, after *Pos) (start int64, gap bool) {
+// looked for. With neither, it is ErrCursorLost.
+func resume(data []byte, after *Pos) (start int64, err error) {
 	if after.Offset > 0 && after.Offset <= int64(len(data)) {
 		if lineEndingAt(data, after.Offset) == after.Last {
-			return after.Offset, false
+			return after.Offset, nil
 		}
 	}
 	var at int64 = -1
@@ -119,9 +152,9 @@ func resume(data []byte, after *Pos) (start int64, gap bool) {
 		off = end
 	}
 	if at < 0 {
-		return 0, true
+		return 0, fmt.Errorf("%w: its last line sent is no longer in", ErrCursorLost)
 	}
-	return at, false
+	return at, nil
 }
 
 // lineEndingAt is the MAC of the line data holds just before end.

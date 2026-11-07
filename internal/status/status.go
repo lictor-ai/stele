@@ -7,14 +7,17 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/lictor-ai/stele/internal/adapter"
+	"github.com/lictor-ai/stele/internal/compile"
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/install"
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/safefile"
 	"github.com/lictor-ai/stele/internal/sign"
+	"github.com/lictor-ai/stele/internal/source/gitrepo"
 )
 
 // Version is the format version of stele status --format json (D50).
@@ -29,6 +32,9 @@ type Input struct {
 	// each external source. nil is --offline: nothing starts.
 	Run plugin.Runner
 	Key sign.Key // this machine's key; nil when there is none
+	// KeyError is why the key could not be read, when there is one but it
+	// cannot be used. Key is then nil.
+	KeyError error
 	// Sinks are the sinks stele.json lists, with the lines waiting for each.
 	Sinks []Sink
 }
@@ -124,9 +130,13 @@ func Collect(ctx context.Context, root string, in Input) (Status, error) {
 
 	idx, present, valid := loadIndex(root, in.Key)
 	st.Index.Present, st.Index.Valid = present, valid
+	if in.KeyError != nil {
+		note("this machine's key cannot be read: " + in.KeyError.Error())
+	}
 	switch {
 	case !present:
 		note("no index: run stele compile")
+	case in.Key == nil && in.KeyError != nil:
 	case in.Key == nil:
 		note("no key on this machine: the index cannot be checked")
 	case !valid:
@@ -138,12 +148,21 @@ func Collect(ctx context.Context, root string, in Input) (Status, error) {
 	}
 	known, fresh := valid, true
 	seen := map[string]bool{}
+	badGit := false
 	for _, it := range in.Items {
-		if it.Kind != plugin.KindSource || it.Err != nil {
+		if it.Kind != plugin.KindSource {
+			continue
+		}
+		if it.Err != nil && it.Name == gitrepo.Name {
+			// A git entry stele cannot read has no source name: the index's
+			// git sources may be its rules.
+			badGit = true
 			continue
 		}
 		s := Source{Name: it.Name, Rules: counts[it.Name], Indexed: idx.Sources[it.Name]}
-		if it.Source != nil {
+		if it.Err != nil {
+			note(it.Name + ": " + it.Err.Error())
+		} else if it.Source != nil {
 			s.Name = it.Source.Name()
 			s.Rules, s.Indexed = counts[s.Name], idx.Sources[s.Name]
 			if fp, err := it.Source.Fingerprint(ctx, root); err != nil {
@@ -169,8 +188,22 @@ func Collect(ctx context.Context, root string, in Input) (Status, error) {
 	}
 	sort.Strings(gone)
 	for _, name := range gone {
+		if badGit && strings.HasPrefix(name, gitrepo.Name+":") {
+			known = false
+			continue
+		}
 		note("the index holds rules of " + name + ", which stele.json no longer lists")
 		fresh = false
+	}
+	// The index is stale, as the hook sees it, when stele.lock no longer
+	// agrees with it, whatever the fingerprints say (compile.EnsureFresh).
+	if valid && !compile.LockAgrees(root, idx) {
+		fresh = false
+		if st.Project != "" && idx.Project != st.Project {
+			note("the index is for project " + idx.Project + ", stele.lock for " + st.Project + ": run stele compile")
+		} else {
+			note("stele.lock no longer agrees with the index: run stele compile")
+		}
 	}
 	if valid && (known || !fresh) {
 		st.Index.Fresh = &fresh
