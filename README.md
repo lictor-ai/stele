@@ -373,7 +373,7 @@ Then run `stele push`:
 
 ```
 $ stele push
-file: sent 2 lines
+file: sent 4 lines
 $ stele push
 file: sent 0 lines
 ```
@@ -384,7 +384,7 @@ file: sent 0 lines
 - **A line can arrive twice,** if stele stops between the sink's answer and saving how far it got. Each record carries its `mac`, a key the sink can drop a repeat by.
 - **A sink that fails stops for that run;** the others still get theirs. The next `stele push` tries again from where it stopped.
 
-`stele push` exits 0 when every sink took everything (or there was nothing to send, or no sink), 1 when a sink took only part, and 2 when stele or a sink couldn't run: a sink missing from `PATH`, a crash, a bad answer, or another `stele push` running. stele runs a sink only from `stele push` and `stele check --push`, never from the hook. It opens no connection itself: where the lines go is the sink's doing. To write a sink, see [the plugin protocol](docs/plugin-protocol.md#push-sink).
+`stele push` exits 0 when every sink took everything (or there was nothing to send, or no sink), 1 when a sink took only part, and 2 when stele or a sink couldn't run: a sink missing from `PATH` (the others still get their lines), a crash, a bad answer, or another `stele push` running. stele runs a sink only from `stele push`, never from the hook. It opens no connection itself: where the lines go is the sink's doing. To write a sink, see [the plugin protocol](docs/plugin-protocol.md#push-sink).
 
 `share_briefs` is accepted on a sink and does nothing yet: no line holds a brief.
 
@@ -819,6 +819,8 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **Lines can rotate out before they're pushed.** The log keeps one older file; a line that rotated out twice since the last `stele push` is never sent, and `stele push` says some lines were lost.
 
+**An edited log stops the push to a sink.** If the last line a sink got is no longer in the log, or a log file is too large to read, `stele push` won't guess where to go on: that sink fails (exit 2) until you delete `.stele/push/<name>.json`, which sends the whole log again.
+
 **A sink is your program.** stele checks where it comes from, as for any plugin, not what it does with the lines. A cloned project's `stele.json` can name a sink you installed, and `stele push` then sends that project's log to it.
 
 **`share_briefs` does nothing yet.** No log line holds a brief.
@@ -858,7 +860,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **Only `stele publish` sends anything over the network, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com.
 
-**The log goes only to a sink you list, when you run `stele push` or `stele check --push`.** stele hands the sink the lines and opens no connection itself; what the sink does with them, network included, is its own. A sink runs as you, like any [plugin](#plugins).
+**The log goes only to a sink you list, when you run `stele push`.** stele hands the sink the lines and opens no connection itself; what the sink does with them, network included, is its own. A sink runs as you, like any [plugin](#plugins).
 
 **Shared rules are fetched, never sent.** `stele compile`, `stele check` and `stele init` connect to each `repo` under `sources` when they need a commit they don't have. git sends what a fetch sends: the refs and commits it wants and has of that repository, and your login for that host through your own git setup. Nothing of the project goes with it. The hook and `stele stats` never connect. stele itself makes no other network call; a [plugin](#plugins) you install may. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 

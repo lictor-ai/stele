@@ -1,4 +1,4 @@
-// Package push sends the log to sinks for stele push and stele check --push
+// Package push sends the log to sinks for stele push
 // (ADR-0014). It never prints, and starts nothing itself: a Target's Push is
 // a sink handed in by cmd/stele.
 package push
@@ -33,16 +33,24 @@ const (
 	cursorVersion = 1
 	cursorDir     = "push"
 	maxCursor     = 64 << 10
-	lockStale     = 10 * time.Minute
+	// lockStale is past the longest one sink call may take (an entry's
+	// timeout, at most 30 minutes): the lock is refreshed before each call
+	// and after each batch, so a live push is never taken over.
+	lockStale = 35 * time.Minute
 )
 
 var (
 	// ErrBusy is another stele push holding the lock.
 	ErrBusy = errors.New("another stele push is running here")
-	// ErrCursor is a cursor file that does not verify: it is never taken
-	// for a fresh start, which would send every line again.
-	ErrCursor = errors.New("the push cursor is not signed by this machine's key")
+	// ErrCursor is a cursor file stele cannot use: it is never taken for a
+	// fresh start, which would send every line again.
+	ErrCursor = errors.New("the push cursor cannot be used")
 )
+
+// cursorName is a sink's cursor file as the user sees it.
+func cursorName(sink string) string {
+	return filepath.ToSlash(filepath.Join(index.Dir, cursorDir, sink+".json"))
+}
 
 // Target is one sink: its name, and how to hand it records.
 type Target struct {
@@ -82,8 +90,9 @@ func cursorPath(root, sink string) string {
 
 func purpose(sink string) string { return "push:" + sink }
 
-// loadCursor reads sink's cursor; nil when there is none yet.
-func loadCursor(root string, key sign.Key, sink string) (*cursor, error) {
+// loadCursor reads sink's cursor for project; nil when there is none yet.
+// One signed for another project, or not by key, is ErrCursor.
+func loadCursor(root string, key sign.Key, sink, project string) (*cursor, error) {
 	data, err := safefile.ReadRegular(cursorPath(root, sink), maxCursor)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -93,16 +102,27 @@ func loadCursor(root string, key sign.Key, sink string) (*cursor, error) {
 	}
 	body, err := key.Open(purpose(sink), data)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s: delete it to send every line again", ErrCursor, filepath.ToSlash(filepath.Join(index.Dir, cursorDir, sink+".json")))
+		return nil, fmt.Errorf("%w: %s is not signed by this machine's key: delete it to send every line again", ErrCursor, cursorName(sink))
 	}
 	var c cursor
 	if err := json.Unmarshal(body, &c); err != nil || c.V != cursorVersion || c.Sink != sink {
-		return nil, fmt.Errorf("%w: %s holds no cursor for %s", ErrCursor, filepath.ToSlash(filepath.Join(index.Dir, cursorDir, sink+".json")), sink)
+		return nil, fmt.Errorf("%w: %s holds no cursor for %s", ErrCursor, cursorName(sink), sink)
+	}
+	if c.Project != "" && c.Project != project {
+		return nil, fmt.Errorf("%w: %s is for project %s, and stele.lock is for %s: delete it to send this project's lines", ErrCursor, cursorName(sink), c.Project, project)
 	}
 	return &c, nil
 }
 
+// saveCursor writes c. It refuses to move a cursor back: one on disk that
+// counts more lines pushed, or is further on in the same file, was written
+// by a push that went further.
 func saveCursor(root string, key sign.Key, c *cursor) error {
+	if old, err := loadCursor(root, key, c.Sink, c.Project); err == nil && old != nil {
+		if old.Pushed > c.Pushed || (old.Pos.File == c.Pos.File && old.Pos.Offset > c.Pos.Offset) {
+			return fmt.Errorf("%w: %s is further on than this push: another push ran", ErrCursor, cursorName(c.Sink))
+		}
+	}
 	if err := safefile.Dir(filepath.Join(root, index.Dir, cursorDir)); err != nil {
 		return err
 	}
@@ -159,19 +179,21 @@ func Run(ctx context.Context, root string, key sign.Key, project string, targets
 		}
 		return res, nil // stele never ran here: no log
 	}
-	unlock, err := safefile.Lock(filepath.Join(dir, LockName), lockWait, lockStale)
+	lockPath := filepath.Join(dir, LockName)
+	unlock, err := safefile.Lock(lockPath, lockWait, lockStale)
 	if err != nil {
 		return res, fmt.Errorf("%w (%v)", ErrBusy, err)
 	}
 	defer unlock()
+	held := func() { _ = safefile.Refresh(lockPath) }
 	for _, t := range targets {
-		res.Sinks = append(res.Sinks, pushOne(ctx, root, key, project, t, now))
+		res.Sinks = append(res.Sinks, pushOne(ctx, root, key, project, t, now, held))
 	}
 	return res, nil
 }
 
-func pushOne(ctx context.Context, root string, key sign.Key, project string, t Target, now func() time.Time) SinkResult {
-	c, err := loadCursor(root, key, t.Name)
+func pushOne(ctx context.Context, root string, key sign.Key, project string, t Target, now func() time.Time, held func()) SinkResult {
+	c, err := loadCursor(root, key, t.Name, project)
 	if err != nil {
 		return SinkResult{Name: t.Name, Err: err}
 	}
@@ -191,7 +213,9 @@ func pushOne(ctx context.Context, root string, key sign.Key, project string, t T
 		for i := range recs {
 			recs[i] = lines[i].rec
 		}
+		held()
 		accepted, err := t.Push(ctx, project, recs)
+		held()
 		if accepted > 0 {
 			c.Pos, c.Pushed, c.TS = lines[accepted-1].at, c.Pushed+accepted, now().UTC()
 			if serr := saveCursor(root, key, c); serr != nil && err == nil {
@@ -210,15 +234,18 @@ func pushOne(ctx context.Context, root string, key sign.Key, project string, t T
 		}
 	}
 	// Everything was sent: lines skipped after the last one need not be
-	// read again.
-	if end != nil && end.Offset != c.Pos.Offset {
+	// read again. After a gap with nothing left to read, the cursor goes back
+	// to the start of the log, so the gap is said once.
+	switch {
+	case end != nil && (end.Offset != c.Pos.Offset || end.File != c.Pos.File):
 		c.Pos = *end
-		if c.TS.IsZero() {
-			c.TS = now().UTC()
-		}
-		if err := saveCursor(root, key, c); err != nil {
-			r.Err = err
-		}
+	case end == nil && r.Gap && c.Pos.File != "":
+		c.Pos = journal.Pos{}
+	default:
+		return r
+	}
+	if err := saveCursor(root, key, c); err != nil {
+		r.Err = err
 	}
 	return r
 }
@@ -237,8 +264,8 @@ func batchLen(lines []line) int {
 	return n
 }
 
-// One hands rec, one record, to each target: stele check --push where
-// there is no log (D84). Nothing is remembered.
+// One hands rec, one record, to each target, and remembers nothing: for a
+// run that has no log to push (D84).
 func One(ctx context.Context, targets []Target, project string, rec json.RawMessage) Result {
 	var res Result
 	for _, t := range targets {
@@ -257,7 +284,7 @@ func One(ctx context.Context, targets []Target, project string, rec json.RawMess
 // when it last pushed (zero for never). It reads, sends and writes nothing
 // else: stele status.
 func Pending(root string, key sign.Key, project, sink string) (n int, last time.Time, err error) {
-	c, err := loadCursor(root, key, sink)
+	c, err := loadCursor(root, key, sink, project)
 	if err != nil {
 		return 0, time.Time{}, err
 	}

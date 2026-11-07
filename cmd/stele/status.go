@@ -163,18 +163,19 @@ func statusSinks(root string, key sign.Key) []status.Sink {
 	if err != nil {
 		return []status.Sink{{Name: "sinks", Error: err.Error()}}
 	}
-	project := ""
-	if f, err := lock.Load(root); err == nil {
-		project = f.Project
-	}
+	f, lerr := lock.Load(root)
 	var out []status.Sink
 	for _, name := range names {
 		s := status.Sink{Name: name}
 		switch {
+		case lerr != nil:
+			s.Error = lerr.Error()
+		case f.Project == "":
+			s.Error = "stele.lock has no project id yet: run stele compile"
 		case key == nil:
 			s.Error = "no log on this machine"
 		default:
-			n, last, err := push.Pending(root, key, project, name)
+			n, last, err := push.Pending(root, key, f.Project, name)
 			s.Pending = n
 			if err != nil {
 				s.Error = err.Error()

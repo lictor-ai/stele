@@ -301,8 +301,7 @@ it under `sinks`:
 
 Each record is one line of the project's `.stele/log.jsonl`, exactly as stele
 wrote it: rule ids, file paths, session and prompt ids, and counts, never
-code. From `stele check --push` in CI it is one record of a run's counts,
-with no `mac`.
+code.
 
 `accepted` is how many you took: the first `accepted` records, in order. stele
 sends the rest again next time. Take them all, or stop at the first you can't

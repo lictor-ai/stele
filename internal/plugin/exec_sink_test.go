@@ -54,10 +54,17 @@ func TestSinksShareBriefsReserved(t *testing.T) {
 	}
 }
 
+// A missing sink is listed with its error, which its Push returns.
 func TestSinkMissingNamesTheExecutable(t *testing.T) {
-	_, err := Sinks(steleJSON(t, `{"sinks": [{"name": "warehouse"}]}`), &fakeRunner{findErr: ErrPluginNotFound})
-	if !errors.Is(err, ErrPluginNotFound) || !strings.Contains(err.Error(), "stele-sink-warehouse") {
-		t.Errorf("err = %v", err)
+	sinks, err := Sinks(steleJSON(t, `{"sinks": [{"name": "warehouse"}]}`), &fakeRunner{findErr: ErrPluginNotFound})
+	if err != nil || len(sinks) != 1 {
+		t.Fatalf("Sinks = %v, %v", sinks, err)
+	}
+	if m := sinks[0].Missing(); !errors.Is(m, ErrPluginNotFound) || !strings.Contains(m.Error(), "stele-sink-warehouse") {
+		t.Errorf("Missing = %v", m)
+	}
+	if _, err := sinks[0].Push(context.Background(), "p1", records(1)); !errors.Is(err, ErrPluginNotFound) {
+		t.Errorf("Push = %v", err)
 	}
 }
 
