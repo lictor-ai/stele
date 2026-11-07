@@ -434,7 +434,7 @@ func staleness(ctx context.Context, root string, builtins []source.Source, key s
 			stale[b.Name()] = true
 		}
 	}
-	if len(stale) == 0 && !lockAgrees(root, cur) {
+	if len(stale) == 0 && !LockAgrees(root, cur) {
 		lockOnly = true
 		for _, b := range builtins {
 			stale[b.Name()] = true
@@ -443,12 +443,13 @@ func staleness(ctx context.Context, root string, builtins []source.Source, key s
 	return cur, true, stale, lockOnly, nil
 }
 
-// lockAgrees reports whether stele.lock gives the index's project and each of
+// LockAgrees reports whether stele.lock gives the index's project and each of
 // its rules the identity the index holds. A pull can change the lock while
 // stele.md stays the same. Entries the index does not hold, such as an
 // external source's, say nothing. Neither does a lock that is missing or
 // invalid: the index serves the rules, and stele check reports the lock.
-func lockAgrees(root string, idx index.Index) bool {
+// EnsureFresh rebuilds when it is false; stele status calls the index stale.
+func LockAgrees(root string, idx index.Index) bool {
 	f, err := lock.Load(root)
 	if err != nil || f.Project == "" {
 		return true
