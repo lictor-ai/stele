@@ -282,7 +282,7 @@ There are five kinds of line:
 | `checked` | A file is checked after a write, with what it broke, or nothing |
 | `check` | `stele check` runs, with its counts |
 
-A line holds rule ids, file paths, session and prompt ids, and counts. Never code, rule text or diffs. Each line is signed with your machine's key, so a line made on another machine, edited, or not written by stele is ignored. stele never sends the log anywhere, and `stele uninstall` deletes it with `.stele/`.
+A line holds rule ids, file paths, session and prompt ids, and counts. Never code, rule text or diffs. Each line is signed with your machine's key, so a line made on another machine, edited, or not written by stele is ignored. stele sends the log only to a sink you list, when you run [`stele push`](#send-the-log-somewhere-stele-push), and `stele uninstall` deletes it with `.stele/`.
 
 ## How the rules are doing: stele stats
 
@@ -359,7 +359,34 @@ index: fresh
 | `--format json` | The same as JSON, with `"v": 1` and the project id |
 | `--offline` | Start no plugin: plugin versions, and whether a plugin source is fresh, show as unknown |
 
-`stele status` writes nothing. To learn a plugin's version it runs the plugin, and it asks each plugin source whether it changed, unless you pass `--offline`. It exits 0 whenever it could describe the install, a missing plugin included, and 2 when it can't run (no project, or a `stele.json` it can't read).
+`stele status` writes nothing. To learn a plugin's version it runs the plugin, and it asks each plugin source whether it changed, unless you pass `--offline`. It exits 0 whenever it could describe the install, a missing plugin included, and 2 when it can't run (no project, or a `stele.json` it can't read). With a [sink](#send-the-log-somewhere-stele-push) listed, it also says how many log lines wait for it.
+
+## Send the log somewhere: stele push
+
+The log stays on your machine. To send it somewhere, install a **sink**, a program named `stele-sink-<name>` on your `PATH`, and list it in `stele.json`:
+
+```json
+{ "sinks": [{ "name": "file", "config": { "path": "/home/you/stele-log.jsonl" } }] }
+```
+
+Then run `stele push`:
+
+```
+$ stele push
+file: sent 2 lines
+$ stele push
+file: sent 0 lines
+```
+
+- **What a sink gets:** the lines of `.stele/log.jsonl`, exactly as stele wrote them, each with its signature. That is rule ids, file paths, session and prompt ids, and counts; never code. Lines not signed on this machine, or of another project, are skipped and counted.
+- **The first push sends the whole log.** Listing the sink is how you agree to send it.
+- **It remembers how far it got,** per sink, in `.stele/push/<name>.json`, signed. Each push sends only what is new, and finds its place after the log rotates.
+- **A line can arrive twice,** if stele stops between the sink's answer and saving how far it got. Each record carries its `mac`, a key the sink can drop a repeat by.
+- **A sink that fails stops for that run;** the others still get theirs. The next `stele push` tries again from where it stopped.
+
+`stele push` exits 0 when every sink took everything (or there was nothing to send, or no sink), 1 when a sink took only part, and 2 when stele or a sink couldn't run: a sink missing from `PATH`, a crash, a bad answer, or another `stele push` running. stele runs a sink only from `stele push` and `stele check --push`, never from the hook. It opens no connection itself: where the lines go is the sink's doing. To write a sink, see [the plugin protocol](docs/plugin-protocol.md#push-sink).
+
+`share_briefs` is accepted on a sink and does nothing yet: no line holds a brief.
 
 ## CI: stele check
 
@@ -429,6 +456,7 @@ Optional, committed next to `stele.md`. This is the default:
 |---|---|
 | `sources` | Rules from another git repository, see [Shared rules](#shared-rules-from-another-repository), or from a program you install, see [Plugins](#plugins). |
 | `checkers` | Programs you install that `stele check` runs for rules that name them: see [Checker plugins](#checker-plugins). |
+| `sinks` | Programs you install that `stele push` sends the log to: see [stele push](#send-the-log-somewhere-stele-push). |
 | `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. It applies only to a part of the hook that is on: with `--remind=off` or `--check=off`, that part's failures only warn. |
 
 `backstop` is no longer read: use `stele init --remind=off`. `stele init` says so when `stele.json` still sets it, and leaves the file as it is:
@@ -787,6 +815,14 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **A log you add to git leaves with it.** `.stele/` ignores itself, but `git add -f .stele/log.jsonl` commits the log like any file, and a push sends its file paths and session and prompt ids along.
 
+**A sink can get a line twice.** Delivery is at least once: if stele stops between a sink's answer and saving how far it got, the next `stele push` sends those lines again. A sink drops a repeat by its `mac`.
+
+**Lines can rotate out before they're pushed.** The log keeps one older file; a line that rotated out twice since the last `stele push` is never sent, and `stele push` says some lines were lost.
+
+**A sink is your program.** stele checks where it comes from, as for any plugin, not what it does with the lines. A cloned project's `stele.json` can name a sink you installed, and `stele push` then sends that project's log to it.
+
+**`share_briefs` does nothing yet.** No log line holds a brief.
+
 ### Codex
 
 **Codex runs no hook you haven't approved, and `codex exec` skips it without a word.** stele can only say so at `stele init`. Changing `--remind` or `--check` changes the hooks, and Codex wants them approved again.
@@ -820,7 +856,9 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 ### Network and publishing
 
-**Only `stele publish` sends anything, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com. stele never sends the log.
+**Only `stele publish` sends anything over the network, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com.
+
+**The log goes only to a sink you list, when you run `stele push` or `stele check --push`.** stele hands the sink the lines and opens no connection itself; what the sink does with them, network included, is its own. A sink runs as you, like any [plugin](#plugins).
 
 **Shared rules are fetched, never sent.** `stele compile`, `stele check` and `stele init` connect to each `repo` under `sources` when they need a commit they don't have. git sends what a fetch sends: the refs and commits it wants and has of that repository, and your login for that host through your own git setup. Nothing of the project goes with it. The hook and `stele stats` never connect. stele itself makes no other network call; a [plugin](#plugins) you install may. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 

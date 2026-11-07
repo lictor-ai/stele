@@ -9,7 +9,7 @@ func TestInventoryLists(t *testing.T) {
 	root := steleJSON(t, `{"sources": [
 		{"name": "git", "config": {"repo": "git@github.com:acme/g.git"}},
 		{"name": "docs"}
-	], "checkers": [{"name": "lint"}]}`)
+	], "checkers": [{"name": "lint"}], "sinks": [{"name": "warehouse", "share_briefs": false}]}`)
 	items, err := Inventory(root, noGit{t}, &fakeRunner{})
 	if err != nil {
 		t.Fatal(err)
@@ -21,7 +21,7 @@ func TestInventoryLists(t *testing.T) {
 			t.Errorf("%s %s: %v", it.Kind, it.Name, it.Err)
 		}
 	}
-	want := []string{"source stelemd", "source git:github.com/acme/g/stele.md", "source docs", "checker regex", "checker lint"}
+	want := []string{"source stelemd", "source git:github.com/acme/g/stele.md", "source docs", "checker regex", "checker lint", "sink warehouse"}
 	if len(got) != len(want) {
 		t.Fatalf("items = %v, want %v", got, want)
 	}
