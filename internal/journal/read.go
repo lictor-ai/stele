@@ -41,7 +41,8 @@ func Read(root string, key sign.Key, fn func(kind Kind, body []byte) error) (bad
 	if err != nil {
 		return bad, err
 	}
-	for _, data := range files {
+	for _, f := range files {
+		data := f.data
 		for _, line := range bytes.Split(data, []byte("\n")) {
 			if len(line) == 0 {
 				continue
@@ -62,9 +63,15 @@ func Read(root string, key sign.Key, fn func(kind Kind, body []byte) error) (bad
 	return bad, nil
 }
 
+// logFile is one of the two log files, as read.
+type logFile struct {
+	name string
+	data []byte
+}
+
 // readFiles reads the rotated log and the log under the lock, oldest first.
 // A file too large is left out and counted in bad.
-func readFiles(dir string) (files [][]byte, bad int, err error) {
+func readFiles(dir string) (files []logFile, bad int, err error) {
 	unlock, err := safefile.Lock(filepath.Join(dir, FileName+".lock"), readWait, 10*time.Second)
 	if err != nil {
 		return nil, 0, err
@@ -79,7 +86,7 @@ func readFiles(dir string) (files [][]byte, bad int, err error) {
 		case err != nil:
 			return nil, bad, err
 		default:
-			files = append(files, data)
+			files = append(files, logFile{name, data})
 		}
 	}
 	return files, bad, nil
