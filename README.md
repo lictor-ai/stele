@@ -342,7 +342,7 @@ agents
 plugins
   source   stelemd                        built in
   checker  regex                          built in
-  checker  semgrep                        stele-checker-semgrep not found on PATH
+  checker  semgrep                        checker "semgrep": stele-checker-semgrep not found on PATH: install it, or remove "semgrep" from "checkers" in stele.json
 
 sources
   stelemd                                1 rule, fresh
