@@ -919,8 +919,8 @@ written with their `mac`, from the cursor in `.stele/push/<sink>.json`
 (sealed): the last line's MAC, the byte after it, and the first MAC of its
 file, so it follows a rotation (`journal.ReadAfter`). It advances after each
 batch by what the sink accepted (`{"accepted": n}`, the first `n` in order):
-at least once. `stele check --push` pushes the pending lines where the log
-exists and in CI sends one record built as the log's `check` line, never the
+at least once. `stele check --push` pushes the pending lines where the key
+and `.stele/` exist, and in CI sends one record built as the log's `check` line, never the
 report. `share_briefs` is accepted and has no effect: no record holds a brief.
 Neither runs from `stele hook`, `stele stats` or `stele mcp`.
 
@@ -2120,8 +2120,8 @@ invalid rule or a blocking violation, and 2 when stele or a plugin could not run
 (spec §8). It needs `git` on `PATH`, outside the project (`internal/toolpath`),
 unless explicit paths are given. It runs the built-in `regex` checker and the
 external checkers `stele.json` lists (ADR-0013), found on `PATH` before any
-rule is read. `--push` then pushes the log's pending lines, or in CI one
-record of the run's counts (D84); its exit is the larger of the check's and
+rule is read. `--push` then pushes the log's pending lines where the key and
+`.stele/` exist, or in CI one record of the run's counts (D84); its exit is the larger of the check's and
 the push's.
 
 **Dependencies: two.** `github.com/modelcontextprotocol/go-sdk` and
