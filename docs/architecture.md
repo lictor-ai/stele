@@ -51,7 +51,8 @@ internal/plugin/      registry of built-in and external plugins, protocol 1, sin
   plugintest/         a fake plugin for tests: the test binary under a plugin's name
 internal/pluginexec/  the one plugin.Runner: finds a plugin on PATH outside the project and runs it (D80)
 internal/printable/   text from outside stele made one printable line — pure
-internal/status/      stele status: describe the install as JSON
+internal/status/      stele status: describe the install — pure, plugins behind plugin.Runner (D85)
+internal/push/        stele push: the log's signed lines to each sink, a sealed cursor per sink — pure (D82–D84)
 internal/publish/     stele publish: stele.md to a git repository as a merge request (D64–D66)
 internal/gitexec/     git for what reaches a remote: stele publish and the git source (ADR-0011)
 internal/toolpath/    programs and PATH entries inside the project, refused; the flags on every git command
@@ -910,12 +911,18 @@ A `read` response may set `id` on a rule; only a source that owns its ids should
 list; a `position` the plugin sends is ignored. A body may not hold a line that
 marks a rule in a generated file.
 
-**Sinks** (ADR-0003). `stele push` reads `.stele/log.jsonl` from the offset
-stored in `.stele/push/<sink>.json`, sends the new entries, and advances the
-offset only after the sink accepts them. `stele check --push` sends the report
-it just produced. Unless `share_briefs` is set for that sink, `brief` is removed
-from every record before it is sent. Neither runs from `stele hook` or
-`stele mcp`.
+**Sinks** (ADR-0014, D82–D84). `plugin.Sinks(root, run)` reads `sinks` from
+`stele.json` (`name`, `config`, `timeout`, `share_briefs`), refused as sources
+and checkers are, and finds each on `PATH`; with no `Runner` it fails, so the
+hook cannot get one. `stele push` sends each sink the log's signed lines, as
+written with their `mac`, from the cursor in `.stele/push/<sink>.json`
+(sealed): the last line's MAC, the byte after it, and the first MAC of its
+file, so it follows a rotation (`journal.ReadAfter`). It advances after each
+batch by what the sink accepted (`{"accepted": n}`, the first `n` in order):
+at least once. `stele check --push` pushes the pending lines where the key
+and `.stele/` exist, and in CI sends one record built as the log's `check` line, never the
+report. `share_briefs` is accepted and has no effect: no record holds a brief.
+Neither runs from `stele hook`, `stele stats` or `stele mcp`.
 
 Every request and response carries `"protocol": 1`. A plugin sent a version it
 does not speak answers `{"protocol": 2, "error": "unsupported protocol 1; speaks [2]"}`.
@@ -1105,22 +1112,39 @@ a NUL in the first 8 KB — are skipped.
 
 ```go
 type Status struct {
-    V        int           `json:"v"` // 1 (D50)
-    Project  string        `json:"project"`
-    Binary   string        `json:"binary_version"`
-    Stamped  string        `json:"installed_version"` // what init stamped
-    Adapters []AdapterInfo `json:"adapters"`          // which artifacts are present
-    Plugins  []PluginInfo  `json:"plugins"`           // kind, name, found on PATH, version from describe
-    Sources  []SourceInfo  `json:"sources"`           // name, fingerprint, rule count
-    Fresh    bool          `json:"index_fresh"`
+    V       int           `json:"v"` // 1 (D50)
+    Version string        `json:"stele_version"`
+    Project string        `json:"project"`
+    Agents  []AgentInfo   `json:"agents"`  // per adapter: hooks installed, stamp, switches, rules file
+    Plugins []PluginInfo  `json:"plugins"` // kind, name, built in, found, version from describe, error
+    Sources []SourceInfo  `json:"sources"` // name, rules in the index, fresh (null: unknown)
+    Index   IndexInfo     `json:"index"`   // present, valid, fresh
+    Sinks   []SinkInfo    `json:"sinks"`   // name, lines pending, last push
+    Notes   []string      `json:"notes"`
 }
 
-func Collect(ctx context.Context, root string, c plugin.Config, adapters []adapter.Adapter) (Status, error)
+func Collect(ctx context.Context, root string, in Input) (Status, error)
 ```
 
-Read-only. It runs `describe` on external plugins to learn their versions, so
-like `compile` it may start plugins, and like `compile` it never runs on the hot
-path. Without `--format json` it prints the same as a short human summary.
+Read-only (D85). `cmd/stele` hands it the agents, the version, and a
+`plugin.Runner` unless `--offline`. With one it runs `describe` on each listed
+plugin and `fingerprint` on each external source, so like `compile` it may
+start plugins, and like `compile` it never runs on the hot path. The git
+source's fingerprint is its pin, read with no process. It exits 0 whenever it
+could describe the install, a missing plugin included; 2 when it could not.
+Without `--format json` it prints the same as a short human summary.
+
+### `internal/push` — `stele push`
+
+```go
+func Run(ctx context.Context, root string, key sign.Key, project string, sinks []*plugin.Sink) (Result, error)
+func One(ctx context.Context, sinks []*plugin.Sink, project string, rec json.RawMessage) (Result, error) // check --push in CI
+```
+
+Pure: the sinks come with their `Runner`, the journal and cursors through
+`internal/journal` and `safefile`. It never prints. A push holds
+`.stele/push.lock`; the log is snapshotted under its own lock and released
+before any sink runs.
 
 This is the whole surface a dashboard uses to see an install (D54). A dashboard
 never writes to a repository; it proposes a change to `stele.json` that a human
@@ -2033,7 +2057,7 @@ string literals scattered through the code, so they can be revised and diffed.
 | `plugin` protocol | `plugintest`: the test binary itself, hard-linked or copied into a temp directory as `stele-<kind>-<mode>`, answers as its mode says when `TestMain` sees that name — good answer, wrong protocol or kind, `error` field, invalid JSON, more after the answer, non-zero exit, timeout, an answer over the cap, noisy stderr. No plugin is built, on any OS. Most of `internal/plugin` uses an in-memory `Runner`. |
 | `check.Run` | Table-driven with a fake checker. Grouping by `check`, `scope` filtering, `blocking` default, unknown checker, exit codes. |
 | `lock.Reconcile`, ids from a source | Supplied id kept, clash is an error, `Project` minted once and never changed. |
-| sinks / `stele push` | The test plugin as a sink: offset advances only on success, no record sent twice, `brief` stripped unless `share_briefs`. |
+| sinks / `stele push` | The test plugin as a sink: the cursor advances by what was accepted, no line sent twice, a rotation followed, a bad cursor refused, records exactly the log's lines. |
 | `status` | Temp directory: JSON shape and `v`, plugin found and missing, stale index. |
 | `regex` | Table-driven over `Match`: line and column, multiple matches, multi-line content, CRLF, multibyte text, BOM, invalid UTF-8, binary skip, invalid pattern. |
 | `shell` | Table-driven over `Targets`: redirections, heredoc bodies, quotes, `[[ ]]` and `(( ))`, substitutions, variables, `cd`, `tee`, `sed -i`, `perl -i`, removals and copies, devices, Windows and Git Bash paths, caps. A fuzz test: it never panics, and stays fast. |
@@ -2062,8 +2086,9 @@ stele check        validate the rules, run checkers on changed files; writes not
                      [--base <ref> | --all] [--format text|json] [path...]
 stele stats        how the rules are doing, from the local log; writes nothing, no network (D70)
                      [--since 30d|12h|2w|YYYY-MM-DD|all] [--format text|json]
-stele status       describe the install [--format text|json]
-stele push         send new log entries to every listed sink
+stele status       describe the install; writes nothing (D85)
+                     [--format text|json] [--offline: start no plugin]
+stele push         send the log's new signed lines to every listed sink (D83)
 stele mcp          run the MCP server on stdio
 stele hook         read an agent's hook payload on stdin, decide
                      [--agent=<name>] [--installed=<version>] [--remind=off] [--check=off]
@@ -2095,7 +2120,9 @@ invalid rule or a blocking violation, and 2 when stele or a plugin could not run
 (spec §8). It needs `git` on `PATH`, outside the project (`internal/toolpath`),
 unless explicit paths are given. It runs the built-in `regex` checker and the
 external checkers `stele.json` lists (ADR-0013), found on `PATH` before any
-rule is read. It has no `--push`: sinks are #17.
+rule is read. `--push` then pushes the log's pending lines where the key and
+`.stele/` exist, or in CI one record of the run's counts (D84); its exit is the larger of the check's and
+the push's.
 
 **Dependencies: two.** `github.com/modelcontextprotocol/go-sdk` and
 `github.com/google/uuid`, plus `go-cmp` in tests. Config is JSON rather than TOML

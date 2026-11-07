@@ -82,11 +82,14 @@ message: network calls live in internal/publish only (D66); do not import net or
 
 Nothing leaves the machine except through a sink listed in stele.json, from
 stele push or stele check --push (D53), or from stele publish to the repo in
-stele.json (D66, ADR-0007); v1 has no sinks. Network code lives in
+stele.json (D66, ADR-0007). A sink gets the log's signed lines, which hold
+ids, paths and counts only, and stele check --push in CI one record of
+counts; nothing else ever goes to one (ADR-0014). Network code lives in
 internal/publish, the only package that imports net/http. internal/gitexec
 imports net/url only to check a remote's URL: git does the network
 (ADR-0011). Every other package imports no net package. A plugin is the
-user's own program: stele itself sends nothing through one (ADR-0013).
+user's own program: stele hands a sink its records and opens no connection
+itself (ADR-0013, ADR-0014).
 
 ---
 
@@ -103,10 +106,11 @@ agent version probe (cmd/stele/agentversion.go), stele publish
 (internal/publish), internal/gitexec, which runs git for stele publish
 and the git source (ADR-0011), and internal/pluginexec, which runs
 external plugins (ADR-0013). Only cmd/stele/sources.go hands gitexec to the
-git source and pluginexec to internal/plugin, and only runCompile, runCheck
-and init call it: a file the hook reaches, compile.go included, may hold
-such a caller but imports neither os/exec, gitexec nor pluginexec. stele
-hook and stele stats never call it; cmd/stele/hookreach_test.go follows
+git source and pluginexec to internal/plugin, and only runCompile,
+runCheck, init, runStatus and runPush call it: a file the hook reaches,
+compile.go included, may hold such a caller but imports neither os/exec,
+gitexec nor pluginexec. stele hook and stele stats never call it, nor reach
+internal/status or internal/push; cmd/stele/hookreach_test.go follows
 their calls to check it.
 
 ---
