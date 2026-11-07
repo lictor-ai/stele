@@ -28,7 +28,7 @@ func TestCheckPushCIOneRecord(t *testing.T) {
 	if code != exitFailed {
 		t.Fatalf("check --push = %d, want %d (the check's); stderr %q", code, exitFailed, errOut)
 	}
-	if !strings.Contains(stdout, "good: sent 1 line") {
+	if !strings.Contains(stdout, "good: sent this run's record") {
 		t.Errorf("stdout = %q", stdout)
 	}
 	got := received(t, out)
@@ -92,6 +92,57 @@ func TestCheckPushFailureIsExit2(t *testing.T) {
 	code, stdout, errOut := runCmd("check", "--push")
 	if code != exitCantRun || !strings.Contains(errOut, "stele-sink-missing not found") || strings.Contains(stdout, "checked") {
 		t.Errorf("check --push with a missing sink = %d, %q, %q: want exit 2 before the check", code, stdout, errOut)
+	}
+}
+
+// ciProject is a gitProject as CI has it: no .stele/, no key.
+func ciProject(t *testing.T) string {
+	t.Helper()
+	root := gitProject(t, checkRules)
+	if err := os.RemoveAll(filepath.Join(root, ".stele")); err != nil {
+		t.Fatal(err)
+	}
+	ci := t.TempDir()
+	old := keyDir
+	keyDir = func() (string, error) { return ci, nil }
+	t.Cleanup(func() { keyDir = old })
+	return root
+}
+
+// The exit is the larger of the check's and the push's.
+func TestCheckPushExitCombines(t *testing.T) {
+	t.Run("check 1, push 2", func(t *testing.T) {
+		installPlugin(t, filepath.Join(t.TempDir(), "bin"), "sink", "errors")
+		root := ciProject(t)
+		withSink(t, root, "errors", filepath.Join(t.TempDir(), "x"), "")
+		writeAt(t, root, "db.go", "package db\n\nvar password = \"x\"\n")
+		code, _, errOut := runCmd("check", "--push", "db.go")
+		if code != exitCantRun || !strings.Contains(errOut, "record was not sent") {
+			t.Errorf("= %d, %q; want 2 and the record not sent", code, errOut)
+		}
+	})
+	t.Run("check 1, push partial", func(t *testing.T) {
+		installPlugin(t, filepath.Join(t.TempDir(), "bin"), "sink", "good")
+		root := ciProject(t)
+		withSink(t, root, "good", filepath.Join(t.TempDir(), "x"), `, "accept": 0`)
+		writeAt(t, root, "db.go", "package db\n\nvar password = \"x\"\n")
+		code, stdout, _ := runCmd("check", "--push", "db.go")
+		if code != exitFailed || !strings.Contains(stdout, "it was not sent") {
+			t.Errorf("= %d, %q; want 1 and the record not sent", code, stdout)
+		}
+	})
+}
+
+// With no rule files there is nothing to check and nothing to send, and
+// --push says so.
+func TestCheckPushNoRuleFiles(t *testing.T) {
+	root := gitProject(t, checkRules)
+	for _, name := range []string{"stele.md", "stele.lock", "stele.json"} {
+		os.Remove(filepath.Join(root, name))
+	}
+	code, _, errOut := runCmd("check", "--push")
+	if code != exitOK || !strings.Contains(errOut, "nothing checked, nothing sent") {
+		t.Errorf("= %d, %q", code, errOut)
 	}
 }
 
