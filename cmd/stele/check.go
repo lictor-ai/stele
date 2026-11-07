@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -24,7 +25,10 @@ import (
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/journal"
 	"github.com/lictor-ai/stele/internal/lock"
+	"github.com/lictor-ai/stele/internal/plugin"
+	"github.com/lictor-ai/stele/internal/push"
 	"github.com/lictor-ai/stele/internal/scope"
+	"github.com/lictor-ai/stele/internal/sign"
 	"github.com/lictor-ai/stele/internal/source"
 	"github.com/lictor-ai/stele/internal/source/gitrepo"
 	"github.com/lictor-ai/stele/internal/toolpath"
@@ -43,6 +47,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	base := fs.String("base", "", "check the files changed between `ref` and HEAD (in CI: origin/main)")
 	all := fs.Bool("all", false, "check every tracked file")
 	format := fs.String("format", "text", "output `format`: text or json")
+	pushFlag := fs.Bool("push", false, "then send the log's new lines, or in CI this run's counts, to every sink stele.json lists")
 	if err := fs.Parse(args); err != nil {
 		return exitCantRun
 	}
@@ -69,6 +74,15 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	// A checkout that does not use stele has no rules to validate or check,
 	// but its files are still selected: a bad path or ref is still exit 2.
 	none := noRuleFiles(root)
+
+	// The sinks are found first too, so a missing one fails before the
+	// check, not after it (D84).
+	var ss []*plugin.Sink
+	if *pushFlag && !none {
+		if ss, err = listedSinks(root, stderr); err != nil {
+			return cantRun("%v", err)
+		}
+	}
 
 	// 1. The rules.
 	var r compile.Result
@@ -145,8 +159,10 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	var run *journal.CheckRunRecord
+	var key sign.Key
 	if !none {
-		logCheck(root, r.Index, rep, checkMode(*base, *all, paths), len(files))
+		run, key = logCheck(root, r.Index, rep, checkMode(*base, *all, paths), len(files))
 	}
 
 	if *format == "json" {
@@ -162,7 +178,37 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	} else {
 		printCheck(stdout, r.Lock, rep, subs, len(r.Index.Rules), len(files))
 	}
-	return rep.ExitCode()
+	code := rep.ExitCode()
+	if !*pushFlag || none {
+		return code
+	}
+	// What --push says goes to stderr with --format json, so stdout stays
+	// one report.
+	out := stdout
+	if *format == "json" {
+		out = stderr
+	}
+	return max(code, checkPush(ctx, root, r.Index.Project, run, key, ss, out, stderr))
+}
+
+// checkPush is stele check --push (D84). Where the run was logged, it pushes
+// every pending line of the log, the run's own included; else, as in CI, it
+// sends each sink one record of the run's counts, built as the log's check
+// line, with no MAC. It never sends the report. It returns push's exit code.
+func checkPush(ctx context.Context, root, project string, run *journal.CheckRunRecord, key sign.Key, ss []*plugin.Sink, stdout, stderr io.Writer) int {
+	if len(ss) == 0 {
+		fmt.Fprintln(stdout, "no sink in stele.json: nothing sent")
+		return exitOK
+	}
+	if key != nil {
+		return pushLog(root, key, ss, stdout, stderr, "stele check --push")
+	}
+	rec, err := journal.Plain(run)
+	if err != nil {
+		fmt.Fprintf(stderr, "stele check --push: %v\n", err)
+		return exitCantRun
+	}
+	return printPush(stdout, stderr, "stele check --push", push.One(ctx, pushTargets(ss), project, rec))
 }
 
 // checkMode names how stele check chose its files, for the log.
@@ -180,12 +226,9 @@ func checkMode(base string, all bool, paths []string) string {
 
 // logCheck records the run in the log (ADR-0010), only where stele already
 // runs: a machine with a key and a project with .stele/. In CI, which has
-// neither, it writes nothing, and every failure is ignored.
-func logCheck(root string, idx index.Index, rep check.Report, mode string, files int) {
-	key, err := loadExistingKey()
-	if err != nil {
-		return
-	}
+// neither, it writes nothing, and every failure is ignored. It returns the
+// run's record, and the key it was logged with: nil when it was not.
+func logCheck(root string, idx index.Index, rep check.Report, mode string, files int) (*journal.CheckRunRecord, sign.Key) {
 	rec := &journal.CheckRunRecord{Header: journal.Header{Project: idx.Project, TS: now().UTC()},
 		Mode: mode, Files: files, Rules: len(idx.Rules), Problems: len(rep.Problems),
 		Skipped: len(rep.Skipped), Truncated: rep.Truncated, Exit: rep.ExitCode(), Broken: map[string]int{}}
@@ -197,7 +240,15 @@ func logCheck(root string, idx index.Index, rep check.Report, mode string, files
 		}
 		rec.Broken[f.RuleID]++
 	}
+	key, err := loadExistingKey()
+	if err != nil {
+		return rec, nil
+	}
+	if info, err := os.Lstat(filepath.Join(root, index.Dir)); err != nil || !info.IsDir() {
+		return rec, nil
+	}
 	record(root, key, rec)
+	return rec, key
 }
 
 // noRuleFiles reports whether root has no stele.md, stele.json or stele.lock:

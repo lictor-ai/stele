@@ -191,6 +191,16 @@ func Append(root string, key sign.Key, r Record) error {
 	return safefile.Append(filepath.Join(dir, FileName), filepath.Join(dir, Rotated), line, MaxSize, lockWait)
 }
 
+// Plain is r as a line of the log holds it, with no MAC: what stele check
+// --push sends where there is no log (D84).
+func Plain(r Record) ([]byte, error) {
+	h := r.header()
+	h.V, h.Kind = Version, r.kind()
+	h.TS = h.TS.UTC()
+	r.fill()
+	return json.Marshal(r)
+}
+
 // macField is what encode puts before a line's MAC; a line ends with the MAC
 // and `"}`.
 const (

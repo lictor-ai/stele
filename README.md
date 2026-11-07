@@ -413,13 +413,15 @@ A non-blocking violation prints `warning` instead of `error`. Lines and columns 
 
 On your machine, `stele check` adds one line to the [log](#what-stele-records). In CI it writes nothing: it only logs where stele already has its key and `.stele/`.
 
+**`--push`** then hands the run to every [sink](#send-the-log-somewhere-stele-push) `stele.json` lists. On your machine it pushes the log's new lines, this run's included, as `stele push` does. In CI, with no log, each sink gets one record of the run's counts: how many files and rules, errors and warnings, and how often each rule broke. Never the report: no file lines, no messages, no code. A sink missing from `PATH` fails before the check runs. The exit is the higher of the check's and the push's; with `--format json`, what `--push` says goes to stderr.
+
 With `--base`, `stele check` also says when the branch adds, changes or deletes a `stele.md` or `stele.json` (`stele.md: modified on this branch: ...`), or moves a pin of [shared rules](#shared-rules-from-another-repository) in `stele.lock` (`stele.lock: modified on this branch: it pins the shared rules; review the change`), so reviewers see a change to the rules. It doesn't change the exit code; in JSON it is `rule_files_changed`.
 
 | Exit | Meaning |
 |---|---|
 | 0 | Rules are valid (or there are none) and there is no blocking violation |
 | 1 | A rule is invalid, `stele.lock` or `.claude/rules/stele-rules.md` is out of date (`stele.lock` also when `stele.json` lists a shared rules source it has no pin for), or there is a blocking violation |
-| 2 | stele couldn't run: bad flags, no git, a git inside the project, unknown `--base` ref, no merge base, a bad `sources` in `stele.json`, a [shared rules](#shared-rules-from-another-repository) repository it can't read, a [plugin](#plugins) that is missing, refused, crashed, timed out or answered wrong |
+| 2 | stele couldn't run: bad flags, no git, a git inside the project, unknown `--base` ref, no merge base, a bad `sources` in `stele.json`, a [shared rules](#shared-rules-from-another-repository) repository it can't read, a [plugin](#plugins) that is missing, refused, crashed, timed out or answered wrong, or with `--push` a sink that failed |
 
 GitHub Actions:
 
@@ -822,6 +824,8 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 **A sink is your program.** stele checks where it comes from, as for any plugin, not what it does with the lines. A cloned project's `stele.json` can name a sink you installed, and `stele push` then sends that project's log to it.
 
 **`share_briefs` does nothing yet.** No log line holds a brief.
+
+**`stele check --push` sends nothing when the rules can't be used.** A parse error, a stale `stele.lock` or an out-of-date rules file fails the check before it runs, and nothing goes to a sink for that run.
 
 ### Codex
 
