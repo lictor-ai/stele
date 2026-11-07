@@ -7,13 +7,13 @@
 
 # stele
 
-**Make Claude Code follow your repository's rules.**
+**Make Claude Code and Codex follow your repository's rules.**
 
 Write your rules once in `stele.md`. stele shows them to the agent before it writes,<br>
 checks what it wrote, and checks again in CI.
 
 [![CI](https://github.com/lictor-ai/stele/actions/workflows/ci.yml/badge.svg)](https://github.com/lictor-ai/stele/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v1.0.0-blue)](https://github.com/lictor-ai/stele/releases)
+[![Release](https://img.shields.io/badge/release-v1.2.0-blue)](https://github.com/lictor-ai/stele/releases)
 [![Go](https://img.shields.io/badge/go-1.27%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
@@ -21,8 +21,11 @@ checks what it wrote, and checks again in CI.
 [Quick start](#quick-start) ·
 [How it works](#how-it-works) ·
 [Does it work?](#does-it-work) ·
+[Codex](#codex) ·
 [Writing stele.md](#writing-stelemd) ·
 [CI](#ci-stele-check) ·
+[Shared rules](#shared-rules-from-another-repository) ·
+[Plugins](#plugins) ·
 [Limits](#limits)
 
 </div>
@@ -31,7 +34,7 @@ checks what it wrote, and checks again in CI.
 
 ## Why stele
 
-Rules in `CLAUDE.md` are guidance: nothing checks them. In [our eval](#does-it-work), with the rules in `CLAUDE.md`, the agent broke one in 3 of 8 runs of a task that pulls against it. stele flagged each break right after the write, and the agent fixed it.
+Rules in `CLAUDE.md` or `AGENTS.md` are guidance: nothing checks them. In [our eval](#does-it-work), with the rules in `CLAUDE.md`, the agent broke one in 3 of 8 runs of a task that pulls against it. stele flagged each break right after the write, and the agent fixed it.
 
 stele puts each rule in front of the agent when it matters, and catches what slips through:
 
@@ -43,7 +46,7 @@ And it stays out of your way:
 
 - 📦 **One Go binary.** No daemon, no service, no config server.
 - 🧠 **No model.** Rules are chosen by path and checked by regex: same input, same answer.
-- 🔒 **No network calls**, except `stele publish`, which you run yourself, and fetching [shared rules](#shared-rules-from-another-repository) you list in `stele.json`.
+- 🔒 **No network calls of its own**, except `stele publish`, which you run yourself, and fetching [shared rules](#shared-rules-from-another-repository) you list in `stele.json`. [Plugins](#plugins) and [sinks](#send-the-log-somewhere-stele-push) you install may use the network.
 - ⚡ **About 0.1 s per write.** See the [measured times](#does-it-work).
 
 ## Quick start
@@ -54,7 +57,7 @@ cd your-project && stele init                            # add the hooks and a s
 $EDITOR stele.md && stele compile                        # write your rules, compile them
 ```
 
-Commit what `stele init` and `stele compile` wrote, start Claude Code, and the rules apply. Add [`stele check`](#ci-stele-check) to CI to catch the rest.
+Commit what `stele init` and `stele compile` wrote, start Claude Code, and the rules apply. For Codex, run `stele init --agent=codex` instead, and approve stele's hooks in Codex with `/hooks` (see [Codex](#codex)). Add [`stele check`](#ci-stele-check) to CI to catch the rest.
 
 ## How it works
 
@@ -74,6 +77,8 @@ sequenceDiagram
 ```
 
 Then, in the pull request, `stele check --base origin/main` checks every changed file against the same rules. Details: [What the agent sees](#what-the-agent-sees).
+
+Codex works the same way, with the rules in `AGENTS.md` and `apply_patch` in place of Write and Edit: see [Codex](#codex).
 
 ## Does it work?
 
@@ -102,7 +107,7 @@ Every experiment is in [test/functional/agent/results/](test/functional/agent/re
 
 ## Install
 
-From the first stable release on, macOS and Linux, with [Homebrew](https://brew.sh):
+macOS and Linux, with [Homebrew](https://brew.sh):
 
 ```sh
 brew install lictor-ai/tap/stele
@@ -125,7 +130,7 @@ go install github.com/lictor-ai/stele/cmd/stele@latest
 
 Or, from a clone: `go install ./cmd/stele`.
 
-The hook runs the bare command `stele`, so it must be on the `PATH` that Claude Code sees: for `go install`, that is `$(go env GOPATH)/bin`.
+The hook runs the bare command `stele`, so it must be on the `PATH` that Claude Code or Codex sees: for `go install`, that is `$(go env GOPATH)/bin`.
 
 ## Set up a repository
 
@@ -258,11 +263,255 @@ Scope globs:
 
 ## What the agent sees
 
+This is what Claude Code sees. Codex sees the same, with the differences [Codex](#codex) and its [limits](#codex-1) list.
+
 - **When a session or subagent starts.** Claude Code loads `.claude/rules/stele-rules.md`, every rule with its scope, as it loads `CLAUDE.md`. The agent is also told to create and change files with Write and Edit only, never through Bash: stele sees only those. It is told that reading, searching and running commands through Bash is fine.
 - **Before a write**, unless `--remind=off`. A rule the agent loaded from `.claude/rules/stele-rules.md` at the start of its session counts as seen until the session ends, as long as the rule hasn't changed since; this needs Claude Code started in the project's root. The first write in a turn to a file with other rules is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent; rules that do not fit in one message (about 9,000 bytes) are shown on the next write. A retry of the denied write goes through; parallel writes in the same message, to other files or to the same one, are denied too, once.
 - **After a write**, unless `--check=off`. A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
 - **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock`, `.claude/rules/stele-rules.md` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` and the switches say. So does a write to Claude Code's settings files, which run stele's hooks: `.claude/settings.json` and `.claude/settings.local.json` anywhere in the project or from the session's directory up to the git root, and your user `settings.json`. A change there can weaken stele or turn it off. Allow it only if you asked for it.
+
+## CI: stele check
+
+| Command | Checks |
+|---|---|
+| `stele check` | Files changed against `HEAD`: staged, unstaged and untracked |
+| `stele check --base <ref>` | Files changed since the merge base of `<ref>` and `HEAD` |
+| `stele check --all` | Every tracked file |
+| `stele check <path>...` | Exactly these files |
+
+Add `--format json` for JSON. Deleted files are skipped.
+
+`stele check` first checks the rules: `stele.md` must parse, every rule must be valid, and `stele.lock` and `.claude/rules/stele-rules.md` must be committed and current. After upgrading to a stele that writes the rules file, run `stele compile` and commit it, or `stele check` fails. The file is current when it holds the same rules in the same order; a newer stele's wording of its intro alone doesn't make it stale. A file at that path that stele didn't write (no `<!-- Generated by stele` first line) is left alone, and `stele check` fails until you rename it. A rules file over 40,000 characters gets a note: every session loads it whole. In a checkout with no `stele.md`, `stele.json` or `stele.lock` (a submodule, a worktree of a branch without rules, a repository that adds the CI job before its `stele.md`), it says `nothing to check` and exits 0; with `--base` it still reports a deleted `stele.md`. Then it checks the files:
+
+```
+$ stele check
+main.go:6:2: error 573549ea-7f0b-47ec-ad30-db25284a3d2a "Log through the shared logger in internal/log. Never print w…": log through internal/log, not fmt.Print
+main.go:7:10: error 2de7574e-7106-4986-8ce6-996d06e2703a "Never put credentials in code, config or tests. Read them fr…"
+3 rules valid
+checked 1 file: 2 errors
+```
+
+A non-blocking violation prints `warning` instead of `error`. Lines and columns start at 1; a column counts characters.
+
+On your machine, `stele check` adds one line to the [log](#what-stele-records). In CI it writes nothing: it only logs where stele already has its key and `.stele/`.
+
+**`--push`** then hands the run to every [sink](#send-the-log-somewhere-stele-push) `stele.json` lists. Where stele has its key and `.stele/`, as on your machine, it pushes the log's new lines, this run's included, as `stele push` does. With no key or no `.stele/`, as in CI, each sink gets one record of the run's counts: how many files and rules, errors and warnings, and how often each rule broke. Never the report: no file lines, no messages, no code. A sink missing from `PATH` fails before the check runs. The exit is the higher of the check's and the push's; with `--format json`, what `--push` says goes to stderr.
+
+With `--base`, `stele check` also says when the branch adds, changes or deletes a `stele.md` or `stele.json` (`stele.md: modified on this branch: ...`), or moves a pin of [shared rules](#shared-rules-from-another-repository) in `stele.lock` (`stele.lock: modified on this branch: it pins the shared rules; review the change`), so reviewers see a change to the rules. It doesn't change the exit code; in JSON it is `rule_files_changed`.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Rules are valid (or there are none) and there is no blocking violation |
+| 1 | A rule is invalid, `stele.lock` or `.claude/rules/stele-rules.md` is out of date (`stele.lock` also when `stele.json` lists a shared rules source it has no pin for), or there is a blocking violation |
+| 2 | stele couldn't run: bad flags, no git, a git inside the project, unknown `--base` ref, no merge base, a bad `sources` in `stele.json`, a [shared rules](#shared-rules-from-another-repository) repository it can't read, a [plugin](#plugins) that is missing, refused, crashed, timed out or answered wrong, or with `--push` a sink that failed |
+
+GitHub Actions:
+
+```yaml
+name: stele
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  stele:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # --base needs the history
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - run: go install github.com/lictor-ai/stele/cmd/stele@latest
+      - run: stele check --base origin/${{ github.base_ref }}
+```
+
+Pin a version, such as `@v1.2.0`, instead of `@latest`. With [shared rules](#shared-rules-from-another-repository), the job also needs read access to the guidelines repository.
+
+## stele.json
+
+Optional, committed next to `stele.md`. This is the default:
+
+```json
+{ "block_on_error": false }
+```
+
+| Key | Effect |
+|---|---|
+| `sources` | Rules from another git repository, see [Shared rules](#shared-rules-from-another-repository), or from a program you install, see [Plugins](#plugins). |
+| `checkers` | Programs you install that `stele check` runs for rules that name them: see [Checker plugins](#checker-plugins). |
+| `sinks` | Programs you install that `stele push` sends the log to: see [stele push](#send-the-log-somewhere-stele-push). |
+| `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. It applies only to a part of the hook that is on: with `--remind=off` or `--check=off`, that part's failures only warn. |
+
+`backstop` is no longer read: use `stele init --remind=off`. `stele init` says so when `stele.json` still sets it, and leaves the file as it is:
+
+```
+$ stele init
+stele init in /home/you/project
+stele init: kept the existing stele.md
+stele init: stele.json: backstop is no longer read; use stele init --remind=off
+up to date, nothing written
+hooks: remind on, check on
+```
+
+## Shared rules from another repository
+
+Keep your guidelines in one repository and use them in all your projects. In each project, name that repository in `stele.json`:
+
+```json
+{
+  "sources": [
+    { "name": "git", "config": { "repo": "git@github.com:acme/guidelines.git", "ref": "main" } }
+  ]
+}
+```
+
+`stele compile` reads `stele.md` from it, adds its rules after the project's own, and pins the commit it read in `stele.lock`:
+
+```
+$ stele compile
+github.com/acme/guidelines/stele.md: pinned main at 8611d48
+3 rules: 0 matched by text, 0 by position, 1 new, 0 dropped, 2 supplied by their source
+wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
+```
+
+Commit `stele.lock` and `.claude/rules/stele-rules.md`: every developer and every CI run then uses the same commit. A new commit in the guidelines changes nothing until you move the pin on purpose:
+
+```
+$ stele compile
+3 rules: 1 matched by text, 0 by position, 0 new, 0 dropped, 2 supplied by their source
+up to date, nothing written
+
+$ stele compile --update
+github.com/acme/guidelines/stele.md: main 8611d48 -> 1dca9c3
+4 rules: 1 matched by text, 0 by position, 0 new, 0 dropped, 3 supplied by their source
+wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
+```
+
+Review the `stele.lock` and rules file diff, then commit them. Changing `repo`, `ref` or `path` in `stele.json` pins again at the next `stele compile`. Until then `stele check` fails:
+
+```
+$ stele check
+stele check: stele.lock is out of date with stele.json: run stele compile and commit stele.lock
+```
+
+| Key | Effect |
+|---|---|
+| `repo` | The repository: `https://host/path`, `ssh://host/path` or `user@host:path`, as for `stele publish`. |
+| `ref` | A branch or tag. Default: the repository's default branch. A name that is both a branch and a tag needs `refs/heads/...` or `refs/tags/...`. |
+| `path` | The rules file in it. Default `stele.md`. Letters, digits, `.`, `_`, `-` and `/`, ending in `.md`. |
+
+- **Several sources add up.** List up to 16; their rules come after the project's, in the order listed. Nothing wins over anything: every rule applies.
+- **Ids come from the guidelines.** When the guidelines repository has its own `stele.lock` next to its `stele.md`, its rules keep those ids in every project ("supplied by their source"). Run `stele compile` there and commit its `stele.lock`.
+- **It uses your git login.** stele runs `git` on `PATH`, outside the project, and never asks for a password or holds a token: ssh keys and credential helpers work as they do for `git clone`.
+- **It needs the network only for a new pin.** stele keeps a bare clone of each repository in your user cache directory (`stele/sources/` in it), never in the project. A commit it already has is read offline.
+- **The hook never fetches.** It uses the rules from the last `stele compile`, `stele check` or `stele init` on your machine.
+
+In CI, `stele check` reads the pinned commit, so the job needs read access to the guidelines repository. GitHub's default `GITHUB_TOKEN` reads only the repository the job runs in: give the job a deploy key for the guidelines repository, or a read token set in git's own config, never in `stele.json`. With no access, `stele check` exits 2:
+
+```
+$ stele check
+stele check: source git:github.com/acme/guidelines/stele.md: git failed: git ls-remote: ERROR: Repository not found.
+fatal: Could not read from remote repository.
+Please make sure you have the correct access rights
+and the repository exists.
+stele needs read access to git@github.com:acme/guidelines.git: check that git ls-remote git@github.com:acme/guidelines.git works here
+```
+
+## Plugins
+
+A plugin is a program you install that does what stele can't do itself: a source plugin gives it rules, a checker plugin checks code against them in `stele check`, and a sink receives the log from [`stele push`](#send-the-log-somewhere-stele-push).
+
+### Source plugins
+
+List a source plugin under `sources` in `stele.json`, by name:
+
+```json
+{
+  "sources": [
+    { "name": "paragraphs", "config": { "file": "GUIDELINES.txt" } }
+  ]
+}
+```
+
+stele runs `stele-source-paragraphs` from your `PATH` (`stele-source-paragraphs.exe` on Windows) and adds its rules after the project's own:
+
+```
+$ stele compile
+3 rules: 0 matched by text, 0 by position, 3 new, 0 dropped
+wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
+```
+
+Commit `stele.lock` and `.claude/rules/stele-rules.md` as usual. `stele check` asks the plugin again, so when its rules change it fails until you run `stele compile`:
+
+```
+$ stele check
+stele check: stele.lock is out of date with the rules: run stele compile and commit stele.lock
+```
+
+A plugin that isn't installed stops `stele compile`, `stele check` and `stele init` with exit 2:
+
+```
+$ stele compile
+stele compile: source "paragraphs": stele-source-paragraphs not found on PATH: install it, or remove "paragraphs" from "sources" in stele.json
+```
+
+| Key | Effect |
+|---|---|
+| `name` | The plugin: stele runs `stele-source-<name>`. Lower-case letters, digits and `-`, starting with a letter. `stelemd`, `git` and `regex` are stele's own. |
+| `config` | Passed to the plugin as it is. |
+| `timeout` | How long a read may take: `"2m"`, from `1s` to `30m`. Default 1 minute. |
+
+### Checker plugins
+
+A rule's `check:` can name a checker plugin instead of `regex`. List it under `checkers` in `stele.json`; the rule's other keys are its settings:
+
+```markdown
+scope: ["**/*.go"]
+check: word
+word: TODO
+
+Finish the work before you merge it: no TODO in Go code.
+```
+
+```json
+{
+  "checkers": [
+    { "name": "word" }
+  ]
+}
+```
+
+`stele check` runs `stele-checker-word` on the files the rule's `scope` covers, here this `main.go`:
+
+```go
+package main
+
+func main() {
+	// TODO: read the config
+}
+```
+
+```
+$ stele check main.go
+main.go:4:5: error 1bf07c03-cb51-4072-be43-2d2157d62b3f "Finish the work before you merge it: no TODO in Go code."
+1 rule valid
+checked 1 file: 1 error
+```
+
+The keys are those of a source plugin: `name`, `config` and `timeout`, where `timeout` is how long one check may take, 5 minutes by default. stele first asks the checker whether each rule's settings are right; a rule it rejects is invalid, as one `regex` can't compile is. A rule that names a checker `stele.json` doesn't list is invalid too. Every checker listed must be installed, even one no rule names yet.
+
+A checker plugin runs only in `stele check`, never after a write: the hook and `stele compile` know it by name, and the agent learns of its violations from CI.
+
+### Every plugin
+
+- **Only from `PATH`, never from the project.** stele looks only in `PATH` entries that are absolute and outside the project and the git repository that holds it, so a copy inside the project is passed over, never run; on Windows the current directory isn't searched. One that links into the project is refused. On Windows it must be an `.exe` or `.com`.
+- **Run with no shell, outside the project.** It runs in a directory of stele's own, `stele/plugins` in your user cache directory, and finds the project through the `root` stele sends it. It gets your environment, with `PATH` and the library and module paths (`LD_LIBRARY_PATH`, `PYTHONPATH`, `NODE_PATH` and the like) cut to entries outside the project. What it writes on stderr is shown, each line starting with its name.
+- **What it starts stops with it.** After each call stele stops whatever the plugin left running. Ctrl-C stops the plugin too, and stele says the call was cancelled.
+- **Never in the hook.** Source plugins run at `stele compile`, `stele check` and `stele init`, checker plugins at `stele check`, and sinks at `stele push` and `stele check --push`. `stele status` asks each listed plugin its version, unless you pass `--offline`. The hook uses the rules of the last compile, check or init on your machine.
+
+Writing one takes a few lines in any language: [docs/plugin-protocol.md](docs/plugin-protocol.md) describes the protocol, with the `paragraphs` example above.
 
 ## What stele records
 
@@ -276,7 +525,7 @@ There are five kinds of line:
 
 | `kind` | When |
 |---|---|
-| `loaded` | A session or subagent starts, with the rules it loaded from `.claude/rules/stele-rules.md` |
+| `loaded` | A session or subagent starts, with the rules it loaded from `.claude/rules/stele-rules.md` (`AGENTS.md` for Codex) |
 | `denied` | A write or a Bash command is denied to show rules, with the rules shown |
 | `wrote` | A write went through, with every rule that applies to the file |
 | `checked` | A file is checked after a write, with what it broke, or nothing |
@@ -388,248 +637,6 @@ file: sent 0 lines
 
 `share_briefs` is accepted on a sink and does nothing yet: no line holds a brief.
 
-## CI: stele check
-
-| Command | Checks |
-|---|---|
-| `stele check` | Files changed against `HEAD`: staged, unstaged and untracked |
-| `stele check --base <ref>` | Files changed since the merge base of `<ref>` and `HEAD` |
-| `stele check --all` | Every tracked file |
-| `stele check <path>...` | Exactly these files |
-
-Add `--format json` for JSON. Deleted files are skipped.
-
-`stele check` first checks the rules: `stele.md` must parse, every rule must be valid, and `stele.lock` and `.claude/rules/stele-rules.md` must be committed and current. After upgrading to a stele that writes the rules file, run `stele compile` and commit it, or `stele check` fails. The file is current when it holds the same rules in the same order; a newer stele's wording of its intro alone doesn't make it stale. A file at that path that stele didn't write (no `<!-- Generated by stele` first line) is left alone, and `stele check` fails until you rename it. A rules file over 40,000 characters gets a note: every session loads it whole. In a checkout with no `stele.md`, `stele.json` or `stele.lock` (a submodule, a worktree of a branch without rules, a repository that adds the CI job before its `stele.md`), it says `nothing to check` and exits 0; with `--base` it still reports a deleted `stele.md`. Then it checks the files:
-
-```
-$ stele check
-main.go:6:2: error 573549ea-7f0b-47ec-ad30-db25284a3d2a "Log through the shared logger in internal/log. Never print w…": log through internal/log, not fmt.Print
-main.go:7:10: error 2de7574e-7106-4986-8ce6-996d06e2703a "Never put credentials in code, config or tests. Read them fr…"
-3 rules valid
-checked 1 file: 2 errors
-```
-
-A non-blocking violation prints `warning` instead of `error`. Lines and columns start at 1; a column counts characters.
-
-On your machine, `stele check` adds one line to the [log](#what-stele-records). In CI it writes nothing: it only logs where stele already has its key and `.stele/`.
-
-**`--push`** then hands the run to every [sink](#send-the-log-somewhere-stele-push) `stele.json` lists. Where stele has its key and `.stele/`, as on your machine, it pushes the log's new lines, this run's included, as `stele push` does. With no key or no `.stele/`, as in CI, each sink gets one record of the run's counts: how many files and rules, errors and warnings, and how often each rule broke. Never the report: no file lines, no messages, no code. A sink missing from `PATH` fails before the check runs. The exit is the higher of the check's and the push's; with `--format json`, what `--push` says goes to stderr.
-
-With `--base`, `stele check` also says when the branch adds, changes or deletes a `stele.md` or `stele.json` (`stele.md: modified on this branch: ...`), or moves a pin of [shared rules](#shared-rules-from-another-repository) in `stele.lock` (`stele.lock: modified on this branch: it pins the shared rules; review the change`), so reviewers see a change to the rules. It doesn't change the exit code; in JSON it is `rule_files_changed`.
-
-| Exit | Meaning |
-|---|---|
-| 0 | Rules are valid (or there are none) and there is no blocking violation |
-| 1 | A rule is invalid, `stele.lock` or `.claude/rules/stele-rules.md` is out of date (`stele.lock` also when `stele.json` lists a shared rules source it has no pin for), or there is a blocking violation |
-| 2 | stele couldn't run: bad flags, no git, a git inside the project, unknown `--base` ref, no merge base, a bad `sources` in `stele.json`, a [shared rules](#shared-rules-from-another-repository) repository it can't read, a [plugin](#plugins) that is missing, refused, crashed, timed out or answered wrong, or with `--push` a sink that failed |
-
-GitHub Actions:
-
-```yaml
-name: stele
-on: pull_request
-permissions:
-  contents: read
-jobs:
-  stele:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0 # --base needs the history
-      - uses: actions/setup-go@v6
-        with:
-          go-version: stable
-      - run: go install github.com/lictor-ai/stele/cmd/stele@latest
-      - run: stele check --base origin/${{ github.base_ref }}
-```
-
-Pin a version instead of `@latest` once one is tagged. With [shared rules](#shared-rules-from-another-repository), the job also needs read access to the guidelines repository.
-
-## stele.json
-
-Optional, committed next to `stele.md`. This is the default:
-
-```json
-{ "block_on_error": false }
-```
-
-| Key | Effect |
-|---|---|
-| `sources` | Rules from another git repository, see [Shared rules](#shared-rules-from-another-repository), or from a program you install, see [Plugins](#plugins). |
-| `checkers` | Programs you install that `stele check` runs for rules that name them: see [Checker plugins](#checker-plugins). |
-| `sinks` | Programs you install that `stele push` sends the log to: see [stele push](#send-the-log-somewhere-stele-push). |
-| `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. It applies only to a part of the hook that is on: with `--remind=off` or `--check=off`, that part's failures only warn. |
-
-`backstop` is no longer read: use `stele init --remind=off`. `stele init` says so when `stele.json` still sets it, and leaves the file as it is:
-
-```
-$ stele init
-stele init in /home/you/project
-stele init: kept the existing stele.md
-stele init: stele.json: backstop is no longer read; use stele init --remind=off
-up to date, nothing written
-hooks: remind on, check on
-```
-
-## Shared rules from another repository
-
-Keep your guidelines in one repository and use them in all your projects. In each project, name that repository in `stele.json`:
-
-```json
-{
-  "sources": [
-    { "name": "git", "config": { "repo": "git@github.com:acme/guidelines.git", "ref": "main" } }
-  ]
-}
-```
-
-`stele compile` reads `stele.md` from it, adds its rules after the project's own, and pins the commit it read in `stele.lock`:
-
-```
-$ stele compile
-github.com/acme/guidelines/stele.md: pinned main at 8611d48
-3 rules: 0 matched by text, 0 by position, 1 new, 0 dropped, 2 supplied by their source
-wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
-```
-
-Commit `stele.lock` and `.claude/rules/stele-rules.md`: every developer and every CI run then uses the same commit. A new commit in the guidelines changes nothing until you move the pin on purpose:
-
-```
-$ stele compile
-3 rules: 1 matched by text, 0 by position, 0 new, 0 dropped, 2 supplied by their source
-up to date, nothing written
-
-$ stele compile --update
-github.com/acme/guidelines/stele.md: main 8611d48 -> 1dca9c3
-4 rules: 1 matched by text, 0 by position, 0 new, 0 dropped, 3 supplied by their source
-wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
-```
-
-Review the `stele.lock` and rules file diff, then commit them. Changing `repo`, `ref` or `path` in `stele.json` pins again at the next `stele compile`. Until then `stele check` fails:
-
-```
-$ stele check
-stele check: stele.lock is out of date with stele.json: run stele compile and commit stele.lock
-```
-
-| Key | Effect |
-|---|---|
-| `repo` | The repository: `https://host/path`, `ssh://host/path` or `user@host:path`, as for `stele publish`. |
-| `ref` | A branch or tag. Default: the repository's default branch. A name that is both a branch and a tag needs `refs/heads/...` or `refs/tags/...`. |
-| `path` | The rules file in it. Default `stele.md`. Letters, digits, `.`, `_`, `-` and `/`, ending in `.md`. |
-
-- **Several sources add up.** List up to 16; their rules come after the project's, in the order listed. Nothing wins over anything: every rule applies.
-- **Ids come from the guidelines.** When the guidelines repository has its own `stele.lock` next to its `stele.md`, its rules keep those ids in every project ("supplied by their source"). Run `stele compile` there and commit its `stele.lock`.
-- **It uses your git login.** stele runs `git` on `PATH`, outside the project, and never asks for a password or holds a token: ssh keys and credential helpers work as they do for `git clone`.
-- **It needs the network only for a new pin.** stele keeps a bare clone of each repository in your user cache directory (`stele/sources/` in it), never in the project. A commit it already has is read offline.
-- **The hook never fetches.** It uses the rules from the last `stele compile`, `stele check` or `stele init` on your machine.
-
-In CI, `stele check` reads the pinned commit, so the job needs read access to the guidelines repository. GitHub's default `GITHUB_TOKEN` reads only the repository the job runs in: give the job a deploy key for the guidelines repository, or a read token set in git's own config, never in `stele.json`. With no access, `stele check` exits 2:
-
-```
-$ stele check
-stele check: source git:github.com/acme/guidelines/stele.md: git failed: git ls-remote: ERROR: Repository not found.
-fatal: Could not read from remote repository.
-Please make sure you have the correct access rights
-and the repository exists.
-stele needs read access to git@github.com:acme/guidelines.git: check that git ls-remote git@github.com:acme/guidelines.git works here
-```
-
-## Plugins
-
-A plugin is a program you install that does what stele can't do itself: a source plugin gives it rules, a checker plugin checks code against them in `stele check`.
-
-### Source plugins
-
-List a source plugin under `sources` in `stele.json`, by name:
-
-```json
-{
-  "sources": [
-    { "name": "paragraphs", "config": { "file": "GUIDELINES.txt" } }
-  ]
-}
-```
-
-stele runs `stele-source-paragraphs` from your `PATH` (`stele-source-paragraphs.exe` on Windows) and adds its rules after the project's own:
-
-```
-$ stele compile
-3 rules: 0 matched by text, 0 by position, 3 new, 0 dropped
-wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
-```
-
-Commit `stele.lock` and `.claude/rules/stele-rules.md` as usual. `stele check` asks the plugin again, so when its rules change it fails until you run `stele compile`:
-
-```
-$ stele check
-stele check: stele.lock is out of date with the rules: run stele compile and commit stele.lock
-```
-
-A plugin that isn't installed stops `stele compile`, `stele check` and `stele init` with exit 2:
-
-```
-$ stele compile
-stele compile: source "paragraphs": stele-source-paragraphs not found on PATH: install it, or remove "paragraphs" from "sources" in stele.json
-```
-
-| Key | Effect |
-|---|---|
-| `name` | The plugin: stele runs `stele-source-<name>`. Lower-case letters, digits and `-`, starting with a letter. `stelemd`, `git` and `regex` are stele's own. |
-| `config` | Passed to the plugin as it is. |
-| `timeout` | How long a read may take: `"2m"`, from `1s` to `30m`. Default 1 minute. |
-
-### Checker plugins
-
-A rule's `check:` can name a checker plugin instead of `regex`. List it under `checkers` in `stele.json`; the rule's other keys are its settings:
-
-```markdown
-scope: ["**/*.go"]
-check: word
-word: TODO
-
-Finish the work before you merge it: no TODO in Go code.
-```
-
-```json
-{
-  "checkers": [
-    { "name": "word" }
-  ]
-}
-```
-
-`stele check` runs `stele-checker-word` on the files the rule's `scope` covers, here this `main.go`:
-
-```go
-package main
-
-func main() {
-	// TODO: read the config
-}
-```
-
-```
-$ stele check main.go
-main.go:4:5: error 1bf07c03-cb51-4072-be43-2d2157d62b3f "Finish the work before you merge it: no TODO in Go code."
-1 rule valid
-checked 1 file: 1 error
-```
-
-The keys are those of a source plugin: `name`, `config` and `timeout`, where `timeout` is how long one check may take, 5 minutes by default. stele first asks the checker whether each rule's settings are right; a rule it rejects is invalid, as one `regex` can't compile is. A rule that names a checker `stele.json` doesn't list is invalid too. Every checker listed must be installed, even one no rule names yet.
-
-A checker plugin runs only in `stele check`, never after a write: the hook and `stele compile` know it by name, and the agent learns of its violations from CI.
-
-### Every plugin
-
-- **Only from `PATH`, never from the project.** stele looks only in `PATH` entries that are absolute and outside the project and the git repository that holds it, so a copy inside the project is passed over, never run; on Windows the current directory isn't searched. One that links into the project is refused. On Windows it must be an `.exe` or `.com`.
-- **Run with no shell, outside the project.** It runs in a directory of stele's own, `stele/plugins` in your user cache directory, and finds the project through the `root` stele sends it. It gets your environment, with `PATH` and the library and module paths (`LD_LIBRARY_PATH`, `PYTHONPATH`, `NODE_PATH` and the like) cut to entries outside the project. What it writes on stderr is shown, each line starting with its name.
-- **What it starts stops with it.** After each call stele stops whatever the plugin left running. Ctrl-C stops the plugin too, and stele says the call was cancelled.
-- **Never in the hook.** Source plugins run at `stele compile`, `stele check` and `stele init`, checker plugins at `stele check`, and that's all. The hook uses the rules of the last compile, check or init on your machine.
-
-Writing one takes a few lines in any language: [docs/plugin-protocol.md](docs/plugin-protocol.md) describes the protocol, with the `paragraphs` example above.
-
 ## Publish the rules: stele publish
 
 `stele publish` keeps a copy of the project's `stele.md` in a git repository you choose, as a merge request you review there. Name the repository in `stele.json`:
@@ -704,6 +711,7 @@ stele makes the rules hard to miss. It doesn't make them impossible to break. Kn
 | 🤷 | The agent can ignore the rules | Blocks after a write, then CI |
 | 🔍 | A regex sees text, not code | Precise patterns, review |
 | 📁 | Rules are chosen by path, not by task | Few unscoped rules |
+| 🔑 | Codex runs only the hooks you approved | `/hooks` in Codex, then CI |
 
 ### Enforcement
 
@@ -862,7 +870,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 ### Network and publishing
 
-**Only `stele publish` sends anything over the network, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com.
+**stele itself sends your project's content over the network only from `stele publish`, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com.
 
 **The log goes only to a sink you list, when you run `stele push` or `stele check --push`.** stele hands the sink the lines and opens no connection itself; what the sink does with them, network included, is its own. A sink runs as you, like any [plugin](#plugins).
 
@@ -891,8 +899,9 @@ Not covered:
 
 ## Learn more
 
+- [docs/plugin-protocol.md](docs/plugin-protocol.md): how to write a source, checker or sink plugin.
 - [docs/architecture.md](docs/architecture.md): how stele is built, its packages and contracts.
-- [docs/adr/](docs/adr/): the decisions behind it.
+- [docs/adr/](docs/adr/): the decisions behind it. The newest: [the log](docs/adr/0010-a-local-log-of-what-stele-does.md), [shared rules](docs/adr/0011-rules-from-another-git-repository.md), [Codex](docs/adr/0012-a-second-agent-codex.md), [plugins](docs/adr/0013-external-plugins.md), [sinks, push and status](docs/adr/0014-sinks-push-and-status.md).
 - [test/functional/](test/functional/): the black-box tests and the agent eval.
 
 ## License
