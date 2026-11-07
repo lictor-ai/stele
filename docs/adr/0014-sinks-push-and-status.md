@@ -92,7 +92,8 @@ a sink that opted in.
 installed for it (hooks, switches, rules file), each listed plugin with where
 it was found and the version its `describe` reports, each source with its rule
 count and whether its fingerprint still matches the index's, whether the
-index is fresh, and each sink with the lines waiting for it. It writes
+index is fresh, and each sink with the lines waiting for it and when it was
+last pushed to. It writes
 nothing. It starts plugins: `describe` for each listed plugin, `fingerprint`
 for each external source; `--offline` starts none and reports those as
 unknown. It is never on the hook's path. It exits 0 whenever it could describe
