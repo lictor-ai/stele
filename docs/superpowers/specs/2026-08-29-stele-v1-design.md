@@ -220,10 +220,24 @@ repository from running code it brought with it.
 `stele push` and `stele check --push`. A sink receives briefs only with
 `"share_briefs": true`; code never leaves.
 
+> **Amended by D82.** `share_briefs` is accepted on a sink and has no effect:
+> no record holds a brief. It is reserved so that a later field holding one
+> reaches only a sink that opted in.
+
 **`stele status --format json`** describes the install: binary and stamped
 versions, adapters and what they installed, plugins with their versions and
 whether they are on `PATH`, sources with fingerprints and rule counts, index
 freshness, and the project id (D54). It is what a later dashboard reads.
+
+> **Amended by D85.** It reports, with `"v": 1`: stele's version and the
+> project id; per agent, whether stele's hooks are installed, the version
+> they were stamped with, the two switches and whether its rules file holds
+> stele's rules; each plugin, built in or listed, whether it was found and
+> the version its `describe` reports; each source's rule count in the index
+> and whether it is fresh; whether the index is present, signed by this
+> machine's key and fresh; and each sink's pending lines and last push.
+> Unless `--offline` it runs `describe` and external sources' `fingerprint`;
+> with it, those show as unknown.
 
 `sources` adds to the built-in `stele.md` source; it never replaces it. A
 repository without a `stele.md` simply gets no rules from it. Built-in plugins
@@ -705,7 +719,7 @@ until there is data.
 > checker by its name only: a rule naming one is valid there and is not run.
 
 > **Amended by ADR-0014 (D84).** `--push` does not hand the report to a sink.
-> Where stele runs it pushes the log's pending lines, this run's included; in
+> Where the key and `.stele/` exist it pushes the log's pending lines, this run's included; in
 > CI it sends one record of the run's counts. Its exit is the larger of the
 > check's and the push's.
 
@@ -841,8 +855,8 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D50 | Every public format carries a version: the log entry, the `stele check` JSON report and the `stele status` JSON gain `"v": 1`. | — |
 | D51 | `stele.lock` holds a `project` UUID, minted once and committed. Log entries and check reports carry it. | — |
 | D52 | A source may supply a rule's id; reconciliation uses it as-is. `stele.md` never does. | — |
-| D53 | A fourth slot, sinks (`stele-sink-<name>`, external only). Data leaves only through a listed sink, only from `stele push` or `stele check --push`. Amended by D66: `stele publish` too. Amended by D71: the `git` source fetches rules in and sends nothing of the project. Briefs only with `share_briefs`. | `O-LOG-LOC`, the mechanism only |
-| D54 | `stele status --format json` describes the install. `describe` reports the plugin's version. | — |
+| D53 | A fourth slot, sinks (`stele-sink-<name>`, external only). Data leaves only through a listed sink, only from `stele push` or `stele check --push`. Amended by D66: `stele publish` too. Amended by D71: the `git` source fetches rules in and sends nothing of the project. Briefs only with `share_briefs`. Amended by D82: `share_briefs` is reserved and has no effect, since no record holds a brief; a sink gets the log's signed lines (D83) or, from `stele check --push` in CI, one record of a run's counts (D84). | `O-LOG-LOC`, the mechanism only |
+| D54 | `stele status --format json` describes the install. `describe` reports the plugin's version. Amended by D85: what it reports, `--offline`, its exit codes. | — |
 | D55 | Org-wide rules reach a repository only through a source plugin. | — |
 | D56 | `stele.md` follows Markdown where it can: a `---` inside a fenced code block or an HTML comment does not separate rules, and HTML comments before a rule's metadata are skipped. | — |
 | D57 | stele trusts only the generated files it wrote on this machine. `index.json` and session state carry an HMAC-SHA256 made with a per-user key kept outside every repository (the user config directory, owner-only); a file that does not verify is rebuilt or started afresh. `stele.lock` is shared on purpose and not signed. Malware running as the user is out of scope. | follows from D24 and D45: `.stele/` is not covered by the repository's `.gitignore`, so a repository could otherwise commit an index the agent is served |
@@ -873,7 +887,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D82 | **Amends D53 (ADR-0014).** Sinks are listed in `stele.json` under `sinks` (`name`, optional `config`, `timeout`, `share_briefs`), named and refused as sources and checkers are (D78), at most 16, none built in. `push` sends `config`, `project` and `records`; the answer `{"accepted": n}` means the first `n` records, in order; another `n` is a protocol error. Batches of at most 500 records and 4 MiB; 1 minute per call unless the entry's `timeout` says otherwise. `share_briefs` is accepted and has no effect: no record holds a brief. | #17 |
 | D83 | `stele push` sends, to each sink in order, the log's lines this machine signed and that carry this project's id, oldest first, exactly as written with their `mac`, from where it last stopped, and skips and counts the others; the first push to a sink sends the whole log. `.stele/push/<sink>.json`, sealed, holds the last line sent (its MAC, the byte after it, and the first MAC of its file), so it follows a rotation; past two rotations it sends all there is and says lines rotated out. The cursor moves after each accepted batch, by what was accepted: at least once, never exactly once. A cursor that does not verify is exit 2. A sink that fails stops for the run, the others go on; no retries. One push at a time per project. Exit 0 all sent (or nothing, or no sink), 1 a sink took fewer than sent, 2 could not run. | #17 |
 | D84 | **Amends spec §8.** `stele check --push` pushes the log's pending lines where the key and `.stele/` exist, and in CI sends one record built as the log's `check` line, with no `mac`. It never sends the check report. Its exit is the larger of the check's and the push's. | #17 |
-| D85 | `stele status [--format text\|json] [--offline]` describes the install with `"v": 1` (D54): versions, project id, each agent's hooks, switches and rules file, each listed plugin found or not and its `describe` version, each source's rule count and freshness, the index's freshness, each sink's pending lines. It writes nothing, starts `describe` and external `fingerprint` calls unless `--offline`, and exits 0 when it could describe the install, 2 when not. Not on the hook's path. | #17 |
+| D85 | `stele status [--format text\|json] [--offline]` describes the install with `"v": 1` (D54): versions, project id, each agent's hooks, switches and rules file, each listed plugin found or not and its `describe` version, each source's rule count and freshness, the index's freshness, each sink's pending lines and last push. It writes nothing, starts `describe` and external `fingerprint` calls unless `--offline`, and exits 0 when it could describe the install, 2 when not. Not on the hook's path. | #17 |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 
