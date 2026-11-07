@@ -7,13 +7,13 @@
 
 # stele
 
-**Make Claude Code follow your repository's rules.**
+**Make Claude Code and Codex follow your repository's rules.**
 
 Write your rules once in `stele.md`. stele shows them to the agent before it writes,<br>
 checks what it wrote, and checks again in CI.
 
 [![CI](https://github.com/lictor-ai/stele/actions/workflows/ci.yml/badge.svg)](https://github.com/lictor-ai/stele/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v1.0.0-blue)](https://github.com/lictor-ai/stele/releases)
+[![Release](https://img.shields.io/badge/release-v1.2.0-blue)](https://github.com/lictor-ai/stele/releases)
 [![Go](https://img.shields.io/badge/go-1.27%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
@@ -21,8 +21,11 @@ checks what it wrote, and checks again in CI.
 [Quick start](#quick-start) ·
 [How it works](#how-it-works) ·
 [Does it work?](#does-it-work) ·
+[Codex](#codex) ·
 [Writing stele.md](#writing-stelemd) ·
 [CI](#ci-stele-check) ·
+[Shared rules](#shared-rules-from-another-repository) ·
+[Plugins](#plugins) ·
 [Limits](#limits)
 
 </div>
@@ -31,7 +34,7 @@ checks what it wrote, and checks again in CI.
 
 ## Why stele
 
-Rules in `CLAUDE.md` are guidance: nothing checks them. In [our eval](#does-it-work), with the rules in `CLAUDE.md`, the agent broke one in 3 of 8 runs of a task that pulls against it. stele flagged each break right after the write, and the agent fixed it.
+Rules in `CLAUDE.md` or `AGENTS.md` are guidance: nothing checks them. In [our eval](#does-it-work), with the rules in `CLAUDE.md`, the agent broke one in 3 of 8 runs of a task that pulls against it. stele flagged each break right after the write, and the agent fixed it.
 
 stele puts each rule in front of the agent when it matters, and catches what slips through:
 
@@ -43,7 +46,7 @@ And it stays out of your way:
 
 - 📦 **One Go binary.** No daemon, no service, no config server.
 - 🧠 **No model.** Rules are chosen by path and checked by regex: same input, same answer.
-- 🔒 **No network calls**, except `stele publish`, which you run yourself, and fetching [shared rules](#shared-rules-from-another-repository) you list in `stele.json`.
+- 🔒 **No network calls of its own**, except `stele publish`, which you run yourself, and fetching [shared rules](#shared-rules-from-another-repository) you list in `stele.json`. [Plugins](#plugins) and [sinks](#send-the-log-somewhere-stele-push) you install may use the network.
 - ⚡ **About 0.1 s per write.** See the [measured times](#does-it-work).
 
 ## Quick start
@@ -54,7 +57,7 @@ cd your-project && stele init                            # add the hooks and a s
 $EDITOR stele.md && stele compile                        # write your rules, compile them
 ```
 
-Commit what `stele init` and `stele compile` wrote, start Claude Code, and the rules apply. Add [`stele check`](#ci-stele-check) to CI to catch the rest.
+Commit what `stele init` and `stele compile` wrote, start Claude Code, and the rules apply. For Codex, run `stele init --agent=codex` instead, and approve stele's hooks in Codex with `/hooks` (see [Codex](#codex)). Add [`stele check`](#ci-stele-check) to CI to catch the rest.
 
 ## How it works
 
@@ -74,6 +77,8 @@ sequenceDiagram
 ```
 
 Then, in the pull request, `stele check --base origin/main` checks every changed file against the same rules. Details: [What the agent sees](#what-the-agent-sees).
+
+Codex works the same way, with the rules in `AGENTS.md` and `apply_patch` in place of Write and Edit: see [Codex](#codex).
 
 ## Does it work?
 
@@ -102,7 +107,7 @@ Every experiment is in [test/functional/agent/results/](test/functional/agent/re
 
 ## Install
 
-From the first stable release on, macOS and Linux, with [Homebrew](https://brew.sh):
+macOS and Linux, with [Homebrew](https://brew.sh):
 
 ```sh
 brew install lictor-ai/tap/stele
@@ -125,7 +130,7 @@ go install github.com/lictor-ai/stele/cmd/stele@latest
 
 Or, from a clone: `go install ./cmd/stele`.
 
-The hook runs the bare command `stele`, so it must be on the `PATH` that Claude Code sees: for `go install`, that is `$(go env GOPATH)/bin`.
+The hook runs the bare command `stele`, so it must be on the `PATH` that Claude Code or Codex sees: for `go install`, that is `$(go env GOPATH)/bin`.
 
 ## Set up a repository
 
@@ -258,135 +263,13 @@ Scope globs:
 
 ## What the agent sees
 
+This is what Claude Code sees. Codex sees the same, with the differences [Codex](#codex) and its [limits](#codex-1) list.
+
 - **When a session or subagent starts.** Claude Code loads `.claude/rules/stele-rules.md`, every rule with its scope, as it loads `CLAUDE.md`. The agent is also told to create and change files with Write and Edit only, never through Bash: stele sees only those. It is told that reading, searching and running commands through Bash is fine.
 - **Before a write**, unless `--remind=off`. A rule the agent loaded from `.claude/rules/stele-rules.md` at the start of its session counts as seen until the session ends, as long as the rule hasn't changed since; this needs Claude Code started in the project's root. The first write in a turn to a file with other rules is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent; rules that do not fit in one message (about 9,000 bytes) are shown on the next write. A retry of the denied write goes through; parallel writes in the same message, to other files or to the same one, are denied too, once.
 - **After a write**, unless `--check=off`. A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
 - **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock`, `.claude/rules/stele-rules.md` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` and the switches say. So does a write to Claude Code's settings files, which run stele's hooks: `.claude/settings.json` and `.claude/settings.local.json` anywhere in the project or from the session's directory up to the git root, and your user `settings.json`. A change there can weaken stele or turn it off. Allow it only if you asked for it.
-
-## What stele records
-
-stele keeps a log of what it did in `.stele/log.jsonl`, one JSON line per event. Here is a write it checked, which broke a rule on line 3:
-
-```
-{"v":1,"kind":"checked","project":"150f0e27-e658-4514-a7c1-bd630412f323","ts":"2026-11-03T20:49:41.084298Z","session":"abc123","agent":"claude-code","file":"main.go","rules":["b7e248f0-fe55-4b23-89d0-6f0b9addf63d"],"violations":[{"rule":"b7e248f0-fe55-4b23-89d0-6f0b9addf63d","line":3,"blocking":true}],"more":0,"mac":"1d598cd1fdf7b37010c1750185898a5cb3f77561a9d69f49b6d6971cd1d73152"}
-```
-
-There are five kinds of line:
-
-| `kind` | When |
-|---|---|
-| `loaded` | A session or subagent starts, with the rules it loaded from `.claude/rules/stele-rules.md` |
-| `denied` | A write or a Bash command is denied to show rules, with the rules shown |
-| `wrote` | A write went through, with every rule that applies to the file |
-| `checked` | A file is checked after a write, with what it broke, or nothing |
-| `check` | `stele check` runs, with its counts |
-
-A line holds rule ids, file paths, session and prompt ids, and counts. Never code, rule text or diffs. Each line is signed with your machine's key, so a line made on another machine, edited, or not written by stele is ignored. stele sends the log only to a sink you list, when you run [`stele push`](#send-the-log-somewhere-stele-push), and `stele uninstall` deletes it with `.stele/`.
-
-## How the rules are doing: stele stats
-
-`stele stats` reads the log and tells you which rules the agent breaks, whether it fixes them, and which rules never come up:
-
-```
-$ stele stats
-last 30 days, 2026-10-04 to 2026-11-03 (+01:00), from .stele/log.jsonl
-3 sessions, 36 turns with a write, 39 writes (39 checked), 3 denied (3 writes)
-
-Broken most often (fixed: the agent's next write to the file, in the same turn, did not break it)
-  4 writes, fixed 3 of 4  787f8bcc-82e6-4ab6-93d9-02860d4921ba "Never put credentials in code. Read them from the environmen…"
-
-Dead: no write met a file they apply to, in 30 turns or more
-  883fc015-b304-4f73-802c-b3df0f35516a "Migrations are append-only: never edit one that was merged." scope: migrations/**
-
-Denied per day
-  2026-11-03  3 (3 writes), 36 turns
-
-stele check: 1 run, 0 found violations
-```
-
-What each part means:
-
-- **A turn** is one message you sent in which the agent wrote something stele saw.
-- **Broken** counts the writes that broke a rule. **Fixed** means the agent's next write to that file, in the same turn, didn't break it again.
-- **Dead** rules are rules no write touched a file for. Their scope may be wrong, or the code they were for may be gone. A rule is judged only once 30 turns have passed since a session first loaded it. A rule `stele.lock` doesn't have yet is never judged.
-- **Denied per day** counts the writes and Bash commands denied to show rules, by your local day.
-
-With more than one agent in the log, a **By agent** part gives the same numbers for each.
-
-**Too little data.** Under 30 turns, stats says so first and judges no rule:
-
-```
-Too little data to judge the rules: 6 turns with a write logged, stats need 30. The counts below are what happened, not a trend.
-```
-
-| Flag | |
-|---|---|
-| `--since 30d` | The window: `12h`, `30d`, `2w`, a day like `2026-10-01`, or `all`. Default `30d` |
-| `--format json` | JSON, with `"v": 1` and the project id. It has every broken rule, and a fix rate once a rule has 10 broken writes |
-
-`stele stats` exits 0, or 2 when it can't run. It reads the log, `stele.md` and, for [shared rules](#shared-rules-from-another-repository), the rules from your last `stele compile`; it writes nothing and makes no network call. Lines it can't use are counted at the end: lines not signed on this machine, lines from another project, lines in a newer format.
-
-## What's installed: stele status
-
-`stele status` tells you what stele has set up in a repository, and whether its rules are up to date:
-
-```
-$ stele status
-stele devel in /home/you/project, project 0f1f82a6-f72c-4110-8133-1867a9f868b3
-
-agents
-  claude-code  hooks in .claude/settings.json (devel), remind on, check on, .claude/rules/stele-rules.md
-  codex        not set up
-
-plugins
-  source   stelemd                        built in
-  checker  regex                          built in
-  checker  semgrep                        checker "semgrep": stele-checker-semgrep not found on PATH: install it, or remove "semgrep" from "checkers" in stele.json
-
-sources
-  stelemd                                1 rule, fresh
-
-index: fresh
-```
-
-- **agents**: for each agent, whether stele's hooks are installed, the version they were installed by, the two switches, and whether the rules file holds stele's rules.
-- **plugins**: the built-in ones, and each [plugin](#plugins) `stele.json` lists, with the version it reports or what is wrong with it.
-- **sources**: how many rules each source has in the index, and whether it changed since the last `stele compile`. **index** is fresh when every source is.
-
-| Flag | |
-|---|---|
-| `--format json` | The same as JSON, with `"v": 1` and the project id |
-| `--offline` | Start no plugin: plugin versions, and whether a plugin source is fresh, show as unknown |
-
-`stele status` writes nothing. To learn a plugin's version it runs the plugin, and it asks each plugin source whether it changed, unless you pass `--offline`. It exits 0 whenever it could describe the install, a missing plugin included, and 2 when it can't run (no project, or a `stele.json` it can't read). With a [sink](#send-the-log-somewhere-stele-push) listed, it also says how many log lines wait for it.
-
-## Send the log somewhere: stele push
-
-The log stays on your machine. To send it somewhere, install a **sink**, a program named `stele-sink-<name>` on your `PATH`, and list it in `stele.json`:
-
-```json
-{ "sinks": [{ "name": "file", "config": { "path": "/home/you/stele-log.jsonl" } }] }
-```
-
-Then run `stele push`:
-
-```
-$ stele push
-file: sent 4 lines
-$ stele push
-file: sent 0 lines
-```
-
-- **What a sink gets:** the lines of `.stele/log.jsonl`, exactly as stele wrote them, each with its signature. That is rule ids, file paths, session and prompt ids, and counts; never code. Lines not signed on this machine, or of another project, are skipped and counted.
-- **The first push sends the whole log.** Listing the sink is how you agree to send it.
-- **It remembers how far it got,** per sink, in `.stele/push/<name>.json`, signed. Each push sends only what is new, and finds its place after the log rotates.
-- **A line can arrive twice,** if stele stops between the sink's answer and saving how far it got. Each record carries its `mac`, a key the sink can drop a repeat by.
-- **A sink that fails stops for that run;** the others still get theirs. The next `stele push` tries again from where it stopped.
-
-`stele push` exits 0 when every sink took everything (or there was nothing to send, or no sink), 1 when a sink took only part, and 2 when stele or a sink couldn't run: a sink missing from `PATH` (the others still get their lines), a crash, a bad answer, or another `stele push` running. stele runs a sink only from `stele push` and `stele check --push`, never from the hook. It opens no connection itself: where the lines go is the sink's doing. To write a sink, see [the plugin protocol](docs/plugin-protocol.md#push-sink).
-
-`share_briefs` is accepted on a sink and does nothing yet: no line holds a brief.
 
 ## CI: stele check
 
@@ -444,7 +327,7 @@ jobs:
       - run: stele check --base origin/${{ github.base_ref }}
 ```
 
-Pin a version instead of `@latest` once one is tagged. With [shared rules](#shared-rules-from-another-repository), the job also needs read access to the guidelines repository.
+Pin a version, such as `@v1.2.0`, instead of `@latest`. With [shared rules](#shared-rules-from-another-repository), the job also needs read access to the guidelines repository.
 
 ## stele.json
 
@@ -630,6 +513,130 @@ A checker plugin runs only in `stele check`, never after a write: the hook and `
 
 Writing one takes a few lines in any language: [docs/plugin-protocol.md](docs/plugin-protocol.md) describes the protocol, with the `paragraphs` example above.
 
+## What stele records
+
+stele keeps a log of what it did in `.stele/log.jsonl`, one JSON line per event. Here is a write it checked, which broke a rule on line 3:
+
+```
+{"v":1,"kind":"checked","project":"150f0e27-e658-4514-a7c1-bd630412f323","ts":"2026-11-03T20:49:41.084298Z","session":"abc123","agent":"claude-code","file":"main.go","rules":["b7e248f0-fe55-4b23-89d0-6f0b9addf63d"],"violations":[{"rule":"b7e248f0-fe55-4b23-89d0-6f0b9addf63d","line":3,"blocking":true}],"more":0,"mac":"1d598cd1fdf7b37010c1750185898a5cb3f77561a9d69f49b6d6971cd1d73152"}
+```
+
+There are five kinds of line:
+
+| `kind` | When |
+|---|---|
+| `loaded` | A session or subagent starts, with the rules it loaded from `.claude/rules/stele-rules.md` (`AGENTS.md` for Codex) |
+| `denied` | A write or a Bash command is denied to show rules, with the rules shown |
+| `wrote` | A write went through, with every rule that applies to the file |
+| `checked` | A file is checked after a write, with what it broke, or nothing |
+| `check` | `stele check` runs, with its counts |
+
+A line holds rule ids, file paths, session and prompt ids, and counts. Never code, rule text or diffs. Each line is signed with your machine's key, so a line made on another machine, edited, or not written by stele is ignored. stele sends the log only to a sink you list, when you run [`stele push`](#send-the-log-somewhere-stele-push), and `stele uninstall` deletes it with `.stele/`.
+
+## How the rules are doing: stele stats
+
+`stele stats` reads the log and tells you which rules the agent breaks, whether it fixes them, and which rules never come up:
+
+```
+$ stele stats
+last 30 days, 2026-10-04 to 2026-11-03 (+01:00), from .stele/log.jsonl
+3 sessions, 36 turns with a write, 39 writes (39 checked), 3 denied (3 writes)
+
+Broken most often (fixed: the agent's next write to the file, in the same turn, did not break it)
+  4 writes, fixed 3 of 4  787f8bcc-82e6-4ab6-93d9-02860d4921ba "Never put credentials in code. Read them from the environmen…"
+
+Dead: no write met a file they apply to, in 30 turns or more
+  883fc015-b304-4f73-802c-b3df0f35516a "Migrations are append-only: never edit one that was merged." scope: migrations/**
+
+Denied per day
+  2026-11-03  3 (3 writes), 36 turns
+
+stele check: 1 run, 0 found violations
+```
+
+What each part means:
+
+- **A turn** is one message you sent in which the agent wrote something stele saw.
+- **Broken** counts the writes that broke a rule. **Fixed** means the agent's next write to that file, in the same turn, didn't break it again.
+- **Dead** rules are rules no write touched a file for. Their scope may be wrong, or the code they were for may be gone. A rule is judged only once 30 turns have passed since a session first loaded it. A rule `stele.lock` doesn't have yet is never judged.
+- **Denied per day** counts the writes and Bash commands denied to show rules, by your local day.
+
+With more than one agent in the log, a **By agent** part gives the same numbers for each.
+
+**Too little data.** Under 30 turns, stats says so first and judges no rule:
+
+```
+Too little data to judge the rules: 6 turns with a write logged, stats need 30. The counts below are what happened, not a trend.
+```
+
+| Flag | |
+|---|---|
+| `--since 30d` | The window: `12h`, `30d`, `2w`, a day like `2026-10-01`, or `all`. Default `30d` |
+| `--format json` | JSON, with `"v": 1` and the project id. It has every broken rule, and a fix rate once a rule has 10 broken writes |
+
+`stele stats` exits 0, or 2 when it can't run. It reads the log, `stele.md` and, for [shared rules](#shared-rules-from-another-repository), the rules from your last `stele compile`; it writes nothing and makes no network call. Lines it can't use are counted at the end: lines not signed on this machine, lines from another project, lines in a newer format.
+
+## What's installed: stele status
+
+`stele status` tells you what stele has set up in a repository, and whether its rules are up to date:
+
+```
+$ stele status
+stele devel in /home/you/project, project 0f1f82a6-f72c-4110-8133-1867a9f868b3
+
+agents
+  claude-code  hooks in .claude/settings.json (devel), remind on, check on, .claude/rules/stele-rules.md
+  codex        not set up
+
+plugins
+  source   stelemd                        built in
+  checker  regex                          built in
+  checker  semgrep                        checker "semgrep": stele-checker-semgrep not found on PATH: install it, or remove "semgrep" from "checkers" in stele.json
+
+sources
+  stelemd                                1 rule, fresh
+
+index: fresh
+```
+
+- **agents**: for each agent, whether stele's hooks are installed, the version they were installed by, the two switches, and whether the rules file holds stele's rules.
+- **plugins**: the built-in ones, and each [plugin](#plugins) `stele.json` lists, with the version it reports or what is wrong with it.
+- **sources**: how many rules each source has in the index, and whether it changed since the last `stele compile`. **index** is fresh when every source is.
+
+| Flag | |
+|---|---|
+| `--format json` | The same as JSON, with `"v": 1` and the project id |
+| `--offline` | Start no plugin: plugin versions, and whether a plugin source is fresh, show as unknown |
+
+`stele status` writes nothing. To learn a plugin's version it runs the plugin, and it asks each plugin source whether it changed, unless you pass `--offline`. It exits 0 whenever it could describe the install, a missing plugin included, and 2 when it can't run (no project, or a `stele.json` it can't read). With a [sink](#send-the-log-somewhere-stele-push) listed, it also says how many log lines wait for it.
+
+## Send the log somewhere: stele push
+
+The log stays on your machine. To send it somewhere, install a **sink**, a program named `stele-sink-<name>` on your `PATH`, and list it in `stele.json`:
+
+```json
+{ "sinks": [{ "name": "file", "config": { "path": "/home/you/stele-log.jsonl" } }] }
+```
+
+Then run `stele push`:
+
+```
+$ stele push
+file: sent 4 lines
+$ stele push
+file: sent 0 lines
+```
+
+- **What a sink gets:** the lines of `.stele/log.jsonl`, exactly as stele wrote them, each with its signature. That is rule ids, file paths, session and prompt ids, and counts; never code. Lines not signed on this machine, or of another project, are skipped and counted.
+- **The first push sends the whole log.** Listing the sink is how you agree to send it.
+- **It remembers how far it got,** per sink, in `.stele/push/<name>.json`, signed. Each push sends only what is new, and finds its place after the log rotates.
+- **A line can arrive twice,** if stele stops between the sink's answer and saving how far it got. Each record carries its `mac`, a key the sink can drop a repeat by.
+- **A sink that fails stops for that run;** the others still get theirs. The next `stele push` tries again from where it stopped.
+
+`stele push` exits 0 when every sink took everything (or there was nothing to send, or no sink), 1 when a sink took only part, and 2 when stele or a sink couldn't run: a sink missing from `PATH` (the others still get their lines), a crash, a bad answer, or another `stele push` running. stele runs a sink only from `stele push` and `stele check --push`, never from the hook. It opens no connection itself: where the lines go is the sink's doing. To write a sink, see [the plugin protocol](docs/plugin-protocol.md#push-sink).
+
+`share_briefs` is accepted on a sink and does nothing yet: no line holds a brief.
+
 ## Publish the rules: stele publish
 
 `stele publish` keeps a copy of the project's `stele.md` in a git repository you choose, as a merge request you review there. Name the repository in `stele.json`:
@@ -704,6 +711,7 @@ stele makes the rules hard to miss. It doesn't make them impossible to break. Kn
 | 🤷 | The agent can ignore the rules | Blocks after a write, then CI |
 | 🔍 | A regex sees text, not code | Precise patterns, review |
 | 📁 | Rules are chosen by path, not by task | Few unscoped rules |
+| 🔑 | Codex runs only the hooks you approved | `/hooks` in Codex, then CI |
 
 ### Enforcement
 
@@ -862,7 +870,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 ### Network and publishing
 
-**Only `stele publish` sends anything over the network, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com.
+**stele itself sends over the network only from `stele publish`, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com.
 
 **The log goes only to a sink you list, when you run `stele push` or `stele check --push`.** stele hands the sink the lines and opens no connection itself; what the sink does with them, network included, is its own. A sink runs as you, like any [plugin](#plugins).
 
@@ -891,8 +899,9 @@ Not covered:
 
 ## Learn more
 
+- [docs/plugin-protocol.md](docs/plugin-protocol.md): how to write a source, checker or sink plugin.
 - [docs/architecture.md](docs/architecture.md): how stele is built, its packages and contracts.
-- [docs/adr/](docs/adr/): the decisions behind it.
+- [docs/adr/](docs/adr/): the decisions behind it. The newest: [the log](docs/adr/0010-a-local-log-of-what-stele-does.md), [shared rules](docs/adr/0011-rules-from-another-git-repository.md), [Codex](docs/adr/0012-a-second-agent-codex.md), [plugins](docs/adr/0013-external-plugins.md), [sinks, push and status](docs/adr/0014-sinks-push-and-status.md).
 - [test/functional/](test/functional/): the black-box tests and the agent eval.
 
 ## License
