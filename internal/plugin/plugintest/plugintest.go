@@ -54,7 +54,8 @@ func parse(exe string) (kind, mode string, ok bool) {
 //
 // config, in a good answer: "rules", "fingerprint", "problems",
 // "violations", "skipped" are copied into the answer for the ops that have
-// them.
+// them. A push accepts at most "accept" records, when set, and appends those
+// it accepts, one per line, to the file "out".
 
 // Serve answers the one request on stdin as exe's mode says, and returns the
 // exit status.
@@ -96,7 +97,21 @@ func Serve(exe string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if op == "push" {
 			var recs []json.RawMessage
 			_ = json.Unmarshal(req["records"], &recs)
-			answer["accepted"] = len(recs)
+			n := len(recs)
+			var accept int
+			if json.Unmarshal(config["accept"], &accept) == nil && accept < n {
+				n = accept
+			}
+			var out string
+			if json.Unmarshal(config["out"], &out) == nil && out != "" {
+				if f, err := os.OpenFile(out, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+					for _, r := range recs[:n] {
+						fmt.Fprintf(f, "%s\n", r)
+					}
+					f.Close()
+				}
+			}
+			answer["accepted"] = n
 		}
 	}
 

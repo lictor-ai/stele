@@ -52,6 +52,12 @@ func checkers(root string, stderr io.Writer) (map[string]check.Checker, error) {
 	return plugin.Checkers(root, pluginexec.New(root, stderr))
 }
 
+// listedSinks is every sink stele.json lists under root, found on PATH, whose
+// stderr goes to stderr. Only runPush and runCheck's --push call it (D82).
+func listedSinks(root string, stderr io.Writer) ([]*plugin.Sink, error) {
+	return plugin.Sinks(root, pluginexec.New(root, stderr))
+}
+
 // inventory is every plugin of the install under root, for stele status:
 // with offline nothing is looked up and no runner is handed out; else each
 // external plugin is found, and the runner returned starts them. Only

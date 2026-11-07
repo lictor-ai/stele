@@ -28,7 +28,7 @@ var commands = map[string]command{
 	"check":     {"validate the rules and run checkers on changed files", runCheck},
 	"stats":     {"how the rules are doing, from the local log", runStats},
 	"status":    {"describe the install", runStatus},
-	"push":      {"send new log entries to every listed sink", notImplemented("push")},
+	"push":      {"send the log's new lines to every sink stele.json lists", runPush},
 	"publish":   {"send stele.md to the repository in stele.json as a merge request", runPublish},
 	"mcp":       {"run the MCP server on stdio", notImplemented("mcp")},
 	"hook":      {"read an agent's hook payload on stdin, decide", runHook},

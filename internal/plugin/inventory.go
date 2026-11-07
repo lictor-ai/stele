@@ -23,7 +23,7 @@ type Item struct {
 }
 
 // Inventory lists every plugin of the install under root, in order: the
-// sources, then the checkers. It starts nothing; with run it finds each
+// sources, the checkers, then the sinks. It starts nothing; with run it finds each
 // external plugin on PATH, and an external source found is built, so its
 // fingerprint can be asked. Without run nothing is looked up. A bad entry or
 // a missing plugin is an Item with its Err; only a stele.json that cannot be
@@ -34,6 +34,10 @@ func Inventory(root string, git gitrepo.Git, run Runner) ([]Item, error) {
 		return nil, err
 	}
 	chkEntries, err := listed(root, "checkers", ErrCheckers)
+	if err != nil {
+		return nil, err
+	}
+	sinkMsgs, err := listedRaw(root, "sinks", ErrSinks)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +82,20 @@ func Inventory(root string, git gitrepo.Git, run Runner) ([]Item, error) {
 		if run == nil {
 			it.Err = ValidName(e.Name)
 		} else if _, err := external(KindChecker, "checkers", e, CheckTimeout, run); err != nil {
+			it.Err = err
+		}
+		items = append(items, it)
+	}
+	for i, m := range sinkMsgs {
+		var e sinkEntry
+		if err := strict(m, &e); err != nil {
+			items = append(items, Item{Kind: KindSink, Name: fmt.Sprintf("sinks[%d]", i), Err: fmt.Errorf("%w: sinks[%d]: %v", ErrSinks, i, err)})
+			continue
+		}
+		it := Item{Kind: KindSink, Name: e.Name}
+		if run == nil {
+			it.Err = ValidName(e.Name)
+		} else if _, err := external(KindSink, "sinks", entry{Name: e.Name, Config: e.Config, Timeout: e.Timeout}, PushTimeout, run); err != nil {
 			it.Err = err
 		}
 		items = append(items, it)

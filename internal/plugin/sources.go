@@ -109,7 +109,7 @@ func external(kind Kind, list string, e entry, def time.Duration, run Runner) (p
 		return plugged{}, err
 	}
 	if run == nil {
-		return plugged{}, fmt.Errorf("%s %q: external plugins run only from stele compile, stele check and stele init", kind, e.Name)
+		return plugged{}, fmt.Errorf("%s %q: external plugins run only from stele compile, stele check, stele init, stele status and stele push", kind, e.Name)
 	}
 	bin, err := run.Find(kind, e.Name)
 	if err != nil {
@@ -137,6 +137,22 @@ func timeoutOf(s string, def time.Duration) (time.Duration, error) {
 // listed decodes the entries under key in root's stele.json. No stele.json,
 // or no key, is none.
 func listed(root, key string, kind error) ([]entry, error) {
+	msgs, err := listedRaw(root, key, kind)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]entry, len(msgs))
+	for i, m := range msgs {
+		if err := strict(m, &out[i]); err != nil {
+			return nil, fmt.Errorf("%w: %s[%d]: %v", kind, key, i, err)
+		}
+	}
+	return out, nil
+}
+
+// listedRaw is the items under key in root's stele.json, undecoded, at most
+// maxEntries. No stele.json, or no key, is none.
+func listedRaw(root, key string, kind error) ([]json.RawMessage, error) {
 	data, err := enforce.Read(root)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -157,13 +173,7 @@ func listed(root, key string, kind error) ([]entry, error) {
 	if len(msgs) > maxEntries {
 		return nil, fmt.Errorf("%w: %d %s, at most %d", kind, len(msgs), key, maxEntries)
 	}
-	out := make([]entry, len(msgs))
-	for i, m := range msgs {
-		if err := strict(m, &out[i]); err != nil {
-			return nil, fmt.Errorf("%w: %s[%d]: %v", kind, key, i, err)
-		}
-	}
-	return out, nil
+	return msgs, nil
 }
 
 // strict decodes data into v, refusing a key v does not have: a typo such as

@@ -2,7 +2,8 @@
 
 A plugin is a program that gives stele something it doesn't do itself. A
 **source** plugin gives it rules; a **checker** plugin checks code against
-them in `stele check`. This page is protocol 1, the one this stele speaks
+them in `stele check`; a **sink** plugin receives stele's log from
+`stele push`. This page is protocol 1, the one this stele speaks
 ([ADR-0013](adr/0013-external-plugins.md)).
 
 ## The short version
@@ -69,7 +70,7 @@ Sent once per run of stele, before any other call.
 ```
 
 `kind` must be `source` for a `stele-source-` program, `checker` for a
-`stele-checker-` one. `protocols` must hold
+`stele-checker-` one, `sink` for a `stele-sink-` one. `protocols` must hold
 1. `version` is your program's, 1 to 64 printable characters.
 
 ## `read`
@@ -282,3 +283,90 @@ func main() {
 
 A file it can't open is listed under `skipped`, so stele reports it rather
 than pass it.
+
+## `push` (sink)
+
+A **sink** plugin, `stele-sink-<name>`, receives stele's log when you run
+`stele push` ([ADR-0014](adr/0014-sinks-push-and-status.md)). A project lists
+it under `sinks`:
+
+```json
+{ "sinks": [{ "name": "<name>", "config": { … }, "timeout": "2m" }] }
+```
+
+```
+{"protocol": 1, "op": "push", "config": { … }, "project": "0f1f82a6-…", "records": [{"v":1,"kind":"wrote",…,"mac":"…"}, …]}
+{"protocol": 1, "accepted": 2}
+```
+
+Each record is one line of the project's `.stele/log.jsonl`, exactly as stele
+wrote it: rule ids, file paths, session and prompt ids, and counts, never
+code.
+
+`accepted` is how many you took: the first `accepted` records, in order. stele
+sends the rest again next time. Take them all, or stop at the first you can't
+keep. A number below 0 or above the records sent is an error.
+
+stele may send a record twice: when it stops between your answer and saving
+how far it got. Use `mac` to drop a record you already have. At most 500
+records and 4 MiB a call; 1 minute, or the entry's `timeout`. Your answer is
+at most 1 MiB.
+
+stele itself opens no connection. Where the records go is up to your
+program.
+
+## Example: a sink
+
+`stele-sink-file` appends every record to the file its `config` names.
+
+```go
+// stele-sink-file appends the records stele push sends it to a file:
+//
+//	"sinks": [{"name": "file", "config": {"path": "/home/you/stele-log.jsonl"}}]
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+)
+
+type request struct {
+	Op     string `json:"op"`
+	Config struct {
+		Path string `json:"path"`
+	} `json:"config"`
+	Records []json.RawMessage `json:"records"`
+}
+
+func main() {
+	var req request
+	answer := map[string]any{"protocol": 1}
+	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
+		answer["error"] = err.Error()
+	}
+	switch req.Op {
+	case "describe":
+		answer["kind"], answer["protocols"], answer["version"] = "sink", []int{1}, "0.1.0"
+	case "push":
+		f, err := os.OpenFile(req.Config.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			answer["error"] = err.Error()
+			break
+		}
+		n := 0
+		for _, r := range req.Records {
+			if _, err := fmt.Fprintf(f, "%s\n", r); err != nil {
+				break
+			}
+			n++
+		}
+		f.Close()
+		answer["accepted"] = n
+	}
+	json.NewEncoder(os.Stdout).Encode(answer)
+}
+```
+
+It stops at the first record it can't write, and says how many it kept, so
+stele sends the rest next time.

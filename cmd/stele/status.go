@@ -8,8 +8,11 @@ import (
 	"io"
 	"io/fs"
 	"strings"
+	"time"
 
+	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/plugin"
+	"github.com/lictor-ai/stele/internal/push"
 	"github.com/lictor-ai/stele/internal/sign"
 	"github.com/lictor-ai/stele/internal/status"
 )
@@ -135,7 +138,7 @@ func printStatus(w io.Writer, root string, st status.Status) {
 	if len(st.Sinks) > 0 {
 		fmt.Fprintln(w, "\nsinks")
 		for _, s := range st.Sinks {
-			line := fmt.Sprintf("%d lines to send", s.Pending)
+			line := plural(s.Pending, "line") + " to send"
 			if s.Error != "" {
 				line = s.Error
 			}
@@ -153,9 +156,38 @@ func printStatus(w io.Writer, root string, st status.Status) {
 	}
 }
 
-// statusSinks is the sinks stele.json lists and what waits for each; none
-// until stele push exists.
-func statusSinks(string, sign.Key) []status.Sink { return nil }
+// statusSinks is the sinks stele.json lists and the log lines waiting for
+// each. It reads the log and the cursors; it starts and sends nothing.
+func statusSinks(root string, key sign.Key) []status.Sink {
+	names, err := plugin.SinkNames(root)
+	if err != nil {
+		return []status.Sink{{Name: "sinks", Error: err.Error()}}
+	}
+	f, lerr := lock.Load(root)
+	var out []status.Sink
+	for _, name := range names {
+		s := status.Sink{Name: name}
+		switch {
+		case lerr != nil:
+			s.Error = lerr.Error()
+		case f.Project == "":
+			s.Error = "stele.lock has no project id yet: run stele compile"
+		case key == nil:
+			s.Error = "no log on this machine"
+		default:
+			n, last, err := push.Pending(root, key, f.Project, name)
+			s.Pending = n
+			if err != nil {
+				s.Error = err.Error()
+			}
+			if !last.IsZero() {
+				s.LastPush = last.Format(time.RFC3339)
+			}
+		}
+		out = append(out, s)
+	}
+	return out
+}
 
 func onOff(b bool) string {
 	if b {
