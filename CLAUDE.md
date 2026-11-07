@@ -53,7 +53,12 @@ Guideline enforcement for coding agents. Go, single binary.
     and where (sources at compile, check and init; checkers at check only;
     never the hook or stats). It amends ADR-0002 and ADR-0004, and D42, D43,
     D45, D58 and D71. The spec carries it as D78–D81.
-14. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+14. `docs/adr/0014-sinks-push-and-status.md` — sinks in `stele.json`,
+    `stele push` (the log's signed lines as written, a sealed cursor per sink,
+    at least once), `stele check --push` (in CI one record of the run's
+    counts, never the report), `share_briefs` reserved, and `stele status`.
+    It amends ADR-0003 and ADR-0010, and D53. The spec carries it as D82–D85.
+15. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
@@ -84,4 +89,6 @@ enterprise idea. Do not implement it or use it as a v1 format.
 - Nothing leaves the machine except through a sink listed in `stele.json`, and
   only from `stele push` or `stele check --push` (D53), or from `stele publish`
   to the `repo` in `stele.json` (D66). The `git` source fetches rules in and
-  sends nothing of the project (D71).
+  sends nothing of the project (D71). A sink gets the log's signed lines as
+  written (ids, paths, counts), or in CI one record of a check run's counts,
+  never a check report or code (D83, D84).

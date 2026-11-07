@@ -241,6 +241,12 @@ need no entry.
 > `stele init`, external checkers at `stele check` only; the hook and
 > `stele stats` never start one.
 
+> **Amended by ADR-0014 (D82–D85).** Sinks, `stele push`, `stele check --push`
+> and `stele status` are built. A push sends the log's signed lines as
+> written, from where the last one stopped, at least once; `check --push` in CI
+> sends one record of the run's counts, never the report; `share_briefs` is
+> reserved and has no effect, since no log line holds a brief.
+
 **External plugins never run on the hot path** (D45). `stele compile` and
 `stele check` run them. `request` refreshes built-in sources only, and keeps the
 rules each external source produced at the last compile. The hook never runs a
@@ -642,6 +648,9 @@ spawn story changes for them.
 > through with the ids of every rule that applies to the file, and
 > `stele stats` reads the log to say how the rules are doing.
 
+> **Amended by ADR-0014 (D83).** `stele push` sends the log's lines, signed
+> and as written, to each sink `stele.json` lists; nothing else sends them.
+
 `.stele/log.jsonl`. Append-only, local, gitignored. It never leaves the machine
 unless the user lists a sink and runs `stele push` (§2.4).
 
@@ -694,6 +703,11 @@ until there is data.
 > checkers `stele.json` lists, and asks each external checker to `validate`
 > its rules before it checks. `stele compile` and the hook know a listed
 > checker by its name only: a rule naming one is valid there and is not run.
+
+> **Amended by ADR-0014 (D84).** `--push` does not hand the report to a sink.
+> Where stele runs it pushes the log's pending lines, this run's included; in
+> CI it sends one record of the run's counts. Its exit is the larger of the
+> check's and the push's.
 
 The hook and the MCP tools put rules in front of the agent before it writes.
 `stele check` is the other half: it checks code against those rules in CI, after
@@ -856,6 +870,10 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D79 | **Amends D45.** External sources run at `stele compile`, `stele check` and `stele init`; external checkers at `stele check` only; never in `stele hook` or `stele stats`. Only `internal/pluginexec` starts a plugin, and only `cmd/stele/sources.go` hands it over. The hook and `stele compile` know a listed checker by name only: a rule naming one is valid and is not run there. The post-write hook runs built-in checkers only. | #14 |
 | D80 | **Amends D43.** A plugin is found on `PATH`, never through a relative entry, never inside the project root or the repository that holds it (links followed), and on Windows only as an `.exe` or `.com`. It is looked up on `PATH` cut as below, so a copy in the project is passed over. It runs with no arguments and no shell, in a directory outside the project (`stele/plugins` under the user's cache directory, or the temp directory), never the project root, with the user's environment and `PATH`, `LD_LIBRARY_PATH`, the `DYLD_` paths, `PYTHONPATH`, `NODE_PATH`, `PERL5LIB`, `PERLLIB`, `RUBYLIB`, `GEM_PATH` and `GEM_HOME` cut to entries that are absolute and outside the project. What it starts stops with it: its process group on Unix, a job on Windows; a plugin that leaves a process holding its output fails. A cancelled run (Ctrl-C) stops it and says so. Answers are capped (1 MiB for `describe`, `fingerprint`, `validate`; 32 MiB for `read`, `check`); calls are timed (10 s for `describe`, `fingerprint`, `validate`; 1 min `read`; 5 min `check`; an entry's `timeout` from 1 s to 30 min sets `read`, `check` and `push`); stderr is passed through cleaned and prefixed with the executable's name. A missing, refused, failed or wrong plugin is exit 2, naming the executable. | #14 |
 | D81 | **Amends D71.** The hook never rewrites a generated file from an index that lacks the rules of a source `stele.lock` holds rules for, or of a pinned source. | #14 |
+| D82 | **Amends D53 (ADR-0014).** Sinks are listed in `stele.json` under `sinks` (`name`, optional `config`, `timeout`, `share_briefs`), named and refused as sources and checkers are (D78), at most 16, none built in. `push` sends `config`, `project` and `records`; the answer `{"accepted": n}` means the first `n` records, in order; another `n` is a protocol error. Batches of at most 500 records and 4 MiB; 1 minute per call unless the entry's `timeout` says otherwise. `share_briefs` is accepted and has no effect: no record holds a brief. | #17 |
+| D83 | `stele push` sends, to each sink in order, the log's lines this machine signed and that carry this project's id, oldest first, exactly as written with their `mac`, from where it last stopped, and skips and counts the others; the first push to a sink sends the whole log. `.stele/push/<sink>.json`, sealed, holds the last line sent (its MAC, the byte after it, and the first MAC of its file), so it follows a rotation; past two rotations it sends all there is and says lines rotated out. The cursor moves after each accepted batch, by what was accepted: at least once, never exactly once. A cursor that does not verify is exit 2. A sink that fails stops for the run, the others go on; no retries. One push at a time per project. Exit 0 all sent (or nothing, or no sink), 1 a sink took fewer than sent, 2 could not run. | #17 |
+| D84 | **Amends spec §8.** `stele check --push` pushes the log's pending lines where the key and `.stele/` exist, and in CI sends one record built as the log's `check` line, with no `mac`. It never sends the check report. Its exit is the larger of the check's and the push's. | #17 |
+| D85 | `stele status [--format text\|json] [--offline]` describes the install with `"v": 1` (D54): versions, project id, each agent's hooks, switches and rules file, each listed plugin found or not and its `describe` version, each source's rule count and freshness, the index's freshness, each sink's pending lines. It writes nothing, starts `describe` and external `fingerprint` calls unless `--offline`, and exits 0 when it could describe the install, 2 when not. Not on the hook's path. | #17 |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 
