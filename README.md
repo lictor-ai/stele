@@ -421,7 +421,7 @@ stele needs read access to git@github.com:acme/guidelines.git: check that git ls
 
 ## Plugins
 
-A plugin is a program you install that does what stele can't do itself: a source plugin gives it rules, a checker plugin checks code against them in `stele check`.
+A plugin is a program you install that does what stele can't do itself: a source plugin gives it rules, a checker plugin checks code against them in `stele check`, and a sink receives the log from [`stele push`](#send-the-log-somewhere-stele-push).
 
 ### Source plugins
 
@@ -509,7 +509,7 @@ A checker plugin runs only in `stele check`, never after a write: the hook and `
 - **Only from `PATH`, never from the project.** stele looks only in `PATH` entries that are absolute and outside the project and the git repository that holds it, so a copy inside the project is passed over, never run; on Windows the current directory isn't searched. One that links into the project is refused. On Windows it must be an `.exe` or `.com`.
 - **Run with no shell, outside the project.** It runs in a directory of stele's own, `stele/plugins` in your user cache directory, and finds the project through the `root` stele sends it. It gets your environment, with `PATH` and the library and module paths (`LD_LIBRARY_PATH`, `PYTHONPATH`, `NODE_PATH` and the like) cut to entries outside the project. What it writes on stderr is shown, each line starting with its name.
 - **What it starts stops with it.** After each call stele stops whatever the plugin left running. Ctrl-C stops the plugin too, and stele says the call was cancelled.
-- **Never in the hook.** Source plugins run at `stele compile`, `stele check` and `stele init`, checker plugins at `stele check`, and that's all. The hook uses the rules of the last compile, check or init on your machine.
+- **Never in the hook.** Source plugins run at `stele compile`, `stele check` and `stele init`, checker plugins at `stele check`, and sinks at `stele push` and `stele check --push`. `stele status` asks each listed plugin its version, unless you pass `--offline`. The hook uses the rules of the last compile, check or init on your machine.
 
 Writing one takes a few lines in any language: [docs/plugin-protocol.md](docs/plugin-protocol.md) describes the protocol, with the `paragraphs` example above.
 
@@ -870,7 +870,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 ### Network and publishing
 
-**stele itself sends over the network only from `stele publish`, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com.
+**stele itself sends your project's content over the network only from `stele publish`, and only when you run it.** It sends the committed `stele.md`, its path, the project's commit hash and id, and your git name and email to the `repo` in `stele.json`, and a login to github.com or gitlab.com.
 
 **The log goes only to a sink you list, when you run `stele push` or `stele check --push`.** stele hands the sink the lines and opens no connection itself; what the sink does with them, network included, is its own. A sink runs as you, like any [plugin](#plugins).
 
