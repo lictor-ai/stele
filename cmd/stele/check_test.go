@@ -399,7 +399,7 @@ func TestCheckFlags(t *testing.T) {
 		{"--all", "a.go"},
 		{"--base", "main", "a.go"},
 		{"--format", "xml"},
-		{"--push"},
+		{"--nope"},
 	} {
 		if code, _, errOut := runCmd(append([]string{"check"}, args...)...); code != exitCantRun {
 			t.Errorf("check %v = %d, stderr %q, want 2", args, code, errOut)
