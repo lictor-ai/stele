@@ -27,6 +27,7 @@ var commands = map[string]command{
 	"compile":   {"compile every source into the index", runCompile},
 	"check":     {"validate the rules and run checkers on changed files", runCheck},
 	"stats":     {"how the rules are doing, from the local log", runStats},
+	"rules":     {"print the rules the hook enforces (--json for other tools)", runRules},
 	"status":    {"describe the install", runStatus},
 	"push":      {"send the log's new lines to every sink stele.json lists", runPush},
 	"publish":   {"send stele.md to the repository in stele.json as a merge request", runPublish},
