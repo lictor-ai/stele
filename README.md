@@ -576,6 +576,84 @@ Too little data to judge the rules: 6 turns with a write logged, stats need 30. 
 
 `stele stats` exits 0, or 2 when it can't run. It reads the log, `stele.md` and, for [shared rules](#shared-rules-from-another-repository), the rules from your last `stele compile`; it writes nothing and makes no network call. Lines it can't use are counted at the end: lines not signed on this machine, lines from another project, lines in a newer format.
 
+## The rules, for other tools: stele rules
+
+`stele rules` lists the rules the hook enforces, one per line:
+
+```
+$ stele rules
+03160dcd-3642-4d2b-9f87-340aa3e811ea  stele.md rule 1  every file              "Never put credentials in code. Read them from the environmen…"
+86204655-bcfc-4807-8539-164b900682aa  stele.md rule 2  migrations/**           "Migrations are append-only: never edit one that was merged."
+b224a96d-66e6-4ca7-b406-f2fb6142fa30  stele.md rule 3  **/*.go, !**/*_test.go  "Wrap every error with the context it lost."
+3 rules
+```
+
+Each line is the rule's id, where it comes from, its scope and the start of its text. The ids are the ones in the [log](#what-stele-records) and in what [`stele push`](#send-the-log-somewhere-stele-push) sends, so a script or an editor can turn an id back into the rule a person wrote. For that, ask for JSON with `stele rules --json`:
+
+<details>
+<summary>The JSON of the three rules above</summary>
+
+```
+$ stele rules --json
+{
+  "v": 1,
+  "project": "72f9d582-746e-482a-b9e4-d2448e69be66",
+  "rules": [
+    {
+      "id": "03160dcd-3642-4d2b-9f87-340aa3e811ea",
+      "text": "Never put credentials in code. Read them from the environment.",
+      "scope": null,
+      "source": {
+        "kind": "stele.md",
+        "name": "stelemd",
+        "file": "stele.md",
+        "rule": 1
+      }
+    },
+    {
+      "id": "86204655-bcfc-4807-8539-164b900682aa",
+      "text": "Migrations are append-only: never edit one that was merged.",
+      "scope": [
+        "migrations/**"
+      ],
+      "source": {
+        "kind": "stele.md",
+        "name": "stelemd",
+        "file": "stele.md",
+        "rule": 2
+      }
+    },
+    {
+      "id": "b224a96d-66e6-4ca7-b406-f2fb6142fa30",
+      "text": "Wrap every error with the context it lost.",
+      "scope": [
+        "**/*.go",
+        "!**/*_test.go"
+      ],
+      "source": {
+        "kind": "stele.md",
+        "name": "stelemd",
+        "file": "stele.md",
+        "rule": 3
+      }
+    }
+  ],
+  "missing": [],
+  "notes": []
+}
+```
+
+</details>
+
+- **`text`** is the whole rule, as written. **`scope`** is its globs, or `null` when it applies to every file.
+- **`source`** says where it comes from. `kind` is `stele.md`, `git` for [shared rules](#shared-rules-from-another-repository) or `plugin` for a [source plugin](#source-plugins). `name` is the source's name in `stele.lock`, and `rule` the rule's place in it, as `stele compile` counts. Shared rules also have `repo`, `ref` (none for the default branch), `file` and the `commit` they were read at.
+- **`missing`** lists the sources `stele.lock` has rules for that this machine hasn't compiled yet, such as shared rules on a fresh clone. Run `stele compile` to get them. In the text form, stele says so on stderr.
+- **`notes`** say what you should know, such as a `stele.md` that no longer parses: the list is then the last valid rules, the ones the hook still enforces.
+
+A new field may be added within `"v": 1`; a change of meaning gets a new `v`. `--json` is short for `--format json`.
+
+`stele rules` reads the rules as the hook does: when `stele.md` changed since the last compile, it compiles it first, so it may write `stele.lock`, `.stele/` and the agent's rules file, as the next write in a session would. It never writes `stele.md` or `stele.json`, runs no plugin and makes no network call, so shared and plugin rules are those of your last `stele compile`. It exits 0 when it printed the rules, and 2 when it can't run: a bad flag, no project, no signing key (it makes one the first time, as the hook does, and fails only when it can't), rules it couldn't compile, a `stele.md` that doesn't parse with no earlier rules to fall back on, or output it couldn't write.
+
 ## What's installed: stele status
 
 `stele status` tells you what stele has set up in a repository, and whether its rules are up to date:
@@ -775,6 +853,8 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **A shared rule's `scope` matches paths in each project**, not in the guidelines repository.
 
+**`stele rules` lists the shared rules of your last `stele compile`.** Like the hook, it never fetches. On a fresh clone, or after a pull that moves a pin, it names the shared rules' source under `missing` until you run `stele compile`, and lists only the shared rules the hook still enforces, if any. The same goes for rules from a [source plugin](#source-plugins), which it never runs.
+
 **A pin moves only with `stele compile --update` or a change in `stele.json`.** A pinned commit must be on its ref: its tip or a commit before it. One that isn't, such as a commit only on another branch or a fork's pull request, is refused, and so is one a force push removed, once stele fetches the ref again: `stele check` then exits 2 until you run `stele compile --update`.
 
 **After a pull that moves a pin, the hook doesn't enforce the new shared rules until you run `stele compile`.** It reads only the project's own rules: it keeps the shared rules your last `stele compile` read, and drops them once `stele.md` changes. It leaves the pulled `stele.lock` and `.claude/rules/stele-rules.md` as they are, so the agent still loads the new rules from that file at its next session.
@@ -874,7 +954,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **The log goes only to a sink you list, when you run `stele push` or `stele check --push`.** stele hands the sink the lines and opens no connection itself; what the sink does with them, network included, is its own. A sink runs as you, like any [plugin](#plugins).
 
-**Shared rules are fetched, never sent.** `stele compile`, `stele check` and `stele init` connect to each `repo` under `sources` when they need a commit they don't have. git sends what a fetch sends: the refs and commits it wants and has of that repository, and your login for that host through your own git setup. Nothing of the project goes with it. The hook and `stele stats` never connect. stele itself makes no other network call; a [plugin](#plugins) you install may. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
+**Shared rules are fetched, never sent.** `stele compile`, `stele check` and `stele init` connect to each `repo` under `sources` when they need a commit they don't have. git sends what a fetch sends: the refs and commits it wants and has of that repository, and your login for that host through your own git setup. Nothing of the project goes with it. The hook, `stele stats` and `stele rules` never connect. stele itself makes no other network call; a [plugin](#plugins) you install may. The rules and violations it hands the agent become part of the conversation, which Claude Code sends to the model as usual.
 
 **`stele publish` opens merge requests on github.com and gitlab.com only.** Any other host, a self-hosted GitHub or GitLab included, gets the branch pushed and is told to open the request by hand, with no link.
 
@@ -901,7 +981,7 @@ Not covered:
 
 - [docs/plugin-protocol.md](docs/plugin-protocol.md): how to write a source, checker or sink plugin.
 - [docs/architecture.md](docs/architecture.md): how stele is built, its packages and contracts.
-- [docs/adr/](docs/adr/): the decisions behind it. The newest: [the log](docs/adr/0010-a-local-log-of-what-stele-does.md), [shared rules](docs/adr/0011-rules-from-another-git-repository.md), [Codex](docs/adr/0012-a-second-agent-codex.md), [plugins](docs/adr/0013-external-plugins.md), [sinks, push and status](docs/adr/0014-sinks-push-and-status.md).
+- [docs/adr/](docs/adr/): the decisions behind it. The newest: [the log](docs/adr/0010-a-local-log-of-what-stele-does.md), [shared rules](docs/adr/0011-rules-from-another-git-repository.md), [Codex](docs/adr/0012-a-second-agent-codex.md), [plugins](docs/adr/0013-external-plugins.md), [sinks, push and status](docs/adr/0014-sinks-push-and-status.md), [stele rules](docs/adr/0015-printing-the-compiled-rules.md).
 - [test/functional/](test/functional/): the black-box tests and the agent eval.
 
 ## License

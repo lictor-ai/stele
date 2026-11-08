@@ -58,7 +58,12 @@ Guideline enforcement for coding agents. Go, single binary.
     at least once), `stele check --push` (in CI one record of the run's
     counts, never the report), `share_briefs` reserved, and `stele status`.
     It amends ADR-0003 and ADR-0010, and D53. The spec carries it as D82–D85.
-15. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+15. `docs/adr/0015-printing-the-compiled-rules.md` — `stele rules
+    [--json]`: the rules the hook enforces (id, text, scope, source) for
+    other tools, from the index brought up to date as the hook does; it
+    starts no process and never writes `stele.md` or `stele.json`. The spec
+    carries it as D86.
+16. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
@@ -76,8 +81,8 @@ enterprise idea. Do not implement it or use it as a v1 format.
   rule file through `internal/gitexec` (D71).
 - External plugins never run on the hot path: not in `stele hook`, not in
   `stele mcp` (D45). Nor does the `git` source, nor anything that starts git:
-  only `internal/gitexec` and `cmd/stele/check.go` run git, and the hook and
-  `stele stats` never reach them (D71). Only `internal/pluginexec` starts a
+  only `internal/gitexec` and `cmd/stele/check.go` run git, and the hook,
+  `stele stats` and `stele rules` never reach them (D71, D86). Only `internal/pluginexec` starts a
   plugin, and only `cmd/stele/sources.go` hands it to `internal/plugin`
   (D79).
 - Only `internal/adapter/<agent>`, `cmd/stele/agents.go` and

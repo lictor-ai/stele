@@ -53,6 +53,7 @@ internal/pluginexec/  the one plugin.Runner: finds a plugin on PATH outside the 
 internal/printable/   text from outside stele made one printable line — pure
 internal/status/      stele status: describe the install — pure, plugins behind plugin.Runner (D85)
 internal/push/        stele push: the log's signed lines to each sink, a sealed cursor per sink — pure (D82–D84)
+internal/rulelist/    stele rules: the compiled rules, with their sources, for other tools — pure (D86)
 internal/publish/     stele publish: stele.md to a git repository as a merge request (D64–D66)
 internal/gitexec/     git for what reaches a remote: stele publish and the git source (ADR-0011)
 internal/toolpath/    programs and PATH entries inside the project, refused; the flags on every git command
@@ -690,6 +691,30 @@ day, for all agents and for each. `cmd/stele/stats.go` gets the rules from
 does not compile), and prints. Nothing it runs reaches the network or a process:
 `TestStatsNeverReachesNetwork` follows `runStats` through every `cmd/stele`
 declaration it uses, in any file, then through the packages those import.
+
+### `internal/rulelist` — what `stele rules` prints
+
+Pure (D86, ADR-0015).
+
+```go
+const Version = 1
+const KindSteleMD, KindGit, KindPlugin = "stele.md", "git", "plugin"
+
+type List   struct { V int; Project string; Rules []Rule; Missing []Source; Notes []string }
+type Rule   struct { ID, Text string; Scope []string; Source Source } // Scope nil: every file
+type Source struct { Kind, Name, Repo, Ref, File, Commit string; Rule int }
+
+func Build(idx index.Index, lf lock.File) List
+```
+
+`Build` joins the index and `stele.lock`: a rule's source from its name in the
+index, a git source's repository, ref and file from its pin, its commit from
+the index's fingerprint. `Missing` is each source `stele.lock` pins at another
+commit than the index holds, or holds a rule id for that the index lacks.
+`cmd/stele/rules.go` gets the index from `freshIndex`, the hook's own call
+(`compile.EnsureFresh` with the built-in sources, the last valid index when
+`stele.md` does not parse), and prints. `TestRulesNeverReachesNetwork` follows
+`runRules` as `TestStatsNeverReachesNetwork` follows `runStats`.
 
 ### `internal/backstop` — the hook decision
 
@@ -2059,6 +2084,7 @@ string literals scattered through the code, so they can be revised and diffed.
 | `lock.Reconcile`, ids from a source | Supplied id kept, clash is an error, `Project` minted once and never changed. |
 | sinks / `stele push` | The test plugin as a sink: the cursor advances by what was accepted, no line sent twice, a rotation followed, a bad cursor refused, records exactly the log's lines. |
 | `status` | Temp directory: JSON shape and `v`, plugin found and missing, stale index. |
+| `rulelist`, `stele rules` | Table-driven over `Build`: each source kind, `scope` null, index order, `missing` from the lock. Temp directory: compiles when stale with the lock's ids, never writes `stele.md` or `stele.json`, falls back on a broken `stele.md`, a git source on a fresh clone. |
 | `regex` | Table-driven over `Match`: line and column, multiple matches, multi-line content, CRLF, multibyte text, BOM, invalid UTF-8, binary skip, invalid pattern. |
 | `shell` | Table-driven over `Targets`: redirections, heredoc bodies, quotes, `[[ ]]` and `(( ))`, substitutions, variables, `cd`, `tee`, `sed -i`, `perl -i`, removals and copies, devices, Windows and Git Bash paths, caps. A fuzz test: it never panics, and stays fast. |
 | `backstop.Decide` | Table-driven over the full cross-product of state, error and `HasRules`. Pure, so no fixtures. |
@@ -2088,6 +2114,8 @@ stele stats        how the rules are doing, from the local log; writes nothing, 
                      [--since 30d|12h|2w|YYYY-MM-DD|all] [--format text|json]
 stele status       describe the install; writes nothing (D85)
                      [--format text|json] [--offline: start no plugin]
+stele rules        the rules the hook enforces, for other tools; writes only what the hook's recompile writes (D86)
+                     [--format text|json] [--json: --format json]
 stele push         send the log's new signed lines to every listed sink (D83)
 stele mcp          run the MCP server on stdio
 stele hook         read an agent's hook payload on stdin, decide
@@ -2110,8 +2138,8 @@ handful of flags does not justify a CLI framework.
 
 `compile`, `check`, `status` and `push` are the only commands that run external
 plugins. `mcp` and `hook` never do (D45). `compile`, `check` and `init` are the
-only ones that run the git source, through `cmd/stele/sources.go`; `hook` and
-`stats` never reach it (D71). `check` reads each git source at its pin and never
+only ones that run the git source, through `cmd/stele/sources.go`; `hook`,
+`stats` and `rules` never reach it (D71, D86). `check` reads each git source at its pin and never
 moves it: a listed source with no matching pin is exit 1, a repository it cannot
 read is exit 2.
 

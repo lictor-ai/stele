@@ -65,6 +65,15 @@ func TestStatsNeverReachesNetwork(t *testing.T) {
 	}
 }
 
+// TestRulesNeverReachesNetwork guards D86: stele rules brings the index up
+// to date as the hook does, and nothing it runs may reach the network, git,
+// a plugin or internal/publish.
+func TestRulesNeverReachesNetwork(t *testing.T) {
+	for _, p := range callReach(t, "runRules") {
+		t.Errorf("stele rules reaches %s", p)
+	}
+}
+
 // TestHookCallsNeverReachGit is TestHookNeverReachesPublish through the
 // calls, not the files: runHook calls loadKey and generated in compile.go
 // and rulesfile.go, whose files also hold runCompile, which reaches git
