@@ -170,6 +170,25 @@ func TestRulesBrokenSteleMD(t *testing.T) {
 	}
 }
 
+// failWriter is a stdout that is gone, such as a closed pipe.
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, os.ErrClosed }
+
+// A stdout that fails is a run that did not print: exit 2, in either
+// format, with rules or without.
+func TestRulesStdoutFails(t *testing.T) {
+	for _, steleMD := range []string{rules, ""} {
+		project(t, steleMD)
+		for _, args := range [][]string{{"rules"}, {"rules", "--json"}} {
+			var errOut strings.Builder
+			if code := run(args, failWriter{}, &errOut); code != exitCantRun || !strings.HasPrefix(errOut.String(), "stele rules: ") {
+				t.Errorf("%v (stele.md %q) with stdout gone = %d, %q; want 2", args, steleMD, code, errOut.String())
+			}
+		}
+	}
+}
+
 func TestRulesBadArgs(t *testing.T) {
 	compiled(t, rules)
 	for _, args := range [][]string{{"--format", "xml"}, {"--json", "--format", "text"}, {"extra"}, {"--nope"}} {

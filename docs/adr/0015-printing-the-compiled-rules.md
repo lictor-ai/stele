@@ -9,7 +9,7 @@
 
 The log (ADR-0010) and `stele push` (ADR-0014) carry rule ids, paths and
 counts, on purpose, and stay that way. A tool that shows those ids to a person
-(a script, an editor, a sink) needs to know what each id means: the rule's
+(a script, an editor, a report) needs to know what each id means: the rule's
 text, its scope and where it came from. Today the only way is to read the rule
 files, which only a source may do (D40), or `.stele/index.json`, which is
 signed, gitignored, can be stale and promises no format (its `version` is 2).
@@ -85,7 +85,8 @@ count; the notes, and a line per missing source, go to stderr.
 
 **Exits** (D86, spec §8): 0 when it printed, the empty list and the fallback
 included; 2 when it could not run (a bad flag, no root, no key, an index it
-could not build, a `stele.md` that does not parse with no earlier index).
+could not build, a `stele.md` that does not parse with no earlier index, a
+stdout it could not write).
 
 It is not on the hook's path: `cmd/stele/hookreach_test.go` follows its calls
 as it does those of `stele stats`.

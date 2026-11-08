@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -55,10 +56,14 @@ func runRules(args []string, stdout, stderr io.Writer) int {
 		// No rules, and nothing written: not even a key.
 		committed, _ := lock.Load(root)
 		l := rulelist.Build(index.Index{Project: committed.Project}, lock.File{})
+		var err error
 		if *format == "json" {
-			printRulesJSON(stdout, l)
+			err = printRulesJSON(stdout, l)
 		} else {
-			fmt.Fprintf(stdout, "no stele.md or stele.json in %s: no rules\n", showPath(root))
+			_, err = fmt.Fprintf(stdout, "no stele.md or stele.json in %s: no rules\n", showPath(root))
+		}
+		if err != nil {
+			return cantRun("writing the rules: %v", err)
 		}
 		return exitOK
 	}
@@ -80,11 +85,16 @@ func runRules(args []string, stdout, stderr io.Writer) int {
 		l.Notes = append(l.Notes, fmt.Sprintf("%s: %v", lock.FileName, lerr))
 	}
 
+	printList := printRules
 	if *format == "json" {
-		printRulesJSON(stdout, l)
+		printList = printRulesJSON
+	}
+	if err := printList(stdout, l); err != nil {
+		return cantRun("writing the rules: %v", err)
+	}
+	if *format == "json" {
 		return exitOK
 	}
-	printRules(stdout, l)
 	for _, n := range l.Notes {
 		fmt.Fprintf(stderr, "stele rules: %s\n", printable.Clean(n))
 	}
@@ -105,16 +115,25 @@ func formatSet(flags *flag.FlagSet) bool {
 	return set
 }
 
-func printRulesJSON(w io.Writer, l rulelist.List) {
-	data, _ := json.MarshalIndent(l, "", "  ")
-	w.Write(append(data, '\n'))
+// printRulesJSON prints l as JSON. An error is a stdout that failed: the
+// rules were not printed.
+func printRulesJSON(w io.Writer, l rulelist.List) error {
+	data, err := json.MarshalIndent(l, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(data, '\n'))
+	return err
 }
 
 // printRules prints one line per rule, for a person: id, source and place,
 // scope, excerpt; then a count. Text from a rule file or stele.lock is
-// cleaned: it can neither rewrite the terminal nor forge a line.
-func printRules(w io.Writer, l rulelist.List) {
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+// cleaned: it can neither rewrite the terminal nor forge a line. It builds
+// the text first and writes it at once, so an error is a stdout that
+// failed.
+func printRules(w io.Writer, l rulelist.List) error {
+	var b bytes.Buffer
+	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	for _, r := range l.Rules {
 		scope := "every file"
 		if len(r.Scope) > 0 {
@@ -123,7 +142,9 @@ func printRules(w io.Writer, l rulelist.List) {
 		fmt.Fprintf(tw, "%s\t%s rule %d\t%s\t\"%s\"\n", printable.Clean(r.ID), printable.Clean(sourceLabel(r.Source)), r.Source.Rule, printable.Clean(scope), printable.Clean(check.Excerpt(r.Text)))
 	}
 	tw.Flush()
-	fmt.Fprintln(w, plural(len(l.Rules), "rule"))
+	fmt.Fprintln(&b, plural(len(l.Rules), "rule"))
+	_, err := w.Write(b.Bytes())
+	return err
 }
 
 // sourceLabel names a source for a person: stele.md, a git source's

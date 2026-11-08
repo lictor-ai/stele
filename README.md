@@ -652,7 +652,7 @@ $ stele rules --json
 
 A new field may be added within `"v": 1`; a change of meaning gets a new `v`. `--json` is short for `--format json`.
 
-`stele rules` reads the rules as the hook does: when `stele.md` changed since the last compile, it compiles it first, so it may write `stele.lock`, `.stele/` and the agent's rules file, as the next write in a session would. It never writes `stele.md` or `stele.json`, runs no plugin and makes no network call, so shared and plugin rules are those of your last `stele compile`. It exits 0 when it printed the rules, and 2 when it can't run: a bad flag, no project, or a `stele.md` that doesn't parse with no earlier rules to fall back on.
+`stele rules` reads the rules as the hook does: when `stele.md` changed since the last compile, it compiles it first, so it may write `stele.lock`, `.stele/` and the agent's rules file, as the next write in a session would. It never writes `stele.md` or `stele.json`, runs no plugin and makes no network call, so shared and plugin rules are those of your last `stele compile`. It exits 0 when it printed the rules, and 2 when it can't run: a bad flag, no project, no signing key (it makes one the first time, as the hook does, and fails only when it can't), rules it couldn't compile, a `stele.md` that doesn't parse with no earlier rules to fall back on, or output it couldn't write.
 
 ## What's installed: stele status
 
