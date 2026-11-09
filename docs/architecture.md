@@ -900,11 +900,16 @@ after it, and exits 0. Fields stele does not know are ignored; a missing one is
 | `op` | Request | Response |
 | :-- | :-- | :-- |
 | `describe` | — | `{"kind": "source" \| "checker" \| "sink", "protocols": [1], "version": "1.4.0"}` |
-| `fingerprint` | `root`, `config` | `{"fingerprint": "…"}` |
-| `read` | `root`, `config` | `{"fingerprint": "…", "rules": [{file, line, description, tags, scope, body, meta, id}]}` |
-| `validate` | `config`, `rules: [{id, body, scope, meta}]` | `{"problems": [{"rule_id", "message"}]}` |
-| `check` | `root`, `config`, `files`, `rules: [{id, body, scope, meta}]` | `{"violations": [{rule_id, file, line, column, message}], "skipped": [{file, reason}]}`, line and column 1-based, column in characters |
-| `push` | `config`, `project`, `records: [...]` — log entries and check reports, each with its own `v` | `{"accepted": n}` |
+| `fingerprint` | `project_dir`, `root`, `config` | `{"fingerprint": "…"}` |
+| `read` | `project_dir`, `root`, `config` | `{"fingerprint": "…", "rules": [{file, line, description, tags, scope, body, meta, id}]}` |
+| `validate` | `project_dir`, `config`, `rules: [{id, body, scope, meta}]` | `{"problems": [{"rule_id", "message"}]}` |
+| `check` | `project_dir`, `root`, `config`, `files`, `rules: [{id, body, scope, meta}]` | `{"violations": [{rule_id, file, line, column, message}], "skipped": [{file, reason}]}`, line and column 1-based, column in characters |
+| `push` | `project_dir`, `config`, `project`, `records: [...]` — log entries and check reports, each with its own `v` | `{"accepted": n}` |
+
+`project_dir` is the project's root, absolute, in this OS's form; `root` is its
+old name, with the same value, kept for plugins that read it (ADR-0016, D87).
+`execChecker` and `Sink` hold the root `Checkers` and `Sinks` were given, for
+`validate` and `push`, whose Go calls take none.
 
 A `read` response may set `id` on a rule; only a source that owns its ids should
 (D52), and it must be a canonical UUID. A rule's position is its place in the

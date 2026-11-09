@@ -94,7 +94,8 @@ func (s *execSource) Read(ctx context.Context, root string) ([]source.Rule, stri
 		Fingerprint *string     `json:"fingerprint"`
 		Rules       *[]sentRule `json:"rules"`
 	}
-	if err := s.call(ctx, "read", map[string]any{"root": root, "config": s.config}, LargeAnswer, s.timeout, &a); err != nil {
+	// root is project_dir's old name, kept for plugins that read it (ADR-0016).
+	if err := s.call(ctx, "read", map[string]any{"project_dir": root, "root": root, "config": s.config}, LargeAnswer, s.timeout, &a); err != nil {
 		return nil, "", err
 	}
 	fp, err := checkFingerprint(a.Fingerprint)
@@ -136,7 +137,7 @@ func (s *execSource) Fingerprint(ctx context.Context, root string) (string, erro
 	var a struct {
 		Fingerprint *string `json:"fingerprint"`
 	}
-	if err := s.call(ctx, "fingerprint", map[string]any{"root": root, "config": s.config}, SmallAnswer, fingerprintTimeout, &a); err != nil {
+	if err := s.call(ctx, "fingerprint", map[string]any{"project_dir": root, "root": root, "config": s.config}, SmallAnswer, fingerprintTimeout, &a); err != nil {
 		return "", err
 	}
 	fp, err := checkFingerprint(a.Fingerprint)

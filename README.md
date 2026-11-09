@@ -684,7 +684,7 @@ $ stele push
 file: sent 0 lines
 ```
 
-- **What a sink gets:** the lines of `.stele/log.jsonl`, exactly as stele wrote them, each with its signature. That is rule ids, file paths, session and prompt ids, and counts; never code. Lines not signed on this machine, or of another project, are skipped and counted.
+- **What a sink gets:** the lines of `.stele/log.jsonl`, exactly as stele wrote them, each with its signature. That is rule ids, file paths, session and prompt ids, and counts; never code. Lines not signed on this machine, or of another project, are skipped and counted. Each push also tells the sink where the project is on your machine (`project_dir`, for example `/home/you/project`), for its own use; that path can hold your user name.
 - **The first push sends the whole log.** Listing the sink is how you agree to send it.
 - **It remembers how far it got,** per sink, in `.stele/push/<name>.json`, signed. Each push sends only what is new, and finds its place after the log rotates.
 - **A line can arrive twice,** if stele stops between the sink's answer and saving how far it got. Each record carries its `mac`, a key the sink can drop a repeat by.

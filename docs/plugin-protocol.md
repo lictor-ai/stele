@@ -13,7 +13,7 @@ program's stdin and closes it. The program writes one JSON object to stdout
 and exits 0. That's all.
 
 ```
-stdin:  {"protocol": 1, "op": "read", "root": "/home/you/project", "config": {"file": "GUIDELINES.txt"}}
+stdin:  {"protocol": 1, "op": "read", "project_dir": "/home/you/project", "root": "/home/you/project", "config": {"file": "GUIDELINES.txt"}}
 stdout: {"protocol": 1, "fingerprint": "9f2c…", "rules": [{"body": "Every exported function has a doc comment."}]}
 ```
 
@@ -37,7 +37,7 @@ shell, with your environment, `PATH` and the library and module paths cut to
 entries outside the project.
 
 Your working directory is not the project: it is a directory of stele's own.
-Use `root` from the request to find the project's files. If you change into
+Use `project_dir` from the request to find the project's files. If you change into
 it and start programs by bare name, you may run one the project brought:
 that is your risk.
 
@@ -48,6 +48,11 @@ stdout; stele treats that as a failure.
 ## Every call
 
 - The request has `"protocol": 1` and `"op"`. Ignore fields you don't know.
+- Every request but `describe` has `project_dir`: the project's folder,
+  absolute, as this machine writes paths (`C:\Users\you\project` on
+  Windows). `read`, `fingerprint` and `check` also send `root`, its old name,
+  with the same value; a later protocol may drop it
+  ([ADR-0016](adr/0016-project-dir-in-plugin-requests.md)).
 - The answer is exactly one JSON object with `"protocol": 1`, and nothing
   after it. stele ignores fields it doesn't know, so you can add your own.
 - To fail, answer `{"protocol": 1, "error": "what went wrong"}` and exit 0.
@@ -78,7 +83,7 @@ Sent once per run of stele, before any other call.
 Sent by `stele compile`, `stele check` and `stele init`. Never by the hook.
 
 ```
-{"protocol": 1, "op": "read", "root": "<the project, absolute>", "config": { … }}
+{"protocol": 1, "op": "read", "project_dir": "<the project, absolute>", "root": "<the same>", "config": { … }}
 {"protocol": 1, "fingerprint": "<1 to 256 printable bytes>", "rules": [ … ]}
 ```
 
@@ -102,7 +107,7 @@ entry's `timeout`; its answer at most 32 MiB.
 ## `fingerprint`
 
 ```
-{"protocol": 1, "op": "fingerprint", "root": "…", "config": { … }}
+{"protocol": 1, "op": "fingerprint", "project_dir": "…", "root": "…", "config": { … }}
 {"protocol": 1, "fingerprint": "…"}
 ```
 
@@ -130,9 +135,9 @@ import (
 )
 
 type request struct {
-	Op     string `json:"op"`
-	Root   string `json:"root"`
-	Config struct {
+	Op         string `json:"op"`
+	ProjectDir string `json:"project_dir"`
+	Config     struct {
 		File string `json:"file"`
 	} `json:"config"`
 }
@@ -149,7 +154,7 @@ func main() {
 		answer["error"] = err.Error()
 	} else if req.Op == "describe" {
 		answer["kind"], answer["protocols"], answer["version"] = "source", []int{1}, "0.1.0"
-	} else if data, err := os.ReadFile(filepath.Join(req.Root, req.Config.File)); err != nil {
+	} else if data, err := os.ReadFile(filepath.Join(req.ProjectDir, req.Config.File)); err != nil {
 		answer["error"] = fmt.Sprintf("%s: %v", req.Config.File, err)
 	} else {
 		answer["fingerprint"] = fmt.Sprintf("%x", sha256.Sum256(data))
@@ -176,7 +181,7 @@ Sent by `stele check`, before any file is checked, with every rule that
 names your checker.
 
 ```
-{"protocol": 1, "op": "validate", "config": { … }, "rules": [{"id": "…", "body": "…", "scope": ["…"], "meta": {"check": "<name>", …}}]}
+{"protocol": 1, "op": "validate", "project_dir": "…", "config": { … }, "rules": [{"id": "…", "body": "…", "scope": ["…"], "meta": {"check": "<name>", …}}]}
 {"protocol": 1, "problems": [{"rule_id": "…", "message": "word: is missing"}]}
 ```
 
@@ -187,11 +192,11 @@ stele calls such a rule invalid, fails `stele check`, and doesn't send it to
 ## `check` (checker)
 
 ```
-{"protocol": 1, "op": "check", "root": "…", "config": { … }, "files": ["main.go"], "rules": [ … ]}
+{"protocol": 1, "op": "check", "project_dir": "…", "root": "…", "config": { … }, "files": ["main.go"], "rules": [ … ]}
 {"protocol": 1, "violations": [{"rule_id": "…", "file": "main.go", "line": 4, "column": 5, "message": "…"}], "skipped": [{"file": "…", "reason": "…"}]}
 ```
 
-`files` are relative, with `/`: read them under `root` yourself. stele sends
+`files` are relative, with `/`: read them under `project_dir` yourself. stele sends
 only the files some of the rules' `scope` covers, and drops a violation outside its
 rule's scope. Each violation names one of the rules and one of the files
 sent; `line` and `column` start at 1, the column counting characters.
@@ -222,10 +227,10 @@ import (
 )
 
 type request struct {
-	Op    string   `json:"op"`
-	Root  string   `json:"root"`
-	Files []string `json:"files"`
-	Rules []struct {
+	Op         string   `json:"op"`
+	ProjectDir string   `json:"project_dir"`
+	Files      []string `json:"files"`
+	Rules      []struct {
 		ID   string            `json:"id"`
 		Meta map[string]string `json:"meta"`
 	} `json:"rules"`
@@ -258,7 +263,7 @@ func main() {
 	case "check":
 		found, skipped := []violation{}, []map[string]string{}
 		for _, f := range req.Files {
-			file, err := os.Open(filepath.Join(req.Root, filepath.FromSlash(f)))
+			file, err := os.Open(filepath.Join(req.ProjectDir, filepath.FromSlash(f)))
 			if err != nil {
 				skipped = append(skipped, map[string]string{"file": f, "reason": "cannot be read"})
 				continue
@@ -295,7 +300,7 @@ it under `sinks`:
 ```
 
 ```
-{"protocol": 1, "op": "push", "config": { … }, "project": "0f1f82a6-…", "records": [{"v":1,"kind":"wrote",…,"mac":"…"}, …]}
+{"protocol": 1, "op": "push", "project_dir": "/home/you/project", "config": { … }, "project": "0f1f82a6-…", "records": [{"v":1,"kind":"wrote",…,"mac":"…"}, …]}
 {"protocol": 1, "accepted": 2}
 ```
 
@@ -303,6 +308,10 @@ Each record is one line of the project's `.stele/log.jsonl`, exactly as stele
 wrote it: rule ids, file paths, session and prompt ids, and counts, never
 code. From `stele check --push` on a machine with no log (no key or no
 `.stele/`, as in CI) it is one record of a run's counts, with no `mac`.
+
+`project_dir` is where the project is on this machine, for your program's
+own use: to read a file of the project, or run `stele` there. It can name the user
+(`/home/alice/…`): don't send it on unless you mean to.
 
 `accepted` is how many you took: the first `accepted` records, in order. stele
 sends the rest again next time. Take them all, or stop at the first you can't

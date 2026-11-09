@@ -41,6 +41,7 @@ func parse(exe string) (kind, mode string, ok bool) {
 //
 //	good      describes itself, then answers from the request's config
 //	witness   as good, after appending "<kind> <op>" to $STELE_FAKE_WITNESS
+//	echo      as good, after appending the request, one line, to $STELE_FAKE_REQUESTS
 //	env       as good, and every answer also holds "path" ($PATH) and "cwd"
 //	errors    describes itself, then answers {"error": …}
 //	badproto  answers in protocol 2 with an error
@@ -121,6 +122,13 @@ func Serve(exe string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "witness":
 		if f, err := os.OpenFile(os.Getenv("STELE_FAKE_WITNESS"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 			fmt.Fprintf(f, "%s %s\n", kind, op)
+			f.Close()
+		}
+		good()
+	case "echo":
+		if f, err := os.OpenFile(os.Getenv("STELE_FAKE_REQUESTS"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			data, _ := json.Marshal(req)
+			fmt.Fprintf(f, "%s\n", data)
 			f.Close()
 		}
 		good()
