@@ -570,6 +570,7 @@ type Policy struct {
 
 func Load(root string) (Policy, error) // defaults when the file is absent
 func SetsBackstop(root string) bool    // the file still sets "backstop"
+func Keys() []string                   // every top-level key stele reads (D88)
 ```
 
 **The file is `stele.json`, at the repository root, and it is optional.**
@@ -587,6 +588,17 @@ The same file also lists plugins. `enforce.Load` decodes the policy key and
 ignores the rest; `internal/plugin` decodes `sources` and `checkers` and ignores
 the rest. The hook only ever needs the policy, so it never pays for plugin
 resolution.
+
+**The schema.** `schema/stele.v1.json` is the file's JSON Schema, draft-07,
+for editors (ADR-0017, D88); nothing in stele reads it, and a `"$schema"` key
+in `stele.json` is ignored like any key stele does not read. Tests keep the
+two together without a validator dependency: `internal/schematest`, imported
+only by tests, checks JSON against the keywords the schema uses. The schema's
+keys equal `enforce.Keys()` at the top level and the json tags of the structs
+`internal/plugin`, `internal/source/gitrepo` and `internal/publish` decode,
+both ways; tables in `cmd/stele/schema_test.go` run each file through both
+stele and the schema; and every `stele.json` in the README and `docs/` must
+pass. The website serves the file, fetched from a pinned release.
 
 Absent means defaults, which is the normal case — `init` does not write one. A
 user creates it only to change a default. That is what lets it be JSON: a file

@@ -42,7 +42,7 @@ type entry struct {
 // before any rule is read. It is never what the hook reads: that is Builtins
 // (D45, D79).
 func Sources(root string, git gitrepo.Git, mode gitrepo.Mode, run Runner) ([]source.Source, error) {
-	entries, err := listed(root, "sources", ErrSources)
+	entries, err := listed(root, enforce.KeySources, ErrSources)
 	if err != nil {
 		return nil, err
 	}

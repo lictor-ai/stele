@@ -66,7 +66,12 @@ Guideline enforcement for coding agents. Go, single binary.
     but `describe` carries `project_dir`, the project's folder; `root` stays
     as its old name. It amends ADR-0013 and ADR-0014, and D53, D78 and D82.
     The spec carries it as D87.
-17. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+17. `docs/adr/0017-a-json-schema-for-stele-json.md` — `schema/stele.v1.json`
+    is the JSON Schema of `stele.json`, for editors, served at
+    `https://stele.lictorlabs.com/schema/stele.v1.json`; stele ignores
+    `"$schema"`, and tests keep the schema's keys equal to the ones stele
+    reads. The spec carries it as D88.
+18. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
@@ -100,3 +105,6 @@ enterprise idea. Do not implement it or use it as a v1 format.
   sends nothing of the project (D71). A sink gets the log's signed lines as
   written (ids, paths, counts), or in CI one record of a check run's counts,
   never a check report or code (D83, D84).
+- A new `stele.json` key goes in `enforce.Keys()` (top level) or a decoded
+  struct, and in `schema/stele.v1.json`, in the same change: the schema
+  tests fail otherwise (D88).
