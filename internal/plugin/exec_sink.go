@@ -33,6 +33,7 @@ type Sink struct {
 	ShareBriefs bool
 
 	bin     string
+	root    string // the project, sent as project_dir (ADR-0016)
 	config  json.RawMessage
 	timeout time.Duration
 	run     Runner
@@ -78,7 +79,7 @@ func Sinks(root string, run Runner) ([]*Sink, error) {
 			}
 			return nil, fmt.Errorf("%w: sinks[%d]: %v", ErrSinks, i, err)
 		}
-		out = append(out, &Sink{Name: p.name, ShareBriefs: e.ShareBriefs, bin: p.bin, config: p.config, timeout: p.timeout, run: run})
+		out = append(out, &Sink{Name: p.name, ShareBriefs: e.ShareBriefs, bin: p.bin, root: root, config: p.config, timeout: p.timeout, run: run})
 	}
 	return out, nil
 }
@@ -121,7 +122,7 @@ func (s *Sink) Push(ctx context.Context, project string, records []json.RawMessa
 	if records == nil {
 		records = []json.RawMessage{}
 	}
-	req, err := Request("push", map[string]any{"config": s.config, "project": project, "records": records})
+	req, err := Request("push", map[string]any{"project_dir": s.root, "config": s.config, "project": project, "records": records})
 	if err != nil {
 		return 0, s.fail("push", err)
 	}

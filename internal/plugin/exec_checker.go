@@ -47,7 +47,7 @@ func Checkers(root string, run Runner) (map[string]check.Checker, error) {
 			return nil, fmt.Errorf("%w: checkers[%d]: %q is listed twice, as checkers[%d]", ErrCheckers, i, e.Name, j)
 		}
 		seen[e.Name] = i
-		cs[e.Name] = &execChecker{name: p.name, bin: p.bin, config: p.config, timeout: p.timeout, run: run}
+		cs[e.Name] = &execChecker{name: p.name, bin: p.bin, root: root, config: p.config, timeout: p.timeout, run: run}
 	}
 	return cs, nil
 }
@@ -87,6 +87,7 @@ func (n named) Check(context.Context, string, []check.Rule, []string) (check.Res
 // hook never runs it.
 type execChecker struct {
 	name, bin string
+	root      string // the project, sent as project_dir (ADR-0016)
 	config    json.RawMessage
 	timeout   time.Duration // check's
 	run       Runner
@@ -149,7 +150,7 @@ func (c *execChecker) Validate(ctx context.Context, rules []check.Rule) ([]check
 			Message string `json:"message"`
 		} `json:"problems"`
 	}
-	if err := c.call(ctx, "validate", map[string]any{"config": c.config, "rules": sent}, SmallAnswer, validateTimeout, &a); err != nil {
+	if err := c.call(ctx, "validate", map[string]any{"project_dir": c.root, "config": c.config, "rules": sent}, SmallAnswer, validateTimeout, &a); err != nil {
 		return nil, err
 	}
 	if a.Problems == nil {
@@ -180,7 +181,8 @@ func (c *execChecker) Check(ctx context.Context, root string, rules []check.Rule
 			Reason string `json:"reason"`
 		} `json:"skipped"`
 	}
-	fields := map[string]any{"root": root, "config": c.config, "files": files, "rules": sent}
+	// root is project_dir's old name, kept for plugins that read it (ADR-0016).
+	fields := map[string]any{"project_dir": root, "root": root, "config": c.config, "files": files, "rules": sent}
 	if err := c.call(ctx, "check", fields, LargeAnswer, c.timeout, &a); err != nil {
 		return check.Result{}, err
 	}
