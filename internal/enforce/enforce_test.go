@@ -3,6 +3,7 @@ package enforce
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -120,6 +121,53 @@ func link(t *testing.T, target, name string) {
 	t.Helper()
 	if err := os.Symlink(target, name); err != nil {
 		t.Skipf("no symlinks here: %v", err)
+	}
+}
+
+func TestUnknownKeys(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string // "" means no file
+		want    []string
+	}{
+		{name: "no file"},
+		{name: "empty object", content: `{}`},
+		{name: "every known key", content: `{"$schema": "x", "block_on_error": true, "backstop": true,
+			"sources": [], "checkers": [], "sinks": [], "publish": {}}`},
+		{name: "a typo", content: `{"block_on_eror": true}`, want: []string{"block_on_eror"}},
+		{name: "sorted, each once", content: `{"zeta": 1, "alpha": 2, "zeta": 3, "sources": []}`, want: []string{"alpha", "zeta"}},
+		// encoding/json reads a key in another case, so stele does too.
+		{name: "another case", content: `{"Block_On_Error": true, "SOURCES": []}`},
+		{name: "$schema in another case", content: `{"$Schema": "x"}`, want: []string{"$Schema"}},
+		{name: "not JSON", content: `{`},
+		{name: "not an object", content: `[1]`},
+		{name: "byte order mark", content: "\xef\xbb\xbf" + `{"x": 1}`, want: []string{"x"}},
+		{name: "over the cap", content: `{"x": 1}` + strings.Repeat(" ", maxSize)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.content != "" {
+				if err := os.WriteFile(filepath.Join(root, FileName), []byte(tt.content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := UnknownKeys(root); !slices.Equal(got, tt.want) {
+				t.Errorf("UnknownKeys = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUnknownKeyNote(t *testing.T) {
+	got := UnknownKeyNote("block_on_eror")
+	want := `stele.json: "block_on_eror" is not a key stele knows; it is ignored`
+	if got != want {
+		t.Errorf("UnknownKeyNote = %q, want %q", got, want)
+	}
+	// A key comes from a committed file: a control character is quoted.
+	if got := UnknownKeyNote("a\x1b[2Jb"); strings.ContainsRune(got, '\x1b') {
+		t.Errorf("UnknownKeyNote = %q, holds an escape", got)
 	}
 }
 

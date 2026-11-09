@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/lictor-ai/stele/internal/adapter"
+	"github.com/lictor-ai/stele/internal/enforce"
 )
 
 func boolp(b bool) *bool { return &b }
@@ -95,5 +96,29 @@ func TestInitNotesBackstop(t *testing.T) {
 		if _, notes, _ := Init(cc, root, "v1.2.0", Set{}); slices.Contains(notes, BackstopNote) {
 			t.Errorf("Init with stele.json %q notes backstop", content)
 		}
+	}
+}
+
+// TestInitNotesUnknownKeys: a top-level key stele doesn't know is a note,
+// never an error, and stele.json is left as it is (D38, D89).
+func TestInitNotesUnknownKeys(t *testing.T) {
+	root := t.TempDir()
+	const policy = `{"$schema": "x", "block_on_eror": true, "sources": []}`
+	write(t, filepath.Join(root, "stele.json"), policy)
+	_, notes, err := Init(cc, root, "v1.2.0", Set{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := enforce.UnknownKeyNote("block_on_eror")
+	if !slices.Contains(notes, want) {
+		t.Errorf("notes = %q, want %q", notes, want)
+	}
+	for _, n := range notes {
+		if strings.Contains(n, "$schema") || strings.Contains(n, `"sources"`) {
+			t.Errorf("note on a known key: %q", n)
+		}
+	}
+	if got := read(t, filepath.Join(root, "stele.json")); got != policy {
+		t.Errorf("stele.json changed: %q", got)
 	}
 }
