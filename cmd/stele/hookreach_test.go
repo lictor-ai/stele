@@ -65,6 +65,13 @@ func TestStatsNeverReachesNetwork(t *testing.T) {
 	}
 }
 
+// stele rules reads the index as the hook does: it starts no process.
+func TestRulesNeverReachesGit(t *testing.T) {
+	for _, p := range callReach(t, "runRules") {
+		t.Errorf("stele rules reaches %s", p)
+	}
+}
+
 // TestHookCallsNeverReachGit is TestHookNeverReachesPublish through the
 // calls, not the files: runHook calls loadKey and generated in compile.go
 // and rulesfile.go, whose files also hold runCompile, which reaches git
