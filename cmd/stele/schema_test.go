@@ -103,6 +103,17 @@ func TestSchemaAcceptsWhatSteleAccepts(t *testing.T) {
 		`{"sinks": [{"name": "warehouse", "config": {"url": "x"}, "timeout": "90s", "share_briefs": false}]}`,
 		`{"checkers": ` + entries(16) + `}`,
 		`{"publish": {"repo": "https://github.com/acme/guidelines"}}`,
+		// "" and null are what stele reads as unset.
+		`{"sources": [{"name": "docs", "timeout": ""}], "checkers": [{"name": "lint", "timeout": ""}], "sinks": [{"name": "warehouse", "timeout": ""}]}`,
+		`{"sources": [{"name": "git", "config": {"repo": "git@github.com:acme/g.git"}, "timeout": ""}]}`,
+		`{"sources": [{"name": "git", "config": {"repo": "git@github.com:acme/g.git"}, "timeout": null}]}`,
+		`{"block_on_error": null, "sources": null, "checkers": null, "sinks": null}`,
+		`{"sources": [{"name": "docs", "timeout": null}], "checkers": [{"name": "lint", "timeout": null}], "sinks": [{"name": "warehouse", "timeout": null, "share_briefs": null}]}`,
+		`{"sources": [{"name": "git", "config": {"repo": "git@github.com:acme/g.git", "ref": null, "path": null}}]}`,
+		`{"publish": {"repo": "git@github.com:acme/guidelines.git", "path": null}}`,
+		// url.Parse reads a scheme in any case.
+		`{"sources": [{"name": "git", "config": {"repo": "HTTPS://github.com/acme/g"}}]}`,
+		`{"publish": {"repo": "Ssh://git@github.com/acme/g.git"}}`,
 		`{"$schema": "x", "block_on_error": false, "backstop": false,
 		  "sources": [{"name": "git", "config": {"repo": "git@github.com:acme/g.git", "ref": "main", "path": "stele.md"}}, {"name": "docs"}],
 		  "checkers": [{"name": "lint"}], "sinks": [{"name": "warehouse", "share_briefs": true}],
@@ -175,14 +186,24 @@ func TestSchemaRejectsWhatSteleRejects(t *testing.T) {
 			t.Errorf("the schema refuses %s, which this test says only stele does: %v", c, err)
 		}
 	}
-	// Only the schema refuses these: stele ignores a key it does not read,
-	// and an editor should flag the typo.
+	// Only the schema refuses these, on purpose (ADR-0017): stele ignores a
+	// key it does not read, encoding/json matches a key in another case, and
+	// net/url takes some odd forms of a URL; an editor should flag each.
 	for _, c := range []string{
 		`{"block_on_eror": true}`,
 		`{"publish": {"repo": "git@github.com:a/b.git", "brnach": "x"}}`,
+		`{"checkers": [{"Name": "lint"}]}`,
+		`{"sources": [{"name": "git", "config": {"Repo": "git@github.com:a/b.git"}}]}`,
+		`{"sources": [{"name": "git", "config": {"repo": "https://github.com:/a/b"}}]}`,
+		`{"sources": [{"name": "git", "config": {"repo": "ssh://@github.com/a/b"}}]}`,
+		`{"sources": [{"name": "git", "config": {"repo": "ssh://a@b@github.com/a/b"}}]}`,
+		`{"sources": [{"name": "git", "config": {"repo": "https://github.com/a/b#"}}]}`,
 	} {
 		if err := schemaAccepts(t, schema, c); err == nil {
 			t.Errorf("the schema accepts %s", c)
+		}
+		if err := steleAccepts(t, c); err != nil {
+			t.Errorf("stele refuses %s, which this test says only the schema does: %v", c, err)
 		}
 	}
 }

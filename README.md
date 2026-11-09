@@ -368,9 +368,11 @@ hooks: remind on, check on
 }
 ```
 
-This works in VS Code, JetBrains IDEs and any editor that reads JSON Schema. The address is served by the stele website, from the latest release. stele ignores `$schema` and never writes `stele.json`.
+This works in VS Code, JetBrains IDEs and any editor that reads JSON Schema. The schema ships in this repository as `schema/stele.v1.json`; the website serves it at the address above from release v1.4.0 on. stele ignores `$schema` and never writes `stele.json`.
 
-The schema flags a key stele doesn't know, such as `block_on_eror`, which stele itself skips without a word. A few mistakes only stele sees: a plugin listed twice, a `timeout` outside 1s to 30m, and some repository addresses. stele reports those when a command reads the file, such as `stele compile` or `stele status`.
+The schema is stricter than stele in a few places, on purpose. It flags a key stele doesn't know, such as `block_on_eror`, which stele skips without a word; a key in another case, such as `Name`, which stele reads anyway; and odd repository addresses, such as an empty port.
+
+A few mistakes only stele sees: a plugin listed twice, a `timeout` outside 1s to 30m, and some repository addresses. stele reports those when a command reads the file, such as `stele compile` or `stele status`.
 
 ## Shared rules from another repository
 

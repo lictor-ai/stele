@@ -12,7 +12,7 @@
     },
     "block_on_error": {
       "description": "What happens when stele itself fails. false: the write goes through with a warning. true: the write is blocked and the agent is told why. https://github.com/lictor-ai/stele#stelejson",
-      "type": "boolean",
+      "type": ["boolean", "null"],
       "default": false
     },
     "backstop": {
@@ -21,19 +21,19 @@
     },
     "sources": {
       "description": "Where else rules come from: another git repository (\"git\") or a source plugin you install. https://github.com/lictor-ai/stele#shared-rules-from-another-repository",
-      "type": "array",
+      "type": ["array", "null"],
       "maxItems": 16,
       "items": { "$ref": "#/definitions/source" }
     },
     "checkers": {
       "description": "Checker plugins you install, which stele check runs for the rules that name them. https://github.com/lictor-ai/stele#checker-plugins",
-      "type": "array",
+      "type": ["array", "null"],
       "maxItems": 16,
       "items": { "$ref": "#/definitions/plugin" }
     },
     "sinks": {
       "description": "Sink plugins you install, which stele push sends the log to. https://github.com/lictor-ai/stele#send-the-log-somewhere-stele-push",
-      "type": "array",
+      "type": ["array", "null"],
       "maxItems": 16,
       "items": { "$ref": "#/definitions/sink" }
     },
@@ -50,9 +50,9 @@
       "not": { "enum": ["stelemd", "git", "regex"] }
     },
     "timeout": {
-      "description": "How long one call may take, from 1s to 30m, such as \"2m\".",
-      "type": "string",
-      "pattern": "^[+]?(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+$"
+      "description": "How long one call may take, from 1s to 30m, such as \"2m\". Empty or unset: stele's default.",
+      "type": ["string", "null"],
+      "pattern": "^([+]?(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)?$"
     },
     "plugin": {
       "type": "object",
@@ -74,7 +74,7 @@
         "timeout": { "$ref": "#/definitions/timeout" },
         "share_briefs": {
           "description": "Reserved: it has no effect yet.",
-          "type": "boolean",
+          "type": ["boolean", "null"],
           "default": false
         }
       }
@@ -95,7 +95,11 @@
       "additionalProperties": false,
       "properties": {
         "name": { "const": "git" },
-        "config": { "$ref": "#/definitions/gitConfig" }
+        "config": { "$ref": "#/definitions/gitConfig" },
+        "timeout": {
+          "description": "Not for git, which has its own limits: leave it out.",
+          "enum": ["", null]
+        }
       }
     },
     "gitConfig": {
@@ -115,23 +119,23 @@
     "repo": {
       "description": "A git remote: https://host/path, ssh://host/path or user@host:path. No password, and no user in an https URL.",
       "type": "string",
-      "pattern": "^(https://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?/[^\\s?#]+|ssh://([^\\s/@-][^\\s/@]*@)?[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?/[^\\s?#]+|[A-Za-z0-9._-]+@[A-Za-z0-9][A-Za-z0-9.-]*:[^/:\\s-]\\S*)$"
+      "pattern": "^([Hh][Tt][Tt][Pp][Ss]://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?/[^\\s?#]+|[Ss][Ss][Hh]://([^\\s/@-][^\\s/@]*@)?[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?/[^\\s?#]+|[A-Za-z0-9._-]+@[A-Za-z0-9][A-Za-z0-9.-]*:[^/:\\s-]\\S*)$"
     },
     "ref": {
       "description": "A branch or tag. Empty or unset: the repository's default branch.",
-      "type": "string",
+      "type": ["string", "null"],
       "maxLength": 200,
       "pattern": "^([A-Za-z0-9_][A-Za-z0-9._+-]*(/[A-Za-z0-9_][A-Za-z0-9._+-]*)*)?$",
-      "not": { "pattern": "[.][.]|[.](/|$)|[.]lock(/|$)" },
-      "if": { "pattern": "^refs/" },
+      "not": { "type": "string", "pattern": "[.][.]|[.](/|$)|[.]lock(/|$)" },
+      "if": { "type": "string", "pattern": "^refs/" },
       "then": { "pattern": "^refs/(heads|tags)/" }
     },
     "mdPath": {
-      "description": "A relative path ending in .md, of letters, digits, '.', '_' and '-'.",
-      "type": "string",
+      "description": "A relative path ending in .md, of letters, digits, '.', '_' and '-'. Empty or unset: stele.md.",
+      "type": ["string", "null"],
       "maxLength": 200,
       "pattern": "^(([A-Za-z0-9_][A-Za-z0-9._-]*/)*[A-Za-z0-9_][A-Za-z0-9._-]*[.]md)?$",
-      "not": { "pattern": "[.][.]" }
+      "not": { "type": "string", "pattern": "[.][.]" }
     },
     "publish": {
       "type": "object",
@@ -144,7 +148,7 @@
           "default": "stele.md",
           "allOf": [
             { "$ref": "#/definitions/mdPath" },
-            { "not": { "pattern": "[.]/|[.]lock/" } }
+            { "not": { "type": "string", "pattern": "[.]/|[.]lock/" } }
           ]
         }
       }

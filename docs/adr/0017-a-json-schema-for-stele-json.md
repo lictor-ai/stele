@@ -42,11 +42,18 @@ it is what comparable tools do.
   with a full validator, and fails rather than serve a stale copy.
 * stele ignores `"$schema"` and never writes `stele.json` (D38). Nothing in
   stele reads the schema: it is for editors.
-* The schema accepts every `stele.json` stele accepts. It is stricter in
-  two places, on purpose, so the editor flags what stele ignores: an unknown
-  top-level key, and an unknown key under `publish`. It cannot see what
-  only stele checks: a name listed twice, a timeout outside 1s–30m, and
-  every rule of a repository URL.
+* The schema accepts the `stele.json` files stele accepts, `""` and `null`
+  for an unset optional key included. It is stricter in these places, on
+  purpose, so the editor flags them as mistakes:
+  * an unknown top-level key, and an unknown key under `publish`, which
+    stele ignores;
+  * a key in another case, such as `Name` or `Repo`, which `encoding/json`
+    matches;
+  * odd forms of a repository URL that `net/url` takes: an empty port, an
+    empty user, an `@` in the user, an empty fragment.
+
+  It cannot see what only stele checks: a name listed twice, a timeout
+  outside 1s–30m, and every rule of a repository URL.
 * `backstop` is in it, deprecated: stele no longer reads it (ADR-0008), and
   `stele init` says so.
 * Tests keep it from drifting, with no new dependency (architecture §11): a
