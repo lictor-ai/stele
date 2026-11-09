@@ -84,7 +84,8 @@ Nothing leaves the machine except through a sink listed in stele.json, from
 stele push or stele check --push (D53), or from stele publish to the repo in
 stele.json (D66, ADR-0007). A sink gets the log's signed lines, which hold
 ids, paths and counts only, and stele check --push in CI one record of
-counts; nothing else ever goes to one (ADR-0014). Network code lives in
+counts, each with the project's local folder as project_dir (ADR-0016);
+nothing else ever goes to one (ADR-0014). Network code lives in
 internal/publish, the only package that imports net/http. internal/gitexec
 imports net/url only to check a remote's URL: git does the network
 (ADR-0011). Every other package imports no net package. A plugin is the

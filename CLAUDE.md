@@ -58,7 +58,11 @@ Guideline enforcement for coding agents. Go, single binary.
     at least once), `stele check --push` (in CI one record of the run's
     counts, never the report), `share_briefs` reserved, and `stele status`.
     It amends ADR-0003 and ADR-0010, and D53. The spec carries it as D82–D85.
-15. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+16. `docs/adr/0016-project-dir-in-plugin-requests.md` — every plugin request
+    but `describe` carries `project_dir`, the project's folder; `root` stays
+    as its old name. It amends ADR-0013 and ADR-0014, and D53, D78 and D82.
+    The spec carries it as D87.
+17. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
