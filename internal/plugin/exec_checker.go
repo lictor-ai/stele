@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/lictor-ai/stele/internal/check"
+	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/printable"
 )
 
@@ -28,7 +29,7 @@ const (
 // with run, so a missing one fails before any file is read, even one no rule
 // names. Nothing is started here. Only stele check calls it (D79).
 func Checkers(root string, run Runner) (map[string]check.Checker, error) {
-	entries, err := listed(root, "checkers", ErrCheckers)
+	entries, err := listed(root, enforce.KeyCheckers, ErrCheckers)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +60,7 @@ func Checkers(root string, run Runner) (map[string]check.Checker, error) {
 // stele.json leaves the built-ins. stele check reports either.
 func NamedCheckers(root string) map[string]check.Checker {
 	cs := BuiltinCheckers()
-	entries, err := listed(root, "checkers", ErrCheckers)
+	entries, err := listed(root, enforce.KeyCheckers, ErrCheckers)
 	if err != nil {
 		return cs
 	}

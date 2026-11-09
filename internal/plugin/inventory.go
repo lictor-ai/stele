@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/source"
 	"github.com/lictor-ai/stele/internal/source/gitrepo"
 )
@@ -29,15 +30,15 @@ type Item struct {
 // a missing plugin is an Item with its Err; only a stele.json that cannot be
 // read or decoded is an error. stele status calls it (D85).
 func Inventory(root string, git gitrepo.Git, run Runner) ([]Item, error) {
-	srcEntries, err := listed(root, "sources", ErrSources)
+	srcEntries, err := listed(root, enforce.KeySources, ErrSources)
 	if err != nil {
 		return nil, err
 	}
-	chkEntries, err := listed(root, "checkers", ErrCheckers)
+	chkEntries, err := listed(root, enforce.KeyCheckers, ErrCheckers)
 	if err != nil {
 		return nil, err
 	}
-	sinkMsgs, err := listedRaw(root, "sinks", ErrSinks)
+	sinkMsgs, err := listedRaw(root, enforce.KeySinks, ErrSinks)
 	if err != nil {
 		return nil, err
 	}

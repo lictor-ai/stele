@@ -41,6 +41,13 @@ type Config struct {
 	Path string // where stele.md goes inside it
 }
 
+// fileConfig is the "publish" key as stele.json holds it. Its keys are the
+// schema's (schema/stele.v1.json, D88).
+type fileConfig struct {
+	Repo string `json:"repo"`
+	Path string `json:"path"`
+}
+
 // LoadConfig reads the "publish" key of stele.json under root and checks it.
 func LoadConfig(root string) (Config, error) {
 	data, err := safefile.ReadRegular(filepath.Join(root, enforce.FileName), maxConfig)
@@ -55,10 +62,7 @@ func LoadConfig(root string) (Config, error) {
 		return Config{}, err
 	}
 	var raw struct {
-		Publish *struct {
-			Repo string `json:"repo"`
-			Path string `json:"path"`
-		} `json:"publish"`
+		Publish *fileConfig `json:"publish"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", enforce.FileName, err)

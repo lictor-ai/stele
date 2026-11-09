@@ -20,6 +20,22 @@ import (
 // FileName is the policy file at the repository root.
 const FileName = "stele.json"
 
+// The keys of stele.json stele reads. Every one is in schema/stele.v1.json,
+// and the schema has no other but "$schema", which stele ignores (D88).
+const (
+	KeyBlockOnError = "block_on_error"
+	KeyBackstop     = "backstop" // no longer read: stele init notes it (ADR-0008)
+	KeySources      = "sources"  // internal/plugin
+	KeyCheckers     = "checkers" // internal/plugin
+	KeySinks        = "sinks"    // internal/plugin
+	KeyPublish      = "publish"  // internal/publish
+)
+
+// Keys is every key of stele.json stele reads.
+func Keys() []string {
+	return []string{KeyBlockOnError, KeyBackstop, KeySources, KeyCheckers, KeySinks, KeyPublish}
+}
+
 // maxSize caps stele.json. It is read on every write, by the hook.
 const maxSize = 1 << 20
 
@@ -72,7 +88,7 @@ func SetsBackstop(root string) bool {
 	if json.Unmarshal(data, &keys) != nil {
 		return false
 	}
-	_, ok := keys["backstop"]
+	_, ok := keys[KeyBackstop]
 	return ok
 }
 

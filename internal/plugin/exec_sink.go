@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/lictor-ai/stele/internal/enforce"
 )
 
 // ErrSinks is a "sinks" key in stele.json stele cannot use.
@@ -53,7 +55,7 @@ func (s *Sink) Missing() error { return s.missing }
 // A bad entry fails the list. There is no built-in sink. Without a runner it
 // fails.
 func Sinks(root string, run Runner) ([]*Sink, error) {
-	msgs, err := listedRaw(root, "sinks", ErrSinks)
+	msgs, err := listedRaw(root, enforce.KeySinks, ErrSinks)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +89,7 @@ func Sinks(root string, run Runner) ([]*Sink, error) {
 // SinkNames is the names of the sinks stele.json lists under root, found or
 // not; nothing is looked up. A bad stele.json is an error.
 func SinkNames(root string) ([]string, error) {
-	msgs, err := listedRaw(root, "sinks", ErrSinks)
+	msgs, err := listedRaw(root, enforce.KeySinks, ErrSinks)
 	if err != nil {
 		return nil, err
 	}
