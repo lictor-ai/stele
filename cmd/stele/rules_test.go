@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lictor-ai/stele/internal/index"
+	"github.com/lictor-ai/stele/internal/lock"
 )
 
 func rulesJSON(t *testing.T) rulesReport {
@@ -224,6 +227,83 @@ func TestRulesNotesMissingSharedRules(t *testing.T) {
 	}
 	if errOut != "stele rules: "+note+"\n" {
 		t.Errorf("stderr = %q", errOut)
+	}
+}
+
+// A pull that adds a rule to a source the index already holds, here a
+// plugin's, leaves the index serving the old ones: stele rules says so.
+func TestRulesNotesLockRulesTheIndexLacks(t *testing.T) {
+	installPlugin(t, filepath.Join(t.TempDir(), "bin"), "source", "good")
+	root := project(t, hookRules)
+	withPluginSource(t, root, "good", "v1", pluginRule)
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile: %s", errOut)
+	}
+	f, err := lock.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := f.Rules[len(f.Rules)-1]
+	f.Rules = append(f.Rules, lock.Entry{ID: "0b6c3c1e-5d0e-4f43-9a4c-2f1f3e0d9a77", Source: last.Source, Hash: last.Hash, Position: last.Position + 1})
+	if err := lock.Save(root, f); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errOut := runCmd("rules", "--format", "json")
+	if code != exitOK {
+		t.Fatalf("rules = %d: %s", code, errOut)
+	}
+	var rep rulesReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatal(err)
+	}
+	note := "good: stele.lock holds rules of it that this machine's index does not: run stele compile"
+	if len(rep.Notes) != 1 || rep.Notes[0] != note {
+		t.Errorf("notes = %q, want %q", rep.Notes, note)
+	}
+	if errOut != "stele rules: "+note+"\n" {
+		t.Errorf("stderr = %q", errOut)
+	}
+}
+
+// A stele.lock stele cannot read, say with merge conflict markers, is
+// noted: without it shared rules lose their pins. A missing one is not.
+func TestRulesNotesUnreadableLock(t *testing.T) {
+	root := compiled(t, rules)
+	if rep := rulesJSON(t); len(rep.Notes) != 0 {
+		t.Fatalf("notes = %q, want none", rep.Notes)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "stele.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAt(t, root, "stele.lock", "<<<<<<< HEAD\n"+string(data)+"=======\n>>>>>>> theirs\n")
+
+	code, out, errOut := runCmd("rules", "--format", "json")
+	if code != exitOK {
+		t.Fatalf("rules = %d: %s", code, errOut)
+	}
+	var rep rulesReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Rules) != 2 {
+		t.Errorf("rules = %+v, want the index's 2", rep.Rules)
+	}
+	if len(rep.Notes) != 1 || !strings.HasPrefix(rep.Notes[0], "stele.lock: ") || !strings.Contains(rep.Notes[0], "this list may be incomplete") {
+		t.Errorf("notes = %q, want one about stele.lock", rep.Notes)
+	}
+	if !strings.HasPrefix(errOut, "stele rules: stele.lock: ") {
+		t.Errorf("stderr = %q", errOut)
+	}
+}
+
+// A source's name comes from the committed stele.lock: a control character
+// in it is quoted, never printed raw.
+func TestRulesNotesQuoteSourceNames(t *testing.T) {
+	got := absent(index.Index{}, lock.File{Rules: []lock.Entry{{ID: "a", Source: "evil\nstele rules: forged"}}})
+	if len(got) != 1 || strings.Contains(got[0], "\n") {
+		t.Errorf("notes = %q, want the name quoted", got)
 	}
 }
 

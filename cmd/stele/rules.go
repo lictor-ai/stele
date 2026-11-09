@@ -91,7 +91,16 @@ func runRules(args []string, stdout, stderr io.Writer) int {
 	if note != "" {
 		rep.Notes = append(rep.Notes, note)
 	}
-	committed, _ := lock.Load(root)
+	// A missing stele.lock loads empty. One that does not load, say with
+	// conflict markers, hides what the index lacks and the pins.
+	committed, err := lock.Load(root)
+	if err != nil {
+		msg := err.Error()
+		if !strings.HasPrefix(msg, lock.FileName+": ") {
+			msg = lock.FileName + ": " + msg
+		}
+		rep.Notes = append(rep.Notes, showPath(msg)+". Until stele check passes again, this list may be incomplete and shared rules lack their pins")
+	}
 	rep.Notes = append(rep.Notes, absent(idx, committed)...)
 	for _, n := range rep.Notes {
 		fmt.Fprintf(stderr, "stele rules: %s\n", n)
@@ -131,22 +140,33 @@ func ruleFrom(name string, idx index.Index, pins map[string]source.Pin) ruleSour
 
 // absent says which sources stele.lock holds rules of that the index does
 // not: a source this machine has not compiled, such as shared rules after a
-// fresh clone, or a pin a pull moved. Only stele compile reads them.
+// fresh clone, a pin a pull moved, or a rule a pull added to a source the
+// index holds (D81). Only stele compile reads them. One note a source.
 func absent(idx index.Index, committed lock.File) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, p := range committed.Sources {
 		seen[p.Source] = true
 		if fp, ok := idx.Sources[p.Source]; !ok {
-			out = append(out, fmt.Sprintf("%s: its rules are not in this machine's index: run stele compile", sourceLabel(p.Source)))
+			out = append(out, fmt.Sprintf("%s: its rules are not in this machine's index: run stele compile", noteLabel(p.Source)))
 		} else if fp != p.Commit {
-			out = append(out, fmt.Sprintf("%s: this machine's index holds it at %s, stele.lock pins %s: run stele compile", sourceLabel(p.Source), short(fp), short(p.Commit)))
+			out = append(out, fmt.Sprintf("%s: this machine's index holds it at %s, stele.lock pins %s: run stele compile", noteLabel(p.Source), showPath(short(fp)), showPath(short(p.Commit))))
 		}
 	}
+	ids := make(map[string]bool, len(idx.Rules))
+	for _, r := range idx.Rules {
+		ids[r.ID] = true
+	}
 	for _, e := range committed.Rules {
-		if _, ok := idx.Sources[e.Source]; !ok && !seen[e.Source] {
+		if seen[e.Source] {
+			continue
+		}
+		if _, ok := idx.Sources[e.Source]; !ok {
 			seen[e.Source] = true
-			out = append(out, fmt.Sprintf("%s: its rules are not in this machine's index: run stele compile", sourceLabel(e.Source)))
+			out = append(out, fmt.Sprintf("%s: its rules are not in this machine's index: run stele compile", noteLabel(e.Source)))
+		} else if !ids[e.ID] {
+			seen[e.Source] = true
+			out = append(out, fmt.Sprintf("%s: stele.lock holds rules of it that this machine's index does not: run stele compile", noteLabel(e.Source)))
 		}
 	}
 	return out
@@ -159,6 +179,12 @@ func sourceLabel(name string) string {
 		return "stele.md"
 	}
 	return strings.TrimPrefix(name, "git:")
+}
+
+// noteLabel is sourceLabel for a note: the name comes from the committed
+// stele.lock, so a control character in it is quoted.
+func noteLabel(name string) string {
+	return showPath(sourceLabel(name))
 }
 
 func printRulesJSON(w io.Writer, rep rulesReport) {
