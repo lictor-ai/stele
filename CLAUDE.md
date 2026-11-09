@@ -58,7 +58,11 @@ Guideline enforcement for coding agents. Go, single binary.
     at least once), `stele check --push` (in CI one record of the run's
     counts, never the report), `share_briefs` reserved, and `stele status`.
     It amends ADR-0003 and ADR-0010, and D53. The spec carries it as D82–D85.
-15. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+15. `docs/adr/0015-stele-rules-for-other-tools.md` — `stele rules
+    [--format text|json]` prints the compiled rules (id, source, scope, body)
+    for other tools, read as the hook reads them: no process started, never
+    `stele.md` or `stele.json` written. The spec carries it as D86.
+16. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
