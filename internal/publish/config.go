@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,7 +43,8 @@ type Config struct {
 }
 
 // fileConfig is the "publish" key as stele.json holds it. Its keys are the
-// schema's (schema/stele.v1.json, D88).
+// schema's (schema/stele.v1.json, D88), and the only ones LoadConfig takes
+// (D89).
 type fileConfig struct {
 	Repo string `json:"repo"`
 	Path string `json:"path"`
@@ -62,15 +64,19 @@ func LoadConfig(root string) (Config, error) {
 		return Config{}, err
 	}
 	var raw struct {
-		Publish *fileConfig `json:"publish"`
+		Publish json.RawMessage `json:"publish"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", enforce.FileName, err)
 	}
-	if raw.Publish == nil {
+	if len(raw.Publish) == 0 || string(raw.Publish) == "null" {
 		return Config{}, fmt.Errorf("%w; add one, for example: %s", ErrNoConfig, example)
 	}
-	cfg := Config{Repo: raw.Publish.Repo, Path: raw.Publish.Path}
+	fc, err := decodeFileConfig(raw.Publish)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg := Config{Repo: fc.Repo, Path: fc.Path}
 	if cfg.Path == "" {
 		cfg.Path = DefaultPath
 	}
@@ -81,6 +87,24 @@ func LoadConfig(root string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// decodeFileConfig decodes the "publish" key, refusing a key fileConfig does
+// not have: "pth" must not publish to the default path (D89). A key in
+// another case matches, as encoding/json matches every key of stele.json.
+func decodeFileConfig(data []byte) (fileConfig, error) {
+	var fc fileConfig
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(&fc)
+	if err == nil {
+		return fc, nil
+	}
+	// encoding/json has no error type for this one.
+	if field, ok := strings.CutPrefix(err.Error(), "json: unknown field "); ok {
+		return fileConfig{}, fmt.Errorf(`%w: "publish" has no key %s; it takes "repo" and "path"`, ErrBadConfig, field)
+	}
+	return fileConfig{}, fmt.Errorf("%s: %w", enforce.FileName, err)
 }
 
 // validateRepo checks "repo" with gitexec.ValidateRepo.
