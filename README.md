@@ -610,6 +610,63 @@ index: fresh
 
 `stele status` writes nothing. To learn a plugin's version it runs the plugin, and it asks each plugin source whether it changed, unless you pass `--offline`. It exits 0 whenever it could describe the install, a missing plugin included, and 2 when it can't run (no project, or a `stele.json` it can't read). With a [sink](#send-the-log-somewhere-stele-push) listed, it also says how many log lines wait for it.
 
+## The rules, for other tools: stele rules
+
+The log and `stele push` name rules by id only. `stele rules` prints the rules behind those ids, the same ones the agent gets:
+
+```
+$ stele rules
+cb820e6a-fe32-43db-8875-53bf87d20556  stele.md  every file
+  Never build SQL by string concatenation. Use the query build…
+911a21e4-63df-457f-9703-97e07347996e  stele.md  **/*.go, !**/*_test.go
+  Return errors; never panic in library code.
+2 rules
+```
+
+Each rule shows its id, where it comes from, its scope, and the start of its text. A [shared rule](#shared-rules-from-another-repository) shows its repository and file, then `@` and the first seven characters of the commit it was read at.
+
+For a script or another tool, ask for JSON:
+
+```
+$ stele rules --format json
+{
+  "v": 1,
+  "project": "caaac0e1-9ea5-4fb8-a2aa-d098d6acb015",
+  "rules": [
+    {
+      "id": "cb820e6a-fe32-43db-8875-53bf87d20556",
+      "source": {
+        "name": "stelemd",
+        "path": "stele.md"
+      },
+      "scope": [],
+      "body": "Never build SQL by string concatenation. Use the query builder in db/."
+    },
+    {
+      "id": "911a21e4-63df-457f-9703-97e07347996e",
+      "source": {
+        "name": "stelemd",
+        "path": "stele.md"
+      },
+      "scope": [
+        "**/*.go",
+        "!**/*_test.go"
+      ],
+      "body": "Return errors; never panic in library code."
+    }
+  ],
+  "notes": []
+}
+```
+
+A shared rule's `source` also has `repo`, `ref` and `commit`. `notes` lists what is missing from the list, the same notes `stele rules` prints on stderr. For example, a fresh clone that has not run `stele compile` yet has no shared rules.
+
+| Flag | |
+|---|---|
+| `--format json` | JSON, with `"v": 1` and the project id |
+
+`stele rules` reads the rules the way the hook does: it updates the index when `stele.md` changed, starts no program and makes no network call. If `stele.md` has an error, it prints the last valid rules and says so. It exits 0 when it printed the rules, and 2 when it can't run.
+
 ## Send the log somewhere: stele push
 
 The log stays on your machine. To send it somewhere, install a **sink**, a program named `stele-sink-<name>` on your `PATH`, and list it in `stele.json`:
@@ -767,7 +824,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **A shared rule can't be switched off or changed in a project.** It applies as written, next to the project's own rules.
 
-**Before the first `stele compile`, `stele check` or `stele init` on a machine, the hook knows only the project's own rules.** A fresh clone has no index yet, and the hook never fetches. The agent still loads the shared rules from the committed `.claude/rules/stele-rules.md`, but no write is denied or checked against them until then.
+**Before the first `stele compile`, `stele check` or `stele init` on a machine, the hook knows only the project's own rules.** A fresh clone has no index yet, and the hook never fetches. The agent still loads the shared rules from the committed `.claude/rules/stele-rules.md`, but no write is denied or checked against them until then. `stele rules` lists only the project's own rules until then too, and says the shared ones are missing.
 
 **A cloned project chooses where `stele compile`, `stele check` and `stele init` connect.** Its `stele.json` names the host, and ssh offers your keys to it, as `git clone` of a project with submodules would. Look at a `sources` entry before running stele in a project you don't trust.
 
@@ -789,7 +846,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **A cloned project chooses which plugins run.** Its `stele.json` names them, and stele runs the ones of those names on your `PATH`. It can't bring a plugin of its own, but it can make one you installed run with its `config`.
 
-**Before the first `stele compile`, `stele check` or `stele init` on a machine, the hook knows only the project's own rules.** As for shared rules: the agent still loads a plugin's rules from the committed `.claude/rules/stele-rules.md`, but no write is denied or checked against them until then.
+**Before the first `stele compile`, `stele check` or `stele init` on a machine, the hook knows only the project's own rules.** As for shared rules: the agent still loads a plugin's rules from the committed `.claude/rules/stele-rules.md`, but no write is denied or checked against them until then, and `stele rules` does not list them.
 
 **A plugin's rules aren't pinned.** `stele check` asks the plugin again, so if it reads something outside the project that changed, `stele check` fails until you run `stele compile`.
 
