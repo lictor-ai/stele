@@ -44,6 +44,7 @@ stele puts each rule in front of the agent when it matters, and catches what sli
 
 And it stays out of your way:
 
+- 🔌 **Keep your agent.** stele plugs into the hooks of Claude Code and Codex. No new agent, no new editor.
 - 📦 **One Go binary.** No daemon, no service, no config server.
 - 🧠 **No model.** Rules are chosen by path and checked by regex: same input, same answer.
 - 🔒 **No network calls of its own**, except `stele publish`, which you run yourself, and fetching [shared rules](#shared-rules-from-another-repository) you list in `stele.json`. [Plugins](#plugins) and [sinks](#send-the-log-somewhere-stele-push) you install may use the network.
