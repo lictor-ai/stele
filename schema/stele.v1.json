@@ -1,0 +1,153 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://stele.lictorlabs.com/schema/stele.v1.json",
+  "title": "stele.json",
+  "description": "stele's settings, committed next to stele.md. stele reads this file and never writes it. https://github.com/lictor-ai/stele#stelejson",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "description": "The address of this schema, for your editor. stele ignores it.",
+      "type": "string"
+    },
+    "block_on_error": {
+      "description": "What happens when stele itself fails. false: the write goes through with a warning. true: the write is blocked and the agent is told why. https://github.com/lictor-ai/stele#stelejson",
+      "type": "boolean",
+      "default": false
+    },
+    "backstop": {
+      "description": "No longer read: use stele init --remind=off instead.",
+      "deprecationMessage": "No longer read: use stele init --remind=off instead."
+    },
+    "sources": {
+      "description": "Where else rules come from: another git repository (\"git\") or a source plugin you install. https://github.com/lictor-ai/stele#shared-rules-from-another-repository",
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/definitions/source" }
+    },
+    "checkers": {
+      "description": "Checker plugins you install, which stele check runs for the rules that name them. https://github.com/lictor-ai/stele#checker-plugins",
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/definitions/plugin" }
+    },
+    "sinks": {
+      "description": "Sink plugins you install, which stele push sends the log to. https://github.com/lictor-ai/stele#send-the-log-somewhere-stele-push",
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/definitions/sink" }
+    },
+    "publish": {
+      "description": "Where stele publish sends stele.md, as a merge request. https://github.com/lictor-ai/stele#publish-the-rules-stele-publish",
+      "allOf": [{ "$ref": "#/definitions/publish" }]
+    }
+  },
+  "definitions": {
+    "pluginName": {
+      "description": "The plugin's name: stele runs stele-<kind>-<name> found on PATH. Lower-case letters, digits and dashes, starting with a letter.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "not": { "enum": ["stelemd", "git", "regex"] }
+    },
+    "timeout": {
+      "description": "How long one call may take, from 1s to 30m, such as \"2m\".",
+      "type": "string",
+      "pattern": "^[+]?(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+$"
+    },
+    "plugin": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/definitions/pluginName" },
+        "config": { "description": "Passed to the plugin as is. Any JSON." },
+        "timeout": { "$ref": "#/definitions/timeout" }
+      }
+    },
+    "sink": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/definitions/pluginName" },
+        "config": { "description": "Passed to the sink as is. Any JSON." },
+        "timeout": { "$ref": "#/definitions/timeout" },
+        "share_briefs": {
+          "description": "Reserved: it has no effect yet.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "source": {
+      "if": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "const": "git" } }
+      },
+      "then": { "$ref": "#/definitions/gitSource" },
+      "else": { "$ref": "#/definitions/plugin" }
+    },
+    "gitSource": {
+      "description": "Rules from a stele.md in another git repository, read at the commit stele.lock pins.",
+      "type": "object",
+      "required": ["name", "config"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "const": "git" },
+        "config": { "$ref": "#/definitions/gitConfig" }
+      }
+    },
+    "gitConfig": {
+      "type": "object",
+      "required": ["repo"],
+      "additionalProperties": false,
+      "properties": {
+        "repo": { "$ref": "#/definitions/repo" },
+        "ref": { "$ref": "#/definitions/ref" },
+        "path": {
+          "description": "The rules file in that repository. Default stele.md.",
+          "default": "stele.md",
+          "allOf": [{ "$ref": "#/definitions/mdPath" }]
+        }
+      }
+    },
+    "repo": {
+      "description": "A git remote: https://host/path, ssh://host/path or user@host:path. No password, and no user in an https URL.",
+      "type": "string",
+      "pattern": "^(https://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?/[^\\s?#]+|ssh://([^\\s/@-][^\\s/@]*@)?[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?/[^\\s?#]+|[A-Za-z0-9._-]+@[A-Za-z0-9][A-Za-z0-9.-]*:[^/:\\s-]\\S*)$"
+    },
+    "ref": {
+      "description": "A branch or tag. Empty or unset: the repository's default branch.",
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^([A-Za-z0-9_][A-Za-z0-9._+-]*(/[A-Za-z0-9_][A-Za-z0-9._+-]*)*)?$",
+      "not": { "pattern": "[.][.]|[.](/|$)|[.]lock(/|$)" },
+      "if": { "pattern": "^refs/" },
+      "then": { "pattern": "^refs/(heads|tags)/" }
+    },
+    "mdPath": {
+      "description": "A relative path ending in .md, of letters, digits, '.', '_' and '-'.",
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^(([A-Za-z0-9_][A-Za-z0-9._-]*/)*[A-Za-z0-9_][A-Za-z0-9._-]*[.]md)?$",
+      "not": { "pattern": "[.][.]" }
+    },
+    "publish": {
+      "type": "object",
+      "required": ["repo"],
+      "additionalProperties": false,
+      "properties": {
+        "repo": { "$ref": "#/definitions/repo" },
+        "path": {
+          "description": "Where stele.md goes in that repository. Default stele.md.",
+          "default": "stele.md",
+          "allOf": [
+            { "$ref": "#/definitions/mdPath" },
+            { "not": { "pattern": "[.]/|[.]lock/" } }
+          ]
+        }
+      }
+    }
+  }
+}
