@@ -24,12 +24,13 @@ func jsonTags(v any) []string {
 }
 
 // TestSchemaHasEveryKey: a key stele reads is in the schema, and the schema
-// has no key stele does not read, so neither can gain one alone. The
-// schema's tables of accepted and refused files are in
+// has no key stele does not read, so neither can gain one alone. The top
+// level is what enforce.UnknownKeys knows, so stele's notes and the schema
+// agree (D89). The schema's tables of accepted and refused files are in
 // cmd/stele/schema_test.go.
 func TestSchemaHasEveryKey(t *testing.T) {
 	schema := schematest.Load(t)
-	top := append([]string{"$schema"}, enforce.Keys()...)
+	top := append([]string{enforce.KeySchema}, enforce.Keys()...)
 	sort.Strings(top)
 	for _, c := range []struct {
 		ptr  string

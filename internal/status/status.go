@@ -11,6 +11,7 @@ import (
 
 	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/compile"
+	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/install"
 	"github.com/lictor-ai/stele/internal/lock"
@@ -118,6 +119,9 @@ func Collect(ctx context.Context, root string, in Input) (Status, error) {
 	}
 	if st.Project == "" {
 		note("no project id yet: run stele compile")
+	}
+	for _, k := range enforce.UnknownKeys(root) {
+		note(enforce.UnknownKeyNote(k))
 	}
 
 	for _, a := range in.Agents {

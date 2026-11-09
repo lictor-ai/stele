@@ -71,7 +71,11 @@ Guideline enforcement for coding agents. Go, single binary.
     `https://stele.lictorlabs.com/schema/stele.v1.json`; stele ignores
     `"$schema"`, and tests keep the schema's keys equal to the ones stele
     reads. The spec carries it as D88.
-18. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+18. `docs/adr/0018-keys-stele-doesnt-know.md` — `stele init` and `stele
+    status` note each top-level `stele.json` key stele doesn't know, never
+    as an error; `stele publish` refuses an unknown key under `publish`.
+    It amends ADR-0017. The spec carries it as D89.
+19. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
@@ -107,4 +111,5 @@ enterprise idea. Do not implement it or use it as a v1 format.
   never a check report or code (D83, D84).
 - A new `stele.json` key goes in `enforce.Keys()` (top level) or a decoded
   struct, and in `schema/stele.v1.json`, in the same change: the schema
-  tests fail otherwise (D88).
+  tests fail otherwise (D88). A top-level key missing from `enforce.Keys()`
+  is noted as unknown by `stele init` and `stele status` (D89).

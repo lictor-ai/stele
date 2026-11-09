@@ -571,6 +571,9 @@ type Policy struct {
 func Load(root string) (Policy, error) // defaults when the file is absent
 func SetsBackstop(root string) bool    // the file still sets "backstop"
 func Keys() []string                   // every top-level key stele reads (D88)
+const KeySchema = "$schema"            // known, never read (D88)
+func UnknownKeys(root string) []string // top-level keys stele doesn't know (D89)
+func UnknownKeyNote(key string) string // init's and status's note for one
 ```
 
 **The file is `stele.json`, at the repository root, and it is optional.**
@@ -587,11 +590,15 @@ Claude Code adapter). `Load` ignores a `backstop` key; `SetsBackstop` lets
 The same file also lists plugins. `enforce.Load` decodes the policy key and
 ignores the rest; `internal/plugin` decodes `sources` and `checkers` and ignores
 the rest. The hook only ever needs the policy, so it never pays for plugin
-resolution.
+resolution. `UnknownKeys` lists the top-level keys none of them reads, but
+`"$schema"`, matched in any case as `encoding/json` matches; `install.Init`
+and `status.Collect` turn each into a note, never an error, and nothing else
+calls it (ADR-0018, D89). `internal/publish` decodes `publish` strictly: a
+key other than `repo` and `path` is `ErrBadConfig`.
 
 **The schema.** `schema/stele.v1.json` is the file's JSON Schema, draft-07,
 for editors (ADR-0017, D88); nothing in stele reads it, and a `"$schema"` key
-in `stele.json` is ignored like any key stele does not read. Tests keep the
+in `stele.json` is known (`enforce.KeySchema`) and never read. Tests keep the
 two together without a validator dependency: `internal/schematest`, imported
 only by tests, checks JSON against the keywords the schema uses. The schema's
 keys equal `enforce.Keys()` at the top level and the json tags of the structs

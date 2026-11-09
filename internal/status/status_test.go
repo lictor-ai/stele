@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lictor-ai/stele/internal/adapter"
+	"github.com/lictor-ai/stele/internal/enforce"
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/sign"
@@ -221,6 +222,27 @@ func TestStatusNoKeyNoIndex(t *testing.T) {
 	}
 	if st.Index.Present || st.Index.Valid || st.Index.Fresh != nil {
 		t.Errorf("index = %+v", st.Index)
+	}
+}
+
+// A top-level key of stele.json stele doesn't know is a note, one per key
+// (D89); "$schema" is known.
+func TestStatusNotesUnknownKeys(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "stele.json", `{"$schema": "x", "block_on_eror": true, "plugins": []}`)
+	st, err := Collect(context.Background(), root, Input{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, n := range st.Notes {
+		if strings.Contains(n, "not a key stele knows") {
+			got = append(got, n)
+		}
+	}
+	want := []string{enforce.UnknownKeyNote("block_on_eror"), enforce.UnknownKeyNote("plugins")}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("notes = %q, want %q", got, want)
 	}
 }
 

@@ -241,6 +241,9 @@ func Init(a adapter.Adapter, root, version string, set Set) (changes, notes []st
 	if enforce.SetsBackstop(root) {
 		notes = append(notes, BackstopNote)
 	}
+	for _, k := range enforce.UnknownKeys(root) {
+		notes = append(notes, enforce.UnknownKeyNote(k))
+	}
 	return changes, notes, nil
 }
 

@@ -3,7 +3,8 @@
 // The policy lives in stele.json at the repository root, beside stele.md. The
 // file is optional and committed: the policy is a team decision, reviewed like
 // code. stele reads it and never writes it (D38). The same file will also list
-// plugins; Load reads only the policy keys and ignores the rest.
+// plugins; Load reads only the policy keys and ignores the rest, and
+// UnknownKeys lists the keys no part of stele knows.
 package enforce
 
 import (
@@ -13,6 +14,8 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/lictor-ai/stele/internal/safefile"
 )
@@ -31,9 +34,44 @@ const (
 	KeyPublish      = "publish"  // internal/publish
 )
 
+// KeySchema names the file's JSON Schema, for editors. stele knows it and
+// never reads it (D88).
+const KeySchema = "$schema"
+
 // Keys is every key of stele.json stele reads.
 func Keys() []string {
 	return []string{KeyBlockOnError, KeyBackstop, KeySources, KeyCheckers, KeySinks, KeyPublish}
+}
+
+// UnknownKeys returns the top-level keys of stele.json under root that stele
+// does not know, sorted, each once: stele init and stele status note them
+// (D89), and every other command skips them. A key in another case, such as
+// "Sources", is known: encoding/json reads it. A missing, unreadable or
+// invalid stele.json has none; the commands that read it report that.
+func UnknownKeys(root string) []string {
+	data, err := read(root)
+	if err != nil {
+		return nil
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(data, &m) != nil {
+		return nil
+	}
+	var out []string
+	for k := range m {
+		if k == KeySchema || slices.ContainsFunc(Keys(), func(known string) bool { return strings.EqualFold(k, known) }) {
+			continue
+		}
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// UnknownKeyNote is the note for a key UnknownKeys returns. The key comes
+// from a committed file, so it is quoted.
+func UnknownKeyNote(key string) string {
+	return fmt.Sprintf("%s: %q is not a key stele knows; it is ignored", FileName, key)
 }
 
 // maxSize caps stele.json. It is read on every write, by the hook.

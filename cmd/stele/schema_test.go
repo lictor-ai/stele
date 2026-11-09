@@ -163,6 +163,7 @@ func TestSchemaRejectsWhatSteleRejects(t *testing.T) {
 		`{"publish": {"repo": "file:///x"}}`,
 		`{"publish": {"repo": "git@github.com:a/b.git", "path": "../x.md"}}`,
 		`{"publish": {"repo": "git@github.com:a/b.git", "path": "a./x.md"}}`,
+		`{"publish": {"repo": "git@github.com:a/b.git", "brnach": "x"}}`, // D89
 	} {
 		if err := steleAccepts(t, c); err == nil {
 			t.Errorf("stele accepts %s", c)
@@ -186,12 +187,12 @@ func TestSchemaRejectsWhatSteleRejects(t *testing.T) {
 			t.Errorf("the schema refuses %s, which this test says only stele does: %v", c, err)
 		}
 	}
-	// Only the schema refuses these, on purpose (ADR-0017): stele ignores a
-	// key it does not read, encoding/json matches a key in another case, and
-	// net/url takes some odd forms of a URL; an editor should flag each.
+	// Only the schema refuses these, on purpose (ADR-0017): stele notes a
+	// top-level key it does not know and goes on (D89), encoding/json
+	// matches a key in another case, and net/url takes some odd forms of a
+	// URL; an editor should flag each.
 	for _, c := range []string{
 		`{"block_on_eror": true}`,
-		`{"publish": {"repo": "git@github.com:a/b.git", "brnach": "x"}}`,
 		`{"checkers": [{"Name": "lint"}]}`,
 		`{"sources": [{"name": "git", "config": {"Repo": "git@github.com:a/b.git"}}]}`,
 		`{"sources": [{"name": "git", "config": {"repo": "https://github.com:/a/b"}}]}`,
@@ -204,6 +205,32 @@ func TestSchemaRejectsWhatSteleRejects(t *testing.T) {
 		}
 		if err := steleAccepts(t, c); err != nil {
 			t.Errorf("stele refuses %s, which this test says only the schema does: %v", c, err)
+		}
+	}
+}
+
+// TestSchemaTopLevelIsWhatSteleKnows: a top-level key the schema refuses is
+// one stele notes, and one it takes stele does not note (D89).
+func TestSchemaTopLevelIsWhatSteleKnows(t *testing.T) {
+	schema := schematest.Load(t)
+	for _, c := range []struct {
+		content string
+		noted   bool
+	}{
+		{`{"$schema": "x", "block_on_error": true, "backstop": true, "sources": [], "checkers": [], "sinks": []}`, false},
+		{`{"block_on_eror": true}`, true},
+		{`{"$Schema": "x"}`, true},
+		{`{"plugins": []}`, true},
+	} {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "stele.json"), []byte(c.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if noted := len(enforce.UnknownKeys(root)) > 0; noted != c.noted {
+			t.Errorf("%s: stele notes %v, want %v", c.content, enforce.UnknownKeys(root), c.noted)
+		}
+		if refused := schemaAccepts(t, schema, c.content) != nil; refused != c.noted {
+			t.Errorf("%s: the schema refuses it: %v, want %v", c.content, refused, c.noted)
 		}
 	}
 }

@@ -358,6 +358,17 @@ up to date, nothing written
 hooks: remind on, check on
 ```
 
+A key stele doesn't know, such as a typo, gets a note from `stele init` and `stele status`. It's a note, not an error, so a key from a newer stele doesn't break an older one:
+
+```
+$ stele init
+stele init in /home/you/project
+stele init: kept the existing stele.md
+stele init: stele.json: "block_on_eror" is not a key stele knows; it is ignored
+up to date, nothing written
+hooks: remind on, check on
+```
+
 ### Check stele.json in your editor
 
 `schema/stele.v1.json` is the JSON Schema of `stele.json`. Point your file at it and your editor underlines mistakes as you type, suggests keys, and shows what each one does:
@@ -371,7 +382,7 @@ hooks: remind on, check on
 
 This works in VS Code, JetBrains IDEs and any editor that reads JSON Schema. The schema ships in this repository as `schema/stele.v1.json`; the website serves it at the address above from release v1.4.0 on. stele ignores `$schema` and never writes `stele.json`.
 
-The schema is stricter than stele in a few places, on purpose. It flags a key stele doesn't know, such as `block_on_eror`, which stele skips without a word; a key in another case, such as `Name`, which stele reads anyway; and odd repository addresses, such as an empty port.
+The schema is stricter than stele in a few places, on purpose. It flags a key stele doesn't know, such as `block_on_eror`, which stele only notes in `stele init` and `stele status`; a key in another case, such as `Name`, which stele reads anyway; and odd repository addresses, such as an empty port.
 
 A few mistakes only stele sees: a plugin listed twice, a `timeout` outside 1s to 30m, and some repository addresses. stele reports those when a command reads the file, such as `stele compile` or `stele status`.
 
@@ -628,7 +639,7 @@ index: fresh
 | `--format json` | The same as JSON, with `"v": 1` and the project id |
 | `--offline` | Start no plugin: plugin versions, and whether a plugin source is fresh, show as unknown |
 
-`stele status` writes nothing. To learn a plugin's version it runs the plugin, and it asks each plugin source whether it changed, unless you pass `--offline`. It exits 0 whenever it could describe the install, a missing plugin included, and 2 when it can't run (no project, or a `stele.json` it can't read). With a [sink](#send-the-log-somewhere-stele-push) listed, it also says how many log lines wait for it.
+`stele status` writes nothing. To learn a plugin's version it runs the plugin, and it asks each plugin source whether it changed, unless you pass `--offline`. It exits 0 whenever it could describe the install, a missing plugin included, and 2 when it can't run (no project, or a `stele.json` it can't read). With a [sink](#send-the-log-somewhere-stele-push) listed, it also says how many log lines wait for it. Notes at the end say what needs a look, such as a key in `stele.json` stele doesn't know.
 
 ## The rules, for other tools: stele rules
 
@@ -727,6 +738,8 @@ file: sent 0 lines
 | `repo` | The repository: `https://host/path`, `ssh://host/path` or `user@host:path`. No local path, no other transport, no password in the URL, and no user in an `https` URL: `stele.json` is committed, and a token there would be too. In the `user@host:path` form the path can't start with `/`: write `ssh://user@host/abs/path` instead. |
 | `path` | Where `stele.md` goes in it. Default `stele.md`. Letters, digits, `.`, `_`, `-` and `/`, ending in `.md`. |
 
+Any other key under `publish` is an error, so a typo such as `pth` never sends `stele.md` to the default path.
+
 One repository per project needs only `repo`. Several projects can share one repository, each with its own `path`.
 
 What it does:
@@ -768,6 +781,11 @@ stele publish: stele.md has changes that are not committed; commit it first
 ```
 $ stele publish
 stele publish: bad publish setting in stele.json: repo "file:///srv/rules.git": only https and ssh are allowed; use https://host/path, ssh://host/path or user@host:path
+```
+
+```
+$ stele publish
+stele publish: bad publish setting in stele.json: "publish" has no key "pth"; it takes "repo" and "path"
 ```
 
 ```
@@ -840,7 +858,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
 
-**stele skips a top-level key of `stele.json` it doesn't know, without a word.** A typo such as `block_on_eror` does nothing. [The schema](#check-stelejson-in-your-editor) flags it, but only in an editor that uses it.
+**Only `stele init` and `stele status` mention a top-level key of `stele.json` stele doesn't know.** A typo such as `block_on_eror` does nothing, and `stele compile`, `stele check` and the hook skip it without a word, so CI catches it only if it runs `stele status`. [The schema](#check-stelejson-in-your-editor) flags it in an editor that uses it.
 
 ### Shared rules
 
