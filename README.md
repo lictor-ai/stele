@@ -342,6 +342,8 @@ Optional, committed next to `stele.md`. This is the default:
 | `sources` | Rules from another git repository, see [Shared rules](#shared-rules-from-another-repository), or from a program you install, see [Plugins](#plugins). |
 | `checkers` | Programs you install that `stele check` runs for rules that name them: see [Checker plugins](#checker-plugins). |
 | `sinks` | Programs you install that `stele push` sends the log to: see [stele push](#send-the-log-somewhere-stele-push). |
+| `publish` | Where `stele publish` sends `stele.md`: see [stele publish](#publish-the-rules-stele-publish). |
+| `$schema` | The schema's address, for your editor. stele ignores it. |
 | `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. It applies only to a part of the hook that is on: with `--remind=off` or `--check=off`, that part's failures only warn. |
 
 `backstop` is no longer read: use `stele init --remind=off`. `stele init` says so when `stele.json` still sets it, and leaves the file as it is:
@@ -354,6 +356,21 @@ stele init: stele.json: backstop is no longer read; use stele init --remind=off
 up to date, nothing written
 hooks: remind on, check on
 ```
+
+### Check stele.json in your editor
+
+`schema/stele.v1.json` is the JSON Schema of `stele.json`. Point your file at it and your editor underlines mistakes as you type, suggests keys, and shows what each one does:
+
+```json
+{
+  "$schema": "https://stele.lictorlabs.com/schema/stele.v1.json",
+  "block_on_error": false
+}
+```
+
+This works in VS Code, JetBrains IDEs and any editor that reads JSON Schema. The address is served by the stele website, from the latest release. stele ignores `$schema` and never writes `stele.json`.
+
+The schema flags a key stele doesn't know, such as `block_on_eror`, which stele itself skips without a word. A few mistakes only stele sees: a plugin listed twice, a `timeout` outside 1s to 30m, and some repository addresses. stele reports those when a command reads the file, such as `stele compile` or `stele status`.
 
 ## Shared rules from another repository
 
@@ -819,6 +836,8 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 **A rule with no `scope`, or only `!` exclusions, is shown for every other file.** Keep such rules few. Rules are chosen by path, not by task.
 
 **Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
+
+**stele skips a top-level key of `stele.json` it doesn't know, without a word.** A typo such as `block_on_eror` does nothing. [The schema](#check-stelejson-in-your-editor) flags it, but only in an editor that uses it.
 
 ### Shared rules
 
