@@ -730,6 +730,9 @@ until there is data.
 > CI it sends one record of the run's counts. Its exit is the larger of the
 > check's and the push's.
 
+> **Amended by ADR-0015 (D86).** `stele rules` prints the compiled rules, as
+> the hook reads them, with the same exit codes: 0 printed, 2 could not run.
+
 The hook and the MCP tools put rules in front of the agent before it writes.
 `stele check` is the other half: it checks code against those rules in CI, after
 it is written. It is how rules that can be checked by a tool get checked (D47).
@@ -895,6 +898,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D83 | `stele push` sends, to each sink in order, the log's lines this machine signed and that carry this project's id, oldest first, exactly as written with their `mac`, from where it last stopped, and skips and counts the others; the first push to a sink sends the whole log. `.stele/push/<sink>.json`, sealed, holds the last line sent (its MAC, the byte after it, and the first MAC of its file), so it follows a rotation; past two rotations it sends all there is and says lines rotated out. The cursor moves after each accepted batch, by what was accepted: at least once, never exactly once. A cursor that does not verify is exit 2. A sink that fails stops for the run, the others go on; no retries. One push at a time per project. Exit 0 all sent (or nothing, or no sink), 1 a sink took fewer than sent, 2 could not run. | #17 |
 | D84 | **Amends spec §8.** `stele check --push` pushes the log's pending lines where the key and `.stele/` exist, and in CI sends one record built as the log's `check` line, with no `mac`. It never sends the check report. Its exit is the larger of the check's and the push's. | #17 |
 | D85 | `stele status [--format text\|json] [--offline]` describes the install with `"v": 1` (D54): versions, project id, each agent's hooks, switches and rules file, each listed plugin found or not and its `describe` version, each source's rule count and freshness, the index's freshness, each sink's pending lines and last push. It writes nothing, starts `describe` and external `fingerprint` calls unless `--offline`, and exits 0 when it could describe the install, 2 when not. Not on the hook's path. | #17 |
+| D86 | `stele rules [--format text\|json]` prints the compiled rules (ADR-0015). The JSON has `"v": 1` (D50), `project`, `rules` (each with `id`, `source`, `scope`, `body`; `source` has `name`, `path` for `stele.md` and a shared file, and `repo`, `ref`, `commit` for a shared file) and `notes`: what the list lacks, also on stderr. It reads the rules as the hook does (`compile.EnsureFresh`): it starts no process, may write stele's own files, never `stele.md` or `stele.json`, and opens no rule file. A `stele.md` that no longer parses lists the last valid rules, with a note. Exit 0 printed, 2 could not run. Not on the hook's path. | #116 |
 | D87 | **Amends D53, D78, D82; ADR-0013 and ADR-0014 (ADR-0016).** Every plugin request but `describe` carries `project_dir`: the project's root, absolute, as this machine writes paths. `read`, `fingerprint` and `check` keep `root`, its old name, with the same value; `validate` and `push` gain `project_dir` only. Protocol stays 1: plugins ignore fields they don't know. A sink thus also receives the project's local path, for its own use. | #118 |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:

@@ -58,6 +58,10 @@ Guideline enforcement for coding agents. Go, single binary.
     at least once), `stele check --push` (in CI one record of the run's
     counts, never the report), `share_briefs` reserved, and `stele status`.
     It amends ADR-0003 and ADR-0010, and D53. The spec carries it as D82–D85.
+15. `docs/adr/0015-stele-rules-for-other-tools.md` — `stele rules
+    [--format text|json]` prints the compiled rules (id, source, scope, body)
+    for other tools, read as the hook reads them: no process started, never
+    `stele.md` or `stele.json` written. The spec carries it as D86.
 16. `docs/adr/0016-project-dir-in-plugin-requests.md` — every plugin request
     but `describe` carries `project_dir`, the project's folder; `root` stays
     as its old name. It amends ADR-0013 and ADR-0014, and D53, D78 and D82.

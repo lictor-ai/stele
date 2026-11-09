@@ -2093,6 +2093,8 @@ stele stats        how the rules are doing, from the local log; writes nothing, 
                      [--since 30d|12h|2w|YYYY-MM-DD|all] [--format text|json]
 stele status       describe the install; writes nothing (D85)
                      [--format text|json] [--offline: start no plugin]
+stele rules        print the compiled rules, read as the hook reads them: no process; writes only stele's own files (D86)
+                     [--format text|json]
 stele push         send the log's new signed lines to every listed sink (D83)
 stele mcp          run the MCP server on stdio
 stele hook         read an agent's hook payload on stdin, decide
@@ -2110,13 +2112,13 @@ they could not run. The version is set at release with `-ldflags "-X
 main.version=..."`, else read from the build info, else `devel`; `init`
 stamps `devel` for any version that is not a release.
 
-Standard-library `flag` and a switch on `os.Args[1]`. Eight subcommands with a
+Standard-library `flag` and a switch on `os.Args[1]`. Eleven subcommands with a
 handful of flags does not justify a CLI framework.
 
 `compile`, `check`, `status` and `push` are the only commands that run external
-plugins. `mcp` and `hook` never do (D45). `compile`, `check` and `init` are the
-only ones that run the git source, through `cmd/stele/sources.go`; `hook` and
-`stats` never reach it (D71). `check` reads each git source at its pin and never
+plugins. `mcp`, `hook` and `rules` never do (D45, D86). `compile`, `check` and `init` are the
+only ones that run the git source, through `cmd/stele/sources.go`; `hook`,
+`stats` and `rules` never reach it (D71). `check` reads each git source at its pin and never
 moves it: a listed source with no matching pin is exit 1, a repository it cannot
 read is exit 2.
 
