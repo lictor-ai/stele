@@ -1,0 +1,1 @@
+2026-11-09T10:00:00Z	FATAL	Fatal error	run error: fs scan error: init error: DB error: failed to download vulnerability DB
