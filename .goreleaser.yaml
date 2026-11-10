@@ -6,7 +6,8 @@ version: 2
 project_name: stele
 
 builds:
-  - main: ./cmd/stele
+  - id: stele
+    main: ./cmd/stele
     binary: stele
     env:
       - CGO_ENABLED=0
@@ -17,9 +18,35 @@ builds:
     # The tag, so the hook stamp and the version warning see a release.
     ldflags:
       - -s -w -X main.version={{ .Tag }}
+  # The checker plugins that ship with stele (ADR-0019), on the same
+  # platforms, each in an archive of its own.
+  - id: stele-checker-opengrep
+    main: ./cmd/stele-checker-opengrep
+    binary: stele-checker-opengrep
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Tag }}
+  - id: stele-checker-trivy
+    main: ./cmd/stele-checker-trivy
+    binary: stele-checker-trivy
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Tag }}
 
 archives:
-  - formats: [tar.gz]
+  - id: stele
+    ids: [stele]
+    formats: [tar.gz]
     format_overrides:
       - goos: windows
         formats: [zip]
@@ -27,6 +54,24 @@ archives:
     files:
       - LICENSE
       - README.md
+  - id: stele-checker-opengrep
+    ids: [stele-checker-opengrep]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "stele-checker-opengrep_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+  - id: stele-checker-trivy
+    ids: [stele-checker-trivy]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "stele-checker-trivy_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
 
 checksum:
   name_template: checksums.txt
@@ -38,8 +83,11 @@ changelog:
 release:
   prerelease: auto
 
+# Homebrew and Scoop install stele only; the checker plugins are in the
+# release's own archives.
 homebrew_casks:
   - name: stele
+    ids: [stele]
     repository:
       owner: lictor-ai
       name: homebrew-tap
@@ -59,6 +107,7 @@ homebrew_casks:
 
 scoops:
   - name: stele
+    ids: [stele]
     repository:
       owner: lictor-ai
       name: scoop-bucket
