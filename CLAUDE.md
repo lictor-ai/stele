@@ -75,7 +75,13 @@ Guideline enforcement for coding agents. Go, single binary.
     status` note each top-level `stele.json` key stele doesn't know, never
     as an error; `stele publish` refuses an unknown key under `publish`.
     It amends ADR-0017. The spec carries it as D89.
-19. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+19. `docs/adr/0019-opengrep-and-trivy-checkers.md` — two checker plugins
+    ship with stele, `stele-checker-opengrep` (a rules file in the project,
+    optional ids) and `stele-checker-trivy` (scanners, optional severity),
+    released with it; they find the scanner on `PATH` outside the project
+    and send nothing, though Trivy downloads its own database. The spec
+    carries it as D90.
+20. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.

@@ -30,6 +30,8 @@ Two of these changed decisions. See §12.
 github.com/lictor-ai/stele
 
 cmd/stele/            main, subcommand dispatch, exit codes
+cmd/stele-checker-opengrep/  the Opengrep checker plugin, released with stele (ADR-0019)
+cmd/stele-checker-trivy/     the Trivy checker plugin, released with stele (ADR-0019)
 internal/source/      the Source slot: Rule, the Source interface
   stelemd/            the built-in stele.md source: read, hash, parse
   gitrepo/            the built-in git source: a shared stele.md at a pinned commit (D71) — pure, git behind an interface
@@ -50,6 +52,8 @@ internal/serve/       MCP wiring over the SDK
 internal/plugin/      registry of built-in and external plugins, protocol 1, sinks — pure, processes behind Runner (ADR-0013)
   plugintest/         a fake plugin for tests: the test binary under a plugin's name
 internal/pluginexec/  the one plugin.Runner: finds a plugin on PATH outside the project and runs it (D80)
+internal/extcheck/    the checker side of protocol 1, and the scanner on PATH, for the checker plugins only (ADR-0019)
+  extchecktest/       a fake scanner for tests: the test binary under the scanner's name
 internal/printable/   text from outside stele made one printable line — pure
 internal/status/      stele status: describe the install — pure, plugins behind plugin.Runner (D85)
 internal/push/        stele push: the log's signed lines to each sink, a sealed cursor per sink — pure (D82–D84)
@@ -966,6 +970,46 @@ early and clearly.
 The adapter between the protocol and the interfaces — `execSource` and
 `execChecker` — lives here and is unexported. To `compile` and `check`, an
 external source is indistinguishable from `stelemd`.
+
+### `internal/extcheck` and the checker plugins — ADR-0019
+
+`cmd/stele-checker-opengrep` and `cmd/stele-checker-trivy` are external
+checkers that ship with stele. stele knows them only as it knows any
+checker: by a `checkers` entry in `stele.json` and an executable on `PATH`.
+`cmd/stele` never imports them or `internal/extcheck`.
+
+`internal/extcheck` is what they share:
+
+- `Serve(ctx, version, Handler, stdin, stdout)` reads one request, answers
+  `describe` itself, hands `validate` and `check` to the `Handler`, and
+  writes one answer, `{"error": …}` for any failure: `[]`, never `null`,
+  for no problems or violations. `Request`, `Rule`, `Problem`,
+  `Violation` and `Skip` are the shapes `docs/plugin-protocol.md` gives.
+- `ParseList`, `Unquote` and `KnownKeys` read a rule's `meta`, which
+  arrives as stele.md wrote it.
+- `ProjectFile(dir, rel)` is a file in the project: relative, no `..`, a
+  regular file, inside the project once links are followed.
+- `Files` maps a path a scanner reports, absolute or relative, either
+  slash, any case on Windows, to the file stele sent; `Column` counts
+  characters to a byte offset.
+- `FindTool(name, dir, env...)` finds the scanner as `pluginexec.Find`
+  finds a plugin: `PATH` cut by `toolpath.PluginEnv`, only `.exe` and
+  `.com` on Windows, vetted by `toolpath.Vet`; `Tool.Run` runs it with
+  `os/exec`, no shell, by absolute path, in the plugin's working directory
+  when that is outside the project (else the temp directory), with stdout
+  capped at 256 MiB.
+
+It never prints or exits. `extchecktest` is the plugins' fake scanner: a
+test binary installed under `opengrep` or `trivy` that logs its arguments
+and prints recorded output from `testdata`.
+
+The Opengrep checker groups rules by rules file and runs `opengrep scan
+--json --quiet --config <file> <files…>` once per file, splitting long file
+lists; it matches `check_id` to `ids` by suffix and takes the column from
+the byte offset. The Trivy checker groups rules by scanners and severities
+and runs `trivy fs --format json --quiet --exit-code 0 --offline-scan
+--scanners … [--severity …] <project>` once per group, keeps the findings
+in the files sent, and places a vulnerable package by searching its file.
 
 ### `internal/check` — `stele check`
 
