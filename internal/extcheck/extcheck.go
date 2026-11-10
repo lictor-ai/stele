@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/lictor-ai/stele/internal/plugin"
+	"github.com/lictor-ai/stele/internal/safefile"
 )
 
 // Request is a request from stele, as docs/plugin-protocol.md describes it.
@@ -263,18 +264,32 @@ func ProjectFile(dir, rel string) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("%q is not a file", rel)
 	}
-	real, err := filepath.EvalSymlinks(p)
-	if err != nil {
-		return "", fmt.Errorf("%q: %v", rel, err)
+	// safefile.Resolve follows symlinks and Windows junctions, which
+	// filepath.EvalSymlinks does not: a project opened through a junction
+	// works, and a junction out of it is caught.
+	real, ok := safefile.Resolve(p)
+	if !ok {
+		return "", fmt.Errorf("%q: cannot tell where its links lead", rel)
 	}
-	top, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return "", fmt.Errorf("project_dir: %v", err)
+	top, ok := safefile.Resolve(dir)
+	if !ok {
+		return "", fmt.Errorf("project_dir: cannot tell where its links lead")
 	}
 	if !Within(real, top) {
 		return "", fmt.Errorf("%q leads to %s: %w", rel, real, ErrOutside)
 	}
 	return p, nil
+}
+
+// SamePath reports whether a and b, absolute, name the same file: as
+// spelled, without case on Windows, or as the same file on disk.
+func SamePath(a, b string) bool {
+	if Within(filepath.Clean(a), filepath.Clean(b)) && Within(filepath.Clean(b), filepath.Clean(a)) {
+		return true
+	}
+	ia, err1 := os.Stat(a)
+	ib, err2 := os.Stat(b)
+	return err1 == nil && err2 == nil && os.SameFile(ia, ib)
 }
 
 // Within reports whether p is root or below it. Paths compare without case
