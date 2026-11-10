@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -19,10 +20,12 @@ import (
 // blocking (ADR-0019).
 var keys = []string{"rules", "ids", "message"}
 
-// env turns off what Opengrep would send on its own: metrics and the check
-// for a newer version. Opengrep is a fork of Semgrep and reads Semgrep's
-// variables; one it doesn't read changes nothing.
-var env = []string{"SEMGREP_SEND_METRICS=off", "SEMGREP_ENABLE_VERSION_CHECK=0"}
+// flags go before the rules file on every run. --disable-version-check
+// keeps Opengrep from asking for a newer version: with a local rules file it
+// then fetches nothing (it has no metrics). --disable-nosem makes a
+// "# nosemgrep" comment in the code checked count for nothing: the code
+// under review can't switch off its own rule.
+var flags = []string{"scan", "--json", "--quiet", "--disable-version-check", "--disable-nosem"}
 
 // maxRulesFile caps the rules file validate reads to find its ids.
 const maxRulesFile = 4 << 20
@@ -164,7 +167,7 @@ func (checker) Check(ctx context.Context, req extcheck.Request) ([]extcheck.Viol
 		}
 		g.members = append(g.members, member{id: r.ID, s: s})
 	}
-	tool, err := extcheck.FindTool("opengrep", dir, env...)
+	tool, err := extcheck.FindTool("opengrep", dir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%v: install Opengrep (https://github.com/opengrep/opengrep) where PATH finds it", err)
 	}
@@ -175,7 +178,7 @@ func (checker) Check(ctx context.Context, req extcheck.Request) ([]extcheck.Viol
 	text := texts{}
 	for _, g := range groups {
 		for _, chunk := range chunks(req.Files, files) {
-			args := append([]string{"scan", "--json", "--quiet", "--config", g.rules}, chunk...)
+			args := append(append(append([]string{}, flags...), "--config", g.rules), chunk...)
 			out, code, stderr, err := tool.Run(ctx, args...)
 			if err != nil {
 				return nil, nil, err
@@ -193,7 +196,16 @@ func (checker) Check(ctx context.Context, req extcheck.Request) ([]extcheck.Viol
 				return nil, nil, fmt.Errorf("opengrep: %s", f[0])
 			}
 			for _, e := range res.Errors {
-				if e.Path == "" {
+				// A rule Opengrep didn't run (an IncompatibleRule, at level
+				// info, exit 0) fails the check when the rule counts, and so
+				// does an error about the rules file that names no rule:
+				// reporting the files clean would pass what was never
+				// checked. An error about a rule no member counts is left
+				// alone.
+				if e.RuleID != "" && g.counts(g.resolve(e.RuleID)) || e.RuleID == "" && e.Path != "" && extcheck.SamePath(e.Path, g.rules) {
+					return nil, nil, fmt.Errorf("opengrep did not run the rules in %s: %s", relTo(dir, g.rules), extcheck.OneLine(e.text()))
+				}
+				if e.Path == "" || e.RuleID != "" {
 					continue
 				}
 				f, ok := files.Lookup(e.Path)
@@ -217,17 +229,18 @@ func (checker) Check(ctx context.Context, req extcheck.Request) ([]extcheck.Viol
 					return nil, nil, fmt.Errorf("opengrep reported %s, which is not one of the files sent", r.Path)
 				}
 				line, col := text.position(files.Abs(f), r.Start.Line, r.Start.Col, r.Start.Offset)
+				id := g.resolve(r.CheckID)
 				for _, m := range g.members {
-					if len(m.s.ids) > 0 && matchID(r.CheckID, m.s.ids) == "" {
+					if !m.counts(id) {
 						continue
 					}
 					msg := m.s.message
 					if msg == "" {
-						id := matchID(r.CheckID, m.s.fileIDs)
-						if id == "" {
-							id = r.CheckID
+						shown := id
+						if shown == "" {
+							shown = r.CheckID
 						}
-						msg = id + ": " + extcheck.OneLine(r.Extra.Message)
+						msg = shown + ": " + extcheck.OneLine(r.Extra.Message)
 					}
 					vs = append(vs, extcheck.Violation{RuleID: m.id, File: f, Line: line, Column: col, Message: msg})
 				}
@@ -235,6 +248,39 @@ func (checker) Check(ctx context.Context, req extcheck.Request) ([]extcheck.Viol
 		}
 	}
 	return vs, skips, nil
+}
+
+// relTo is p relative to dir, with /, for a message; p when it can't be.
+func relTo(dir, p string) string {
+	if rel, err := filepath.Rel(dir, p); err == nil {
+		return filepath.ToSlash(rel)
+	}
+	return p
+}
+
+// resolve is the id in the rules file that checkID, as Opengrep reports
+// it, names: the longest that matches, so with both "a.b" and "b" in the
+// file, a finding of "a.b" is never one of "b". "" when none does.
+func (g *group) resolve(checkID string) string {
+	return matchID(checkID, g.members[0].s.fileIDs)
+}
+
+// counts reports whether a finding of the file's rule id counts for some
+// member of g.
+func (g *group) counts(id string) bool {
+	for _, m := range g.members {
+		if m.counts(id) {
+			return true
+		}
+	}
+	return false
+}
+
+// counts reports whether a finding of the file's rule id counts for m:
+// every id does when m has no ids. An id the file look didn't find ("")
+// counts, so a finding is never dropped for want of a match.
+func (m member) counts(id string) bool {
+	return len(m.s.ids) == 0 || id == "" || contains(m.s.ids, id)
 }
 
 // matchID returns the one of ids that checkID names, or "". Opengrep, as
@@ -305,6 +351,7 @@ type ogError struct {
 	Short   string          `json:"short_msg"` // a rule error has these instead of message
 	Long    string          `json:"long_msg"`
 	Path    string          `json:"path"`
+	RuleID  string          `json:"rule_id"` // the rule it is about, as check_id
 }
 
 // text is the error's type and the first line of its message.

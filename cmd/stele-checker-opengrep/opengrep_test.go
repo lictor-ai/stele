@@ -214,15 +214,11 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("opengrep ran %d times, want once for one rules file", len(cs))
 	}
 	args := cs[0].Args
-	wantArgs := []string{"scan", "--json", "--quiet", "--config", filepath.Join(dir, ".opengrep", "sql.yml"),
+	wantArgs := []string{"scan", "--json", "--quiet", "--disable-version-check", "--disable-nosem",
+		"--config", filepath.Join(dir, ".opengrep", "sql.yml"),
 		filepath.Join(dir, "app", "db.py"), filepath.Join(dir, "app", "label.py"), filepath.Join(dir, "app", "broken.py")}
 	if diff := cmp.Diff(wantArgs, args); diff != "" {
 		t.Errorf("opengrep's arguments (-want +got):\n%s", diff)
-	}
-	for _, kv := range env {
-		if !cs[0].HasEnv(kv) {
-			t.Errorf("opengrep ran without %s", kv)
-		}
 	}
 	if extcheck.Within(cs[0].Wd, dir) {
 		t.Errorf("opengrep ran in the project: %s", cs[0].Wd)
@@ -382,5 +378,93 @@ func TestChunks(t *testing.T) {
 	}
 	if n != len(rel) || len(got) < 2 {
 		t.Errorf("%d chunks holding %d files, want several holding %d", len(got), n, len(rel))
+	}
+}
+
+const evalRules = `rules:
+  - id: no-eval
+    min-version: 99.0.0
+    languages: [python]
+    severity: ERROR
+    message: no eval
+    pattern: eval(...)
+  - id: no-exec
+    languages: [python]
+    severity: ERROR
+    message: no exec
+    pattern: exec(...)
+`
+
+// evalProject is the project testdata/incompat.json and nosem.json were
+// recorded from (opengrep 1.33.1): no-eval needs an Opengrep it isn't, so
+// Opengrep skips it with an IncompatibleRule at level info, and exits 0.
+func evalProject(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	write(t, dir, ".opengrep/eval.yml", evalRules)
+	write(t, dir, "a.py", "eval(x)\nexec(y)  # nosemgrep\n")
+	return dir
+}
+
+func evalReq(dir string, rules ...any) map[string]any {
+	return map[string]any{"op": "check", "project_dir": dir, "files": []string{"a.py"}, "rules": rules}
+}
+
+// A rule Opengrep didn't run is never reported clean.
+func TestCheckRuleOpengrepSkipped(t *testing.T) {
+	for _, c := range []struct {
+		name, ids string
+		fails     bool
+	}{
+		{"its id", "[no-eval]", true},
+		{"every id", "", true},
+		{"another id", "[no-exec]", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := evalProject(t)
+			fake(t, dir, "incompat.json", 0, "")
+			meta := map[string]string{"rules": ".opengrep/eval.yml"}
+			if c.ids != "" {
+				meta["ids"] = c.ids
+			}
+			var a checked
+			err := serve(t, evalReq(dir, rule("r", meta)), &a)
+			want := "opengrep did not run the rules in .opengrep/eval.yml: IncompatibleRule: Incompatible rule C.Users.me.project..opengrep.no-eval:"
+			switch {
+			case c.fails && (err == nil || !strings.Contains(err.Error(), want)):
+				t.Errorf("check = %+v, %v; want an error with %q", a, err, want)
+			case !c.fails && (err != nil || len(a.Violations) != 0 || len(a.Skipped) != 0):
+				t.Errorf("check = %+v, %v; want nothing", a, err)
+			}
+		})
+	}
+}
+
+// With --disable-nosem, a # nosemgrep comment doesn't hide a finding.
+func TestCheckIgnoresNosem(t *testing.T) {
+	dir := evalProject(t)
+	log := fake(t, dir, "nosem.json", 0, "")
+	var a checked
+	if err := serve(t, evalReq(dir, rule("r", map[string]string{"rules": ".opengrep/eval.yml", "ids": "[no-exec]"})), &a); err != nil {
+		t.Fatal(err)
+	}
+	want := []extcheck.Violation{{RuleID: "r", File: "a.py", Line: 2, Column: 1, Message: "no-exec: no exec"}}
+	if diff := cmp.Diff(want, a.Violations); diff != "" {
+		t.Errorf("violations (-want +got):\n%s", diff)
+	}
+	if cs := extchecktest.Calls(t, log); len(cs) != 1 || !contains(cs[0].Args, "--disable-nosem") {
+		t.Errorf("opengrep ran without --disable-nosem: %+v", cs)
+	}
+}
+
+// A finding is resolved to the longest id in the file before ids is
+// checked: with "a.b" and "b" in the file, a finding of a.b is not one of b.
+func TestResolveBeforeIDs(t *testing.T) {
+	g := &group{members: []member{{id: "r", s: settings{fileIDs: []string{"a.b", "b"}, ids: []string{"b"}}}}}
+	if id := g.resolve("C.me.project.a.b"); id != "a.b" || g.counts(id) {
+		t.Errorf("a finding of a.b: resolved %q, counts %v; want a.b, false", id, g.counts(id))
+	}
+	if id := g.resolve("C.me.project.b"); id != "b" || !g.counts(id) {
+		t.Errorf("a finding of b: resolved %q, counts %v; want b, true", id, g.counts(id))
 	}
 }
