@@ -71,8 +71,13 @@ few command lines as fit (32,767 characters on Windows). Its column counts
 bytes; the checker takes the column from the byte offset Opengrep gives,
 counting characters, as the protocol says. An Opengrep error that names a
 file stele sent, such as a partial parse, makes that file skipped, so
-`stele check` reports it; any other error, an exit status other than 0 or
-1, or output that isn't Opengrep's JSON fails the check.
+`stele check` reports it. An error about a rule that counts, such as a rule
+Opengrep is too old to run (`IncompatibleRule`, at level `info`, with exit
+status 0), or about the rules file as a whole, fails the check: the files
+were never checked against it. So does any other error, an exit status
+other than 0 or 1, or output that isn't Opengrep's JSON. Opengrep runs with
+`--disable-nosem`: a `# nosemgrep` comment in the code checked doesn't
+switch off the rule, since that code is what is under review.
 
 **Trivy's keys.**
 
@@ -95,7 +100,10 @@ No other Trivy flag can be set: a rule says what to look for, not how
 Trivy runs. Trivy runs `trivy fs` on the whole project, once per set of
 scanners and severities, and only findings in the files stele sent count:
 `stele check` without `--all` sends the changed files, so an unchanged
-lockfile isn't reported until it changes or `--all` runs.
+lockfile isn't reported until it changes or `--all` runs. Trivy's own
+allow rules still apply: its secret scanner skips some paths, such as
+test folders, and a secret there isn't reported even when the stele rule's
+scope covers the file.
 
 **Where a finding with no line goes.** Trivy gives a secret and most
 misconfigurations a line, and a vulnerable package none. The package goes on
@@ -106,14 +114,16 @@ Dockerfile with no `USER`, goes on line 1.
 
 **The network.** stele sends nothing, as before (D53). The plugins open no
 connection and import no network package. Opengrep is given only a local
-rules file, so it fetches no rules; it has no metrics flag, and the plugin
-sets Semgrep's `SEMGREP_SEND_METRICS=off` and
-`SEMGREP_ENABLE_VERSION_CHECK=0`, which change nothing where Opengrep
-doesn't read them. Trivy runs with `--offline-scan`, so it sends nothing to
-identify a dependency, and with `TRIVY_SKIP_VERSION_CHECK` and
-`TRIVY_DISABLE_TELEMETRY` set; but it downloads its own vulnerability
-database, and for `misconfig` its checks, when its copy is missing or out
-of date. That is Trivy's network, as fetching is git's for the git source
+rules file, so it fetches no rules, and runs with `--disable-version-check`,
+so it doesn't ask for a newer version; it has no metrics. Trivy runs with
+`--offline-scan`, so it sends nothing to identify a dependency, and with
+`TRIVY_SKIP_VERSION_CHECK` and `TRIVY_DISABLE_TELEMETRY` set; but it
+downloads its own vulnerability database, for `misconfig` its checks, and
+when it scans a Java archive (`.jar`, `.war`) its Java database, each when
+its copy is missing or out of date. The checker doesn't pass
+`--skip-java-db-update`: a first scan of a jar would then fail. A user who
+wants no download sets `TRIVY_SKIP_DB_UPDATE` and
+`TRIVY_SKIP_JAVA_DB_UPDATE`, which reach Trivy. That is Trivy's network, as fetching is git's for the git source
 (D71): it brings data in and sends nothing of the project.
 
 **Running a scanner** follows D43 and D80, as for a plugin: the scanner is

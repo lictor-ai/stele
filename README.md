@@ -595,7 +595,7 @@ invalid rule 6aaa1b1f-381b-4033-8c49-5fe5aa04d707 "No SQL built from strings: us
 checked 1 file: no violations
 ```
 
-A file Opengrep can't fully parse is listed as `skipped`, with Opengrep's reason. Without `opengrep` on your `PATH`, `stele check` exits 2:
+A `# nosemgrep` comment doesn't silence the rule: the code being checked can't switch off its own check. A rule Opengrep can't run, such as one that needs a newer Opengrep, makes `stele check` exit 2 rather than pass. A file Opengrep can't fully parse is listed as `skipped`, with Opengrep's reason. Without `opengrep` on your `PATH`, `stele check` exits 2:
 
 ```
 $ stele check app/users.py
@@ -1026,7 +1026,9 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 ### Opengrep and Trivy checkers
 
-**Trivy uses the network.** It downloads its vulnerability database, and for `misconfig` its checks, the first time and when its copy is out of date; offline, with no copy, `stele check` exits 2. That is Trivy's own download: the checker runs it with `--offline-scan`, so Trivy sends nothing to identify a dependency, and the checker sends nothing itself. Set `TRIVY_SKIP_DB_UPDATE=true` to use the copy you have. Opengrep reads only the rules file in the project and fetches nothing.
+**Trivy uses the network.** It downloads its vulnerability database, for `misconfig` its checks, and when it scans a `.jar` or `.war` its Java database, the first time and when its copy is out of date; offline, with no copy, `stele check` exits 2. That is Trivy's own download: the checker runs it with `--offline-scan`, so Trivy sends nothing to identify a dependency, and the checker sends nothing itself. Set `TRIVY_SKIP_DB_UPDATE=true` and `TRIVY_SKIP_JAVA_DB_UPDATE=true` to use the copies you have. Opengrep reads only the rules file in the project, runs with `--disable-version-check`, and fetches nothing.
+
+**Trivy skips secrets in some places on its own.** Its built-in allow rules leave out paths such as test folders, so a secret in a test file isn't reported, even when the rule's `scope` covers it.
 
 **Trivy scans the whole project every time**, however few files `stele check` sends, and reports only findings in those files. Without `--all`, a vulnerable dependency in a lockfile that didn't change isn't reported.
 

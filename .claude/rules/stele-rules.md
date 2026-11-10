@@ -83,8 +83,10 @@ stele.json and found on PATH ever run, never one inside the repository
 (D43). os/exec belongs to stele check (cmd/stele/check.go), stele init's
 agent version probe (cmd/stele/agentversion.go), stele publish
 (internal/publish), internal/gitexec, which runs git for stele publish
-and the git source (ADR-0011), and internal/pluginexec, which runs
-external plugins (ADR-0013). Only cmd/stele/sources.go hands gitexec to the
+and the git source (ADR-0011), internal/pluginexec, which runs
+external plugins (ADR-0013), and internal/extcheck, which runs opengrep
+and trivy for the checker plugins cmd/stele-checker-* and is imported by
+nothing else (ADR-0019). Only cmd/stele/sources.go hands gitexec to the
 git source and pluginexec to internal/plugin, and only runCompile,
 runCheck, init, runStatus and runPush call it: a file the hook reaches,
 compile.go included, may hold such a caller but imports neither os/exec,
@@ -103,5 +105,7 @@ stele hook, and what runHook calls.
 scope: internal/**/*.go, !**/*_test.go
 Packages under internal/ never exit the process or print. They return errors
 and values; cmd/stele decides exit codes (0, 1, 2, spec §8) and what goes to
-stdout and stderr. In the hook, an exit or a stray line on stdout would break
+stdout and stderr, and each checker plugin's main (cmd/stele-checker-*)
+decides its own, writing its one answer through the writer it hands
+internal/extcheck. In the hook, an exit or a stray line on stdout would break
 the JSON answer to Claude Code.
