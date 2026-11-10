@@ -461,10 +461,55 @@ func TestCheckIgnoresNosem(t *testing.T) {
 // checked: with "a.b" and "b" in the file, a finding of a.b is not one of b.
 func TestResolveBeforeIDs(t *testing.T) {
 	g := &group{members: []member{{id: "r", s: settings{fileIDs: []string{"a.b", "b"}, ids: []string{"b"}}}}}
-	if id := g.resolve("C.me.project.a.b"); id != "a.b" || g.counts(id) {
-		t.Errorf("a finding of a.b: resolved %q, counts %v; want a.b, false", id, g.counts(id))
+	for checkID, want := range map[string]bool{"C.me.project.a.b": false, "C.me.project.b": true} {
+		if got := g.counts(checkID); got != want {
+			t.Errorf("a finding of %s counts %v, want %v", checkID, got, want)
+		}
 	}
-	if id := g.resolve("C.me.project.b"); id != "b" || !g.counts(id) {
-		t.Errorf("a finding of b: resolved %q, counts %v; want b, true", id, g.counts(id))
+}
+
+// A rule the look at the file misses, such as one written "- {id: x}",
+// still goes through ids: a finding of it counts only when ids names it.
+func TestIDsFilterAnIDTheFileLookMissed(t *testing.T) {
+	g := &group{members: []member{
+		{id: "eval", s: settings{fileIDs: []string{"no-eval"}, ids: []string{"no-eval"}}},
+		{id: "exec", s: settings{fileIDs: []string{"no-eval"}, ids: []string{"no-exec"}}},
+		{id: "all", s: settings{fileIDs: []string{"no-eval"}}},
+	}}
+	checkID := "C.me.project..opengrep.no-exec"
+	id := g.resolve(checkID)
+	var got []string
+	for _, m := range g.members {
+		if m.counts(checkID, id) {
+			got = append(got, m.id)
+		}
+	}
+	if diff := cmp.Diff([]string{"exec", "all"}, got); diff != "" {
+		t.Errorf("members a finding of no-exec counts for (-want +got):\n%s", diff)
+	}
+}
+
+// A Timeout on one file names the rule and that file: the file is skipped,
+// the other files' findings stay, and the check doesn't fail.
+// testdata/timeout.json was recorded from opengrep 1.33.1 with --timeout 1
+// on a 1.5 MB big.py; the plugin itself doesn't pass --timeout.
+func TestCheckTimeoutSkipsTheFile(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, ".opengrep/eval.yml", "rules:\n  - id: no-eval\n    languages: [python]\n    severity: ERROR\n    message: no eval\n    pattern: eval(...)\n")
+	write(t, dir, "a.py", "eval(x)\n")
+	write(t, dir, "big.py", "eval(y)\n")
+	fake(t, dir, "timeout.json", 0, "")
+	req := map[string]any{"op": "check", "project_dir": dir, "files": []string{"a.py", "big.py"},
+		"rules": []any{rule("r", map[string]string{"rules": ".opengrep/eval.yml", "ids": "[no-eval]"})}}
+	var a checked
+	if err := serve(t, req, &a); err != nil {
+		t.Fatalf("check: %v; want big.py skipped, not an error", err)
+	}
+	want := []extcheck.Violation{{RuleID: "r", File: "a.py", Line: 1, Column: 1, Message: "no-eval: no eval"}}
+	if diff := cmp.Diff(want, a.Violations); diff != "" {
+		t.Errorf("violations (-want +got):\n%s", diff)
+	}
+	if len(a.Skipped) != 1 || a.Skipped[0].File != "big.py" || !strings.HasPrefix(a.Skipped[0].Reason, "opengrep: Timeout: Timeout when running") {
+		t.Errorf("skipped = %+v, want big.py", a.Skipped)
 	}
 }

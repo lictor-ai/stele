@@ -196,16 +196,23 @@ func (checker) Check(ctx context.Context, req extcheck.Request) ([]extcheck.Viol
 				return nil, nil, fmt.Errorf("opengrep: %s", f[0])
 			}
 			for _, e := range res.Errors {
-				// A rule Opengrep didn't run (an IncompatibleRule, at level
-				// info, exit 0) fails the check when the rule counts, and so
-				// does an error about the rules file that names no rule:
-				// reporting the files clean would pass what was never
-				// checked. An error about a rule no member counts is left
-				// alone.
-				if e.RuleID != "" && g.counts(g.resolve(e.RuleID)) || e.RuleID == "" && e.Path != "" && extcheck.SamePath(e.Path, g.rules) {
+				// A rule Opengrep didn't run at all (an IncompatibleRule, at
+				// level info, exit 0, about the rules file) fails the check
+				// when the rule counts, and so does an error about the rules
+				// file that names no rule: reporting the files clean would
+				// pass what was never checked. An error about a rule and one
+				// file sent, such as a Timeout on a big file, skips that
+				// file, below. An error about a rule no member counts is
+				// left alone.
+				sent := false
+				if e.Path != "" {
+					_, sent = files.Lookup(e.Path)
+				}
+				rulesFile := e.Path != "" && extcheck.SamePath(e.Path, g.rules)
+				if e.RuleID != "" && g.counts(e.RuleID) && (!sent || rulesFile) || e.RuleID == "" && rulesFile {
 					return nil, nil, fmt.Errorf("opengrep did not run the rules in %s: %s", relTo(dir, g.rules), extcheck.OneLine(e.text()))
 				}
-				if e.Path == "" || e.RuleID != "" {
+				if e.Path == "" {
 					continue
 				}
 				f, ok := files.Lookup(e.Path)
@@ -231,7 +238,7 @@ func (checker) Check(ctx context.Context, req extcheck.Request) ([]extcheck.Viol
 				line, col := text.position(files.Abs(f), r.Start.Line, r.Start.Col, r.Start.Offset)
 				id := g.resolve(r.CheckID)
 				for _, m := range g.members {
-					if !m.counts(id) {
+					if !m.counts(r.CheckID, id) {
 						continue
 					}
 					msg := m.s.message
@@ -265,22 +272,30 @@ func (g *group) resolve(checkID string) string {
 	return matchID(checkID, g.members[0].s.fileIDs)
 }
 
-// counts reports whether a finding of the file's rule id counts for some
-// member of g.
-func (g *group) counts(id string) bool {
+// counts reports whether a finding or an error of checkID, as Opengrep
+// reports it, counts for some member of g.
+func (g *group) counts(checkID string) bool {
+	id := g.resolve(checkID)
 	for _, m := range g.members {
-		if m.counts(id) {
+		if m.counts(checkID, id) {
 			return true
 		}
 	}
 	return false
 }
 
-// counts reports whether a finding of the file's rule id counts for m:
-// every id does when m has no ids. An id the file look didn't find ("")
-// counts, so a finding is never dropped for want of a match.
-func (m member) counts(id string) bool {
-	return len(m.s.ids) == 0 || id == "" || contains(m.s.ids, id)
+// counts reports whether a finding of checkID, resolved to the file's rule
+// id, counts for m: every one does when m has no ids. When the look at the
+// file found no id for it (a rule written as "- {id: x, …}", say), m's own
+// ids are matched against checkID instead, so ids still filters.
+func (m member) counts(checkID, id string) bool {
+	switch {
+	case len(m.s.ids) == 0:
+		return true
+	case id != "":
+		return contains(m.s.ids, id)
+	}
+	return matchID(checkID, m.s.ids) != ""
 }
 
 // matchID returns the one of ids that checkID names, or "". Opengrep, as
