@@ -247,7 +247,7 @@ Never put credentials in code, config or tests. Read them from the environment.
 | Key | Meaning |
 |---|---|
 | `scope` | Path globs: `["a", "b"]` or one bare value. No scope means every file. |
-| `check` | `regex`, the only checker. Any other value is an invalid rule. |
+| `check` | `regex`, the built-in checker, or a [checker plugin](#checker-plugins) `stele.json` lists, such as [`opengrep`](#opengrep-checker) or [`trivy`](#trivy-checker). Any other value is an invalid rule. |
 | `pattern` | A Go (RE2) regular expression, for `check: regex`, taken as written: quotes are part of it, so `pattern: "net/http"` matches `"net/http"` with its quotes, as in an import, not a bare mention of net/http. |
 | `message` | What a violation says. Default: the start of the rule. Taken as written, quotes included. |
 | `blocking` | `true` (the default with `check`) or `false`. |
@@ -534,6 +534,134 @@ checked 1 file: 1 error
 The keys are those of a source plugin: `name`, `config` and `timeout`, where `timeout` is how long one check may take, 5 minutes by default. stele first asks the checker whether each rule's settings are right; a rule it rejects is invalid, as one `regex` can't compile is. A rule that names a checker `stele.json` doesn't list is invalid too. Every checker listed must be installed, even one no rule names yet.
 
 A checker plugin runs only in `stele check`, never after a write: the hook and `stele compile` know it by name, and the agent learns of its violations from CI.
+
+Two checker plugins come with stele: Opengrep and Trivy.
+
+### Opengrep checker
+
+`stele-checker-opengrep` checks code with [Opengrep](https://github.com/opengrep/opengrep) rules you keep in the project.
+
+**Install** Opengrep, so `opengrep` (`opengrep.exe` on Windows) is on your `PATH`. Then install the plugin: download `stele-checker-opengrep_<version>_<os>_<arch>` from the [release](https://github.com/lictor-ai/stele/releases) and put the binary on your `PATH`, or run `go install github.com/lictor-ai/stele/cmd/stele-checker-opengrep@latest`.
+
+Put the Opengrep rules in a file in the project, here `.opengrep/sql.yml`:
+
+```yaml
+rules:
+  - id: python-sqli
+    languages: [python]
+    severity: ERROR
+    message: SQL built from a string. Pass the values as parameters.
+    pattern: $DB.execute("..." + $X + "...")
+```
+
+Name it in a rule:
+
+```markdown
+scope: ["**/*.py"]
+check: opengrep
+rules: .opengrep/sql.yml
+ids: [python-sqli]
+
+No SQL built from strings: use parameterised queries.
+```
+
+```json
+{
+  "checkers": [
+    { "name": "opengrep" }
+  ]
+}
+```
+
+```
+$ stele check app/users.py
+app/users.py:2:12: error 6aaa1b1f-381b-4033-8c49-5fe5aa04d707 "No SQL built from strings: use parameterised queries.": python-sqli: SQL built from a string. Pass the values as parameters.
+1 rule valid
+checked 1 file: 1 error
+```
+
+| Key | Effect |
+|---|---|
+| `rules` | The Opengrep rules file, relative to the project's root. Required. It must stay inside the project: no absolute path, no `..`, no link that leads out. No registry ruleset and no URL: Opengrep reads only this file. |
+| `ids` | The Opengrep rule ids that count, `[a, b]` or one id. Default: every rule in the file. Each must be in the file. |
+| `message` | What a violation says. Default: the Opengrep rule's id and message. |
+
+A rule with a wrong key, a missing file or an id the file doesn't have is invalid:
+
+```
+$ stele check app/users.py
+invalid rule 6aaa1b1f-381b-4033-8c49-5fe5aa04d707 "No SQL built from strings: use parameterised queries." (stelemd rule 1): ids: "python-sqlinjection" is not the id of a rule in .opengrep/sql.yml
+1 problem in the rules
+checked 1 file: no violations
+```
+
+A `# nosemgrep` comment doesn't silence the rule: the code being checked can't switch off its own check. A rule Opengrep can't run, such as one that needs a newer Opengrep, makes `stele check` exit 2 rather than pass. A file Opengrep can't fully parse is listed as `skipped`, with Opengrep's reason. Without `opengrep` on your `PATH`, `stele check` exits 2:
+
+```
+$ stele check app/users.py
+stele check: stele-checker-opengrep check: opengrep: not found on PATH (entries inside the project are not searched): install Opengrep (https://github.com/opengrep/opengrep) where PATH finds it
+```
+
+### Trivy checker
+
+`stele-checker-trivy` runs [Trivy](https://trivy.dev) for vulnerable dependencies, secrets and misconfigured infrastructure code (Dockerfiles, Terraform, Kubernetes files and the like).
+
+**Install** Trivy, so `trivy` (`trivy.exe` on Windows) is on your `PATH`. Then install the plugin as for Opengrep: `stele-checker-trivy_<version>_<os>_<arch>` from the release, or `go install github.com/lictor-ai/stele/cmd/stele-checker-trivy@latest`.
+
+```markdown
+scope: ["requirements.txt", "**/package-lock.json", "**/go.mod"]
+check: trivy
+scanners: [vuln]
+severity: [HIGH, CRITICAL]
+
+No dependency with a known high or critical vulnerability.
+
+---
+
+scope: ["**/Dockerfile"]
+check: trivy
+scanners: [misconfig]
+severity: [HIGH, CRITICAL]
+
+Containers don't run as root.
+```
+
+```json
+{
+  "checkers": [
+    { "name": "trivy" }
+  ]
+}
+```
+
+```
+$ stele check requirements.txt Dockerfile
+Dockerfile:1:1: error fcb87bee-5c7e-4832-a4bd-0a5b56d82aae "Containers don't run as root.": DS-0002 (HIGH): Image user should not be 'root': Specify at least 1 USER command in Dockerfile with non-root user as argument
+requirements.txt:1:1: error 78dc04e5-d8ee-4ebc-8946-d5794086e94a "No dependency with a known high or critical vulnerability.": CVE-2018-1000656 (HIGH) in flask 0.12, fixed in 0.12.3: python-flask: Denial of Service via crafted JSON file
+requirements.txt:1:1: error 78dc04e5-d8ee-4ebc-8946-d5794086e94a "No dependency with a known high or critical vulnerability.": CVE-2019-1010083 (HIGH) in flask 0.12, fixed in 1.0: python-flask: unexpected memory usage can lead to denial of service via crafted encoded JSON data
+requirements.txt:1:1: error 78dc04e5-d8ee-4ebc-8946-d5794086e94a "No dependency with a known high or critical vulnerability.": CVE-2023-30861 (HIGH) in flask 0.12, fixed in 2.3.2, 2.2.5: flask: Possible disclosure of permanent session cookie due to missing Vary: Cookie header
+2 rules valid
+checked 2 files: 4 errors
+```
+
+| Key | Effect |
+|---|---|
+| `scanners` | What Trivy looks for: `vuln`, `secret`, `misconfig`, one or more. Required. |
+| `severity` | The severities that count: `UNKNOWN`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`. Default: all. |
+| `message` | What a violation says. Default: Trivy's id, severity and title. |
+
+Trivy gives no line for a vulnerable package: the violation goes on the first line of its file that names the package (with its version, if one does), else on line 1. A misconfiguration with no line, such as a Dockerfile with no `USER`, is on line 1.
+
+A wrong key or value makes the rule invalid, here `scanners: [misconfig, license]`:
+
+```
+$ stele check Dockerfile
+invalid rule fcb87bee-5c7e-4832-a4bd-0a5b56d82aae "Containers don't run as root." (stelemd rule 2): scanners: "license" is not one of vuln, secret, misconfig
+1 problem in the rules
+checked 1 file: no violations
+```
+
+Both checkers find `opengrep` and `trivy` as stele finds a plugin: only on `PATH` outside the project, run with no shell, outside the project. A scanner that is missing, fails or writes output the checker can't read stops `stele check` with exit 2, never "no violations".
 
 ### Every plugin
 
@@ -895,6 +1023,22 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 **A checker plugin never runs after a write.** Its rules are shown to the agent like any rule, but only `stele check` checks them, so the agent hears of their violations from CI, not right after it writes.
 
 **`stele status` runs plugins.** It asks each listed plugin its version and each plugin source whether it changed, so a plugin runs as it would at `stele compile`. `stele status --offline` runs none.
+
+### Opengrep and Trivy checkers
+
+**Trivy uses the network.** It downloads its vulnerability database, for `misconfig` its checks, and when it scans a `.jar` or `.war` its Java database, the first time and when its copy is out of date; offline, with no copy, `stele check` exits 2. That is Trivy's own download: the checker runs it with `--offline-scan`, so Trivy sends nothing to identify a dependency, and the checker sends nothing itself. Set `TRIVY_SKIP_DB_UPDATE=true` and `TRIVY_SKIP_JAVA_DB_UPDATE=true` to use the copies you have. Opengrep reads only the rules file in the project, runs with `--disable-version-check`, and fetches nothing.
+
+**Trivy skips secrets in some places on its own.** Its built-in allow rules leave out paths such as test folders, so a secret in a test file isn't reported, even when the rule's `scope` covers it.
+
+**Trivy scans the whole project every time**, however few files `stele check` sends, and reports only findings in those files. Without `--all`, a vulnerable dependency in a lockfile that didn't change isn't reported.
+
+**The project's `trivy.yaml` and `.trivyignore` aren't read.** Trivy runs outside the project, so it doesn't see them.
+
+**A vulnerable package's line is a guess.** It is the first line of its file that names the package; a package named inside another's name, such as `lodash` in `lodash.merge`, can land on the wrong line.
+
+**The `ids` check reads the rules file, not Opengrep's meaning of it.** An `id:` anywhere in the file counts, even one in a rule's metadata.
+
+**A file Opengrep parses only in part is reported as skipped**, though Opengrep checked the part it could parse.
 
 ### Projects
 

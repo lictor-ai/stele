@@ -1,0 +1,2 @@
+Opengrep 1.33.1
+Scanning 3 files
