@@ -123,6 +123,8 @@ scoop install stele
 
 Or download the archive for your system from [Releases](https://github.com/lictor-ai/stele/releases) (`checksums.txt` lists their SHA-256) and put `stele` on your `PATH`. The binaries are not signed.
 
+The two checker plugins, for [Opengrep](#opengrep-checker) and [Trivy](#trivy-checker), are packages of their own.
+
 With Go 1.27 or later:
 
 ```sh
@@ -541,7 +543,19 @@ Two checker plugins come with stele: Opengrep and Trivy.
 
 `stele-checker-opengrep` checks code with [Opengrep](https://github.com/opengrep/opengrep) rules you keep in the project.
 
-**Install** Opengrep, so `opengrep` (`opengrep.exe` on Windows) is on your `PATH`. Then install the plugin: download `stele-checker-opengrep_<version>_<os>_<arch>` from the [release](https://github.com/lictor-ai/stele/releases) and put the binary on your `PATH`, or run `go install github.com/lictor-ai/stele/cmd/stele-checker-opengrep@latest`.
+**Install** Opengrep, so `opengrep` (`opengrep.exe` on Windows) is on your `PATH`. The plugin doesn't install it. Then install the plugin, with Homebrew:
+
+```sh
+brew install lictor-ai/tap/stele-checker-opengrep
+```
+
+Or with Scoop, once the `lictor-ai` bucket is added as for stele:
+
+```sh
+scoop install stele-checker-opengrep
+```
+
+Or download `stele-checker-opengrep_<version>_<os>_<arch>` from the [release](https://github.com/lictor-ai/stele/releases) and put the binary on your `PATH`, or run `go install github.com/lictor-ai/stele/cmd/stele-checker-opengrep@latest`.
 
 Put the Opengrep rules in a file in the project, here `.opengrep/sql.yml`:
 
@@ -606,7 +620,7 @@ stele check: stele-checker-opengrep check: opengrep: not found on PATH (entries 
 
 `stele-checker-trivy` runs [Trivy](https://trivy.dev) for vulnerable dependencies, secrets and misconfigured infrastructure code (Dockerfiles, Terraform, Kubernetes files and the like).
 
-**Install** Trivy, so `trivy` (`trivy.exe` on Windows) is on your `PATH`. Then install the plugin as for Opengrep: `stele-checker-trivy_<version>_<os>_<arch>` from the release, or `go install github.com/lictor-ai/stele/cmd/stele-checker-trivy@latest`.
+**Install** Trivy, so `trivy` (`trivy.exe` on Windows) is on your `PATH`. The plugin doesn't install it. Then install the plugin as for Opengrep: `brew install lictor-ai/tap/stele-checker-trivy`, `scoop install stele-checker-trivy`, `stele-checker-trivy_<version>_<os>_<arch>` from the release, or `go install github.com/lictor-ai/stele/cmd/stele-checker-trivy@latest`.
 
 ```markdown
 scope: ["requirements.txt", "**/package-lock.json", "**/go.mod"]
