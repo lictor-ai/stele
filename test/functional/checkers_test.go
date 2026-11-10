@@ -272,11 +272,18 @@ func TestCheckerTrivyReal(t *testing.T) {
 	p := trivyProject(t)
 	p.write("stele.md", strings.Replace(trivyMD, "scanners: [vuln, secret]", "scanners: [vuln]", 1))
 	p.env = append(p.env, realPath(t, dir, "trivy"))
-	// Trivy keeps its database in the user's cache: keep the real one, so
-	// the test needs no download where Trivy has run before.
-	if c, err := os.UserCacheDir(); err == nil {
-		p.env = append(p.env, "TRIVY_CACHE_DIR="+filepath.Join(c, "trivy"))
+	// Trivy keeps its database in the user's cache. The test uses the copy
+	// already there and never downloads or updates one: with no copy, it
+	// skips, since it must not reach the network.
+	c, err := os.UserCacheDir()
+	if err != nil {
+		t.Skipf("no user cache directory: %v", err)
 	}
+	cache := filepath.Join(c, "trivy")
+	if _, err := os.Stat(filepath.Join(cache, "db", "trivy.db")); err != nil {
+		t.Skipf("no Trivy database in %s: run trivy once to download it", cache)
+	}
+	p.env = append(p.env, "TRIVY_CACHE_DIR="+cache, "TRIVY_SKIP_DB_UPDATE=true", "TRIVY_SKIP_JAVA_DB_UPDATE=true")
 	p.compile()
 	p.commit()
 	out := p.mustStele(1, "check", "--all")

@@ -47,6 +47,9 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	writeMeasurements()
 	os.RemoveAll(dir)
+	if checkersDir != "" {
+		os.RemoveAll(checkersDir)
+	}
 	os.Exit(code)
 }
 
