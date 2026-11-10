@@ -98,12 +98,15 @@ homebrew_casks:
     description: Guideline enforcement for coding agents
     license: Apache-2.0
     skip_upload: auto
-    # The binary is not signed: without this, macOS refuses to run it.
+    # The binary is not signed: without this, macOS refuses to run it. The
+    # step may fail, as for a file with no quarantine attribute
+    # (--no-quarantine), without failing the install. The plugin casks below
+    # do the same.
     hooks:
       post:
         install_steps: |
           on_macos do
-            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/{{ .ProjectName }}"]
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/{{ .ProjectName }}"], must_succeed: false
           end
   - name: stele-checker-opengrep
     ids: [stele-checker-opengrep]
@@ -120,7 +123,7 @@ homebrew_casks:
       post:
         install_steps: |
           on_macos do
-            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/stele-checker-opengrep"]
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/stele-checker-opengrep"], must_succeed: false
           end
   - name: stele-checker-trivy
     ids: [stele-checker-trivy]
@@ -137,7 +140,7 @@ homebrew_casks:
       post:
         install_steps: |
           on_macos do
-            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/stele-checker-trivy"]
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/stele-checker-trivy"], must_succeed: false
           end
 
 scoops:

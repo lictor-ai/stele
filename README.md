@@ -123,8 +123,6 @@ scoop install stele
 
 Or download the archive for your system from [Releases](https://github.com/lictor-ai/stele/releases) (`checksums.txt` lists their SHA-256) and put `stele` on your `PATH`. The binaries are not signed.
 
-The two checker plugins, for [Opengrep](#opengrep-checker) and [Trivy](#trivy-checker), are packages of their own.
-
 With Go 1.27 or later:
 
 ```sh
@@ -132,6 +130,8 @@ go install github.com/lictor-ai/stele/cmd/stele@latest
 ```
 
 Or, from a clone: `go install ./cmd/stele`.
+
+The [Opengrep](#opengrep-checker) and [Trivy](#trivy-checker) checker plugins are installed on their own, with Homebrew, Scoop, a release archive or `go install`.
 
 The hook runs the bare command `stele`, so it must be on the `PATH` that Claude Code or Codex sees: for `go install`, that is `$(go env GOPATH)/bin`.
 
@@ -549,7 +549,7 @@ Two checker plugins come with stele: Opengrep and Trivy.
 brew install lictor-ai/tap/stele-checker-opengrep
 ```
 
-Or with Scoop, once the `lictor-ai` bucket is added as for stele:
+Or with Scoop, once the `lictor-ai` bucket is added [as for stele](#install):
 
 ```sh
 scoop install stele-checker-opengrep
