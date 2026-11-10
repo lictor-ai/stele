@@ -513,3 +513,32 @@ func TestCheckTimeoutSkipsTheFile(t *testing.T) {
 		t.Errorf("skipped = %+v, want big.py", a.Skipped)
 	}
 }
+
+// A Timeout on big.py for a rule no stele rule counts says nothing of
+// no-eval, which ran on big.py in full: big.py isn't skipped, and its
+// no-eval finding stays. testdata/timeout_other.json is timeout.json with
+// the Timeout's rule made "slow" and a no-eval finding in big.py added by
+// hand.
+func TestCheckTimeoutOfAnUncountedRule(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, ".opengrep/eval.yml", "rules:\n  - id: no-eval\n    languages: [python]\n    severity: ERROR\n    message: no eval\n    pattern: eval(...)\n  - id: slow\n    languages: [python]\n    severity: INFO\n    message: slow\n    pattern: $F(...)\n")
+	write(t, dir, "a.py", "eval(x)\n")
+	write(t, dir, "big.py", "eval(y)\n")
+	fake(t, dir, "timeout_other.json", 0, "")
+	req := map[string]any{"op": "check", "project_dir": dir, "files": []string{"a.py", "big.py"},
+		"rules": []any{rule("r", map[string]string{"rules": ".opengrep/eval.yml", "ids": "[no-eval]"})}}
+	var a checked
+	if err := serve(t, req, &a); err != nil {
+		t.Fatal(err)
+	}
+	want := []extcheck.Violation{
+		{RuleID: "r", File: "a.py", Line: 1, Column: 1, Message: "no-eval: no eval"},
+		{RuleID: "r", File: "big.py", Line: 1, Column: 1, Message: "no-eval: no eval"},
+	}
+	if diff := cmp.Diff(want, a.Violations); diff != "" {
+		t.Errorf("violations (-want +got):\n%s", diff)
+	}
+	if len(a.Skipped) != 0 {
+		t.Errorf("skipped = %+v, want none", a.Skipped)
+	}
+}

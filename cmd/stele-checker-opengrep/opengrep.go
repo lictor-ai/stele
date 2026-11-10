@@ -212,6 +212,11 @@ func (checker) Check(ctx context.Context, req extcheck.Request) ([]extcheck.Viol
 				if e.RuleID != "" && g.counts(e.RuleID) && (!sent || rulesFile) || e.RuleID == "" && rulesFile {
 					return nil, nil, fmt.Errorf("opengrep did not run the rules in %s: %s", relTo(dir, g.rules), extcheck.OneLine(e.text()))
 				}
+				// An error about a rule no member counts says nothing of the
+				// rules that do: the file it names was checked by them.
+				if e.RuleID != "" && !g.counts(e.RuleID) {
+					continue
+				}
 				if e.Path == "" {
 					continue
 				}
