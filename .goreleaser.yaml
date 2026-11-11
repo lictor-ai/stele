@@ -83,8 +83,9 @@ changelog:
 release:
   prerelease: auto
 
-# Homebrew and Scoop install stele only; the checker plugins are in the
-# release's own archives.
+# Homebrew and Scoop install stele and each checker plugin as a package of
+# its own. A plugin's package doesn't install stele or the scanner it runs
+# (opengrep, trivy): the plugin finds the scanner on PATH.
 homebrew_casks:
   - name: stele
     ids: [stele]
@@ -97,12 +98,49 @@ homebrew_casks:
     description: Guideline enforcement for coding agents
     license: Apache-2.0
     skip_upload: auto
-    # The binary is not signed: without this, macOS refuses to run it.
+    # The binary is not signed: without this, macOS refuses to run it. The
+    # step may fail, as for a file with no quarantine attribute
+    # (--no-quarantine), without failing the install. The plugin casks below
+    # do the same.
     hooks:
       post:
         install_steps: |
           on_macos do
-            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/{{ .ProjectName }}"]
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/{{ .ProjectName }}"], must_succeed: false
+          end
+  - name: stele-checker-opengrep
+    ids: [stele-checker-opengrep]
+    repository:
+      owner: lictor-ai
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/lictor-ai/stele
+    description: Opengrep checker for stele
+    license: Apache-2.0
+    skip_upload: auto
+    hooks:
+      post:
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/stele-checker-opengrep"], must_succeed: false
+          end
+  - name: stele-checker-trivy
+    ids: [stele-checker-trivy]
+    repository:
+      owner: lictor-ai
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/lictor-ai/stele
+    description: Trivy checker for stele
+    license: Apache-2.0
+    skip_upload: auto
+    hooks:
+      post:
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/stele-checker-trivy"], must_succeed: false
           end
 
 scoops:
@@ -114,5 +152,25 @@ scoops:
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/lictor-ai/stele
     description: Guideline enforcement for coding agents
+    license: Apache-2.0
+    skip_upload: auto
+  - name: stele-checker-opengrep
+    ids: [stele-checker-opengrep]
+    repository:
+      owner: lictor-ai
+      name: scoop-bucket
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/lictor-ai/stele
+    description: Opengrep checker for stele
+    license: Apache-2.0
+    skip_upload: auto
+  - name: stele-checker-trivy
+    ids: [stele-checker-trivy]
+    repository:
+      owner: lictor-ai
+      name: scoop-bucket
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/lictor-ai/stele
+    description: Trivy checker for stele
     license: Apache-2.0
     skip_upload: auto

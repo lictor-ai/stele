@@ -81,7 +81,12 @@ Guideline enforcement for coding agents. Go, single binary.
     released with it; they find the scanner on `PATH` outside the project
     and send nothing, though Trivy downloads its own database. The spec
     carries it as D90.
-20. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+20. `docs/adr/0020-homebrew-and-scoop-packages-for-the-checker-plugins.md` —
+    each checker plugin also ships as a Homebrew cask and a Scoop manifest
+    of its own, in stele's tap and bucket; a plugin's package installs
+    neither stele nor its scanner. It amends ADR-0019. The spec carries it
+    as D91.
+21. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
