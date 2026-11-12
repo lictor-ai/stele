@@ -29,7 +29,8 @@ go run ./test/functional/agent -eval -out eval-v1.5.0-pilot   # the published ev
 | `-stele` | built from this module, with the latest tag as its version when stele's code is unchanged and nothing new is in it since that tag; a binary given here has its `go version -m` build info recorded |
 | `-eval` | off: the published evaluation's 9 scenarios (not the probes), arms `claudemd` and `stele` |
 | `-out` | none: the files go in `results/`; with a name, in `results/<name>/` |
-| `-regrade` | none: a `results/<out>/<time>` folder whose saved runs are graded again from their diffs, with no agent; it prints the grades and writes nothing |
+| `-regrade` | none: a `results/<out>/<time>` folder whose saved runs are graded again from their diffs, with no agent; it prints the grades |
+| `-regrade-write` | off: with `-regrade`, also write `<time>.regraded.md` and `<time>.regraded.jsonl` beside the folder |
 | `-keep` | off: each run's temporary tree is deleted after grading, and its diff kept in `results/<time>/` |
 
 ## Arms

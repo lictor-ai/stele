@@ -63,6 +63,7 @@ func main() {
 		evalSet   = flag.Bool("eval", false, "the published evaluation (docs/eval.md): its 9 scenarios, arms claudemd and stele (agentsmd and stele for Codex)")
 		out       = flag.String("out", "", "a folder under results/ for this eval's files (default: results/ itself)")
 		regradeIn = flag.String("regrade", "", "a results/<out>/<time> folder: grade its saved runs again from their diffs, with no agent, and print the grades")
+		regradeW  = flag.Bool("regrade-write", false, "with -regrade: also write <time>.regraded.md and <time>.regraded.jsonl beside the folder")
 		cfg       config
 	)
 	flag.StringVar(&cfg.claude, "claude", "", "claude binary (default: newest VS Code extension's, else claude on PATH)")
@@ -174,7 +175,20 @@ func main() {
 		if err != nil {
 			fail(err)
 		}
-		fmt.Print(string(newScrubber("").text([]byte(regradeReport(rs)))))
+		fmt.Print(string(newScrubber("").text([]byte(regradeReport(rs, homeless(steleDesc))))))
+		if *regradeW {
+			model := cfg.model
+			if len(rs) > 0 && rs[0].Model != "" {
+				model = rs[0].Model
+			}
+			about := append([]string{
+				"Regraded with the current grader at " + moduleVersion(filepath.Join(here, "..", "..", "..")) + ", from the saved diffs in " + filepath.Base(filepath.Clean(*regradeIn)) + ". Time, tokens, denies and post-write flags are the original runs'.",
+				"stele: " + homeless(steleDesc) + ".",
+			}, regradeLimits...)
+			if err := writeRegraded(*regradeIn, rs, model, about); err != nil {
+				fail(err)
+			}
+		}
 		return
 	}
 
@@ -284,7 +298,11 @@ func withoutLeaks(s *scrubber, r Result, what string) Result {
 		r.Error = addError(r.Error, msg)
 	}
 	if line, _ := json.Marshal(r); s.leak(line) != "" {
-		r = Result{Scenario: r.Scenario, Arm: r.Arm, Rep: r.Rep, Model: r.Model, Agent: r.Agent, Error: "its result held private data after scrubbing: not kept"}
+		// Its violations are markers by now: keep the grade, so no count
+		// is lost.
+		r = Result{Scenario: r.Scenario, Arm: r.Arm, Rep: r.Rep, Model: r.Model, Agent: r.Agent,
+			Grade: Grade{Compliant: r.Compliant, TaskOK: r.TaskOK, Violations: r.Violations},
+			Error: "its result held private data after scrubbing: not kept"}
 	}
 	return r
 }
@@ -392,6 +410,17 @@ func steleSource(root string) (tag, desc string) {
 		return "", head + ", stele's code changed since " + last
 	}
 	return last, last + " (stele's code as tagged; the module is at " + head + ")"
+}
+
+// moduleVersion is git describe of the module at root.
+func moduleVersion(root string) string {
+	cmd := exec.Command("git", "describe", "--tags", "--always", "--dirty")
+	cmd.Dir = root
+	b, err := cmd.Output()
+	if err != nil {
+		return "an unknown commit"
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // buildStele builds stele from the module at root into a temp directory,

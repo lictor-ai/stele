@@ -149,6 +149,12 @@ go run ./test/functional/agent -eval -reps 1 -model claude-sonnet-5-5 -out eval-
 - `-regrade <results>/<time>` grades saved runs again with today's grader,
   with no agent and no cost: it sets each run up again and applies its saved
   diff. Binary files aren't in a diff; they are listed as not restored.
+  Nor are files a `.gitignore` kept out of the diff, and where the scrub
+  replaced a path or the account name in the diff, the regraded tree
+  differs from the agent's. With `-regrade-write` it also writes
+  `<time>.regraded.md` and `<time>.regraded.jsonl` beside the originals,
+  scrubbed and checked like a run's; time, tokens, denies and flags stay
+  the original runs'.
 - `-parallel` is the number of runs at once: 2 with `-eval`, 3 otherwise.
   More agents at once ran one machine short of memory (experiment 7).
 

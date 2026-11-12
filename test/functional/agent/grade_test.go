@@ -84,3 +84,21 @@ func TestBinaryFiles(t *testing.T) {
 		t.Errorf("binaryFiles = %q", got)
 	}
 }
+
+func TestRegradeReport(t *testing.T) {
+	got := regradeReport([]Result{{Scenario: "s", Arm: "stele", Rep: 1, Grade: Grade{Guidance: []string{"tests are table-driven"}, Notes: []string{"n"}}}}, "v9.9.9")
+	for _, want := range []string{"stele: v9.9.9.", "not restored", "  guidance: tests are table-driven", "  note: n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("report lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestSavedResults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.jsonl")
+	writeFiles(t, filepath.Dir(path), map[string]string{"x.jsonl": `{"scenario":"s","arm":"stele","rep":2,"input_tokens":7}` + "\nnot json\n"})
+	got := savedResults(path)
+	if r, ok := got["s-stele-2"]; !ok || r.InputTokens != 7 || len(got) != 1 {
+		t.Errorf("savedResults = %+v", got)
+	}
+}
