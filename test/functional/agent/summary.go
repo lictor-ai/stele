@@ -65,9 +65,10 @@ func b2f(b bool) float64 {
 	return 0
 }
 
-// summary renders the results as Markdown: one table of means per scenario
-// and arm, then stele's deltas against the other arms.
-func summary(results []Result, model string) string {
+// summary renders the results as Markdown: what ran, the plain numbers per
+// arm, one table of means per scenario and arm, then stele's deltas against
+// the other arms. about lines describe the setup.
+func summary(results []Result, model string, about []string) string {
 	by := map[string]map[string][]Result{}
 	var scenarios []string
 	total, ran := 0.0, 0
@@ -93,12 +94,20 @@ func summary(results []Result, model string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Agent A/B eval\n\nModel %s, %d runs now ($%.2f at list price), %d reused. Means per run. Tokens are input + cache writes + cache reads + output.\n\n",
 		model, ran, total, len(results)-ran)
+	for _, l := range append(about, ranWith(results)...) {
+		fmt.Fprintf(&b, "%s\n", l)
+	}
+	if len(about) > 0 {
+		b.WriteString("\n")
+	}
 	for _, f := range slices.Sorted(maps.Keys(reused)) {
 		fmt.Fprintf(&b, "Reused from %s: %s, regraded with blocking violations only.\n", f, strings.Join(slices.Sorted(maps.Keys(reused[f])), ", "))
 	}
 	if len(reused) > 0 {
 		b.WriteString("\n")
 	}
+	plain(&b, results)
+	b.WriteString("## Per scenario\n\n")
 	b.WriteString("| scenario | arm | n | time s | turns | tokens | output tok | cost $ | compliant | violations | guidance missed | task ok | scope creep | denies | blocks | hook bytes | bash writes | errors |\n")
 	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	all := map[string][]Result{}
@@ -164,6 +173,64 @@ func summary(results []Result, model string) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// ranWith says which Claude Code versions ran and where their credentials
+// came from, from the runs made now.
+func ranWith(results []Result) []string {
+	versions, keys := map[string]bool{}, map[string]bool{}
+	for _, r := range results {
+		if r.Baseline != "" {
+			continue
+		}
+		if r.AgentVersion != "" {
+			versions[r.AgentVersion] = true
+		}
+		if r.APIKeySource != "" {
+			keys[r.APIKeySource] = true
+		}
+	}
+	var out []string
+	if len(versions) > 0 {
+		out = append(out, "Claude Code version: "+strings.Join(slices.Sorted(maps.Keys(versions)), ", ")+".")
+	}
+	if len(keys) > 0 {
+		out = append(out, "Credentials (apiKeySource): "+strings.Join(slices.Sorted(maps.Keys(keys)), ", ")+"; none is a claude.ai login, billed to the subscription.")
+	}
+	return out
+}
+
+// plain writes the plain numbers per arm, over every scenario: runs,
+// compliant runs, violations, what stele stopped or flagged, and tokens.
+func plain(b *strings.Builder, results []Result) {
+	byArm := map[string][]Result{}
+	for _, r := range results {
+		byArm[r.Arm] = append(byArm[r.Arm], r)
+	}
+	b.WriteString("## Plain numbers\n\n")
+	b.WriteString("Per arm, over every scenario. A violation is a blocking rule broken in the final tree, found by `stele check --all` or by the scenario's own checks. Denies are writes stele paused to show rules; post-write flags are writes stele's check sent back after they were made.\n\n")
+	b.WriteString("| arm | runs | compliant runs | violations | violations per run | denies per run | post-write flags per run | tokens per run | task ok | errors |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|\n")
+	for _, a := range arms {
+		rs := byArm[a]
+		if len(rs) == 0 {
+			continue
+		}
+		compliant, violations, taskOK := 0, 0, 0
+		for _, r := range rs {
+			if r.Compliant {
+				compliant++
+			}
+			if r.TaskOK {
+				taskOK++
+			}
+			violations += len(r.Violations)
+		}
+		s := mean(rs)
+		fmt.Fprintf(b, "| %s | %d | %d/%d | %d | %.2f | %.2f | %.2f | %.0f | %d/%d | %d |\n",
+			a, s.n, compliant, s.n, violations, s.violations, s.denies, s.blocks, s.tokens(), taskOK, s.n, s.errors)
+	}
+	b.WriteString("\n")
 }
 
 func row(b *strings.Builder, sc, a string, s stats) {

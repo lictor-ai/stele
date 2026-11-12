@@ -106,6 +106,8 @@ The hook adds about 0.1 s per write on Windows. With 500 rules, it adds up to 0.
 
 Every experiment is in [test/functional/agent/results/](test/functional/agent/results/README.md), including the runs where stele lost.
 
+To rerun the evaluation yourself, with the rules in `CLAUDE.md` as the baseline, see [docs/eval.md](docs/eval.md).
+
 ## Install
 
 macOS and Linux, with [Homebrew](https://brew.sh):

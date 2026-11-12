@@ -2,3 +2,6 @@
 # the runs so far). The summaries (<time>.jsonl, <time>.md) and each run's
 # diff are kept.
 results/**/2026*/*.jsonl
+# The published evaluation (-eval -out eval-..., docs/eval.md) keeps them:
+# its transcripts are part of what it publishes.
+!results/eval-*/2026*/*.jsonl

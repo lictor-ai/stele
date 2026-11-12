@@ -29,6 +29,15 @@ import (
 // a diagnostic, not run by default.
 var arms = []string{"none", "claudemd", "agentsmd", "stele", "stele-tools"}
 
+// evalScenarios are the published evaluation's scenarios (-eval,
+// docs/eval.md): every scenario but the probes, which were written to find
+// where a rules file slips.
+var evalScenarios = []string{
+	"big-billing-refactor", "big-log-analyzer", "big-todo-service",
+	"edit-legacy", "go-logging", "migrations", "multi-file-python",
+	"no-secrets", "subproject",
+}
+
 type config struct {
 	agent                string // claude-code or codex
 	claude, stele, model string
@@ -50,6 +59,8 @@ func main() {
 		reps      = flag.Int("reps", 1, "runs per scenario and arm")
 		parallel  = flag.Int("parallel", 3, "runs at once")
 		baseline  = flag.String("baseline", "", "comma-separated results/*.jsonl whose runs of the arms not run now join the summary")
+		evalSet   = flag.Bool("eval", false, "the published evaluation (docs/eval.md): its 9 scenarios, arms claudemd and stele (agentsmd and stele for Codex)")
+		out       = flag.String("out", "", "a folder under results/ for this eval's files (default: results/ itself)")
 		cfg       config
 	)
 	flag.StringVar(&cfg.claude, "claude", "", "claude binary (default: newest VS Code extension's, else claude on PATH)")
@@ -68,11 +79,20 @@ func main() {
 		fail(err)
 	}
 	cfg.scenarioDir = filepath.Join(here, "scenarios")
-	cfg.outDir = filepath.Join(here, "results")
+	if *out != "" && (filepath.Base(*out) != *out || *out == "." || *out == "..") {
+		fail(fmt.Errorf("-out %q: give a folder name, not a path", *out))
+	}
+	cfg.outDir = filepath.Join(here, "results", *out)
+	if *evalSet && *scenarios == "" {
+		*scenarios = strings.Join(evalScenarios, ",")
+	}
 	switch cfg.agent {
 	case "claude-code":
 		if cfg.model == "" {
 			cfg.model = "claude-sonnet-5-5"
+		}
+		if *armList == "" && *evalSet {
+			*armList = "claudemd,stele"
 		}
 		if *armList == "" {
 			*armList = "none,claudemd,stele"
@@ -83,6 +103,9 @@ func main() {
 	case "codex":
 		if cfg.model == "" {
 			cfg.model = "gpt-6-luna"
+		}
+		if *armList == "" && *evalSet {
+			*armList = "agentsmd,stele"
 		}
 		if *armList == "" {
 			*armList = "none,agentsmd,stele"
@@ -105,11 +128,15 @@ func main() {
 	default:
 		fail(fmt.Errorf("unknown agent %q", cfg.agent))
 	}
+	steleDesc := cfg.stele + ", given with -stele"
 	if cfg.stele == "" {
-		cfg.stele, err = buildStele(filepath.Join(here, "..", "..", ".."))
+		root := filepath.Join(here, "..", "..", "..")
+		tag, desc := steleSource(root)
+		cfg.stele, err = buildStele(root, tag)
 		if err != nil {
 			fail(err)
 		}
+		steleDesc = "built from this module: " + desc
 	}
 
 	names := split(*scenarios)
@@ -155,7 +182,7 @@ func main() {
 	if cfg.agent == "codex" {
 		agentBin = strings.Join(cfg.codex, " ") + ", effort " + cfg.effort
 	}
-	fmt.Fprintf(os.Stderr, "%d runs, agent %s, model %s, %s, stele %s\n", len(jobs), cfg.agent, cfg.model, agentBin, cfg.stele)
+	fmt.Fprintf(os.Stderr, "%d runs, agent %s, model %s, %s, stele %s (%s)\n", len(jobs), cfg.agent, cfg.model, agentBin, cfg.stele, steleDesc)
 
 	var (
 		mu      sync.Mutex
@@ -191,11 +218,26 @@ func main() {
 		results = append(results, old...)
 	}
 
-	sum := summary(results, cfg.model)
+	about := []string{
+		"Agent: " + cfg.agent + ", " + homeless(agentBin) + ".",
+		"stele: " + homeless(steleDesc) + ".",
+		"Command: `go run ./test/functional/agent " + homeless(strings.Join(os.Args[1:], " ")) + "`.",
+	}
+	sum := summary(results, cfg.model, about)
 	if err := os.WriteFile(filepath.Join(cfg.outDir, stamp+".md"), []byte(sum), 0o644); err != nil {
 		fail(err)
 	}
 	fmt.Print(sum)
+}
+
+// homeless replaces the user's home directory with ~, so a summary meant to
+// be published names no local account.
+func homeless(s string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, home, "~")
 }
 
 // sourceDir is this package's directory, so the harness runs from any cwd.
@@ -241,8 +283,36 @@ func versionLess(a, b string) bool {
 	return slices.Compare(num(a), num(b)) < 0
 }
 
-// buildStele builds stele from the module at root into a temp directory.
-func buildStele(root string) (string, error) {
+// steleSource says which stele the module at root builds. When stele's own
+// code (cmd/, internal/, go.mod, go.sum) is as it was at the latest tag, in
+// the work tree too, tag is that tag, and the build carries it as a release
+// build does (.goreleaser.yaml). Otherwise tag is "" and the build reports
+// "devel".
+func steleSource(root string) (tag, desc string) {
+	git := func(args ...string) (string, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		b, err := cmd.Output()
+		return strings.TrimSpace(string(b)), err
+	}
+	head, err := git("describe", "--tags", "--always", "--dirty")
+	if err != nil {
+		return "", "commit unknown"
+	}
+	last, err := git("describe", "--tags", "--abbrev=0")
+	if err != nil {
+		return "", head
+	}
+	// git diff --quiet exits 1 when the code differs from the tag.
+	if _, err := git("diff", "--quiet", last, "--", "cmd", "internal", "go.mod", "go.sum"); err != nil {
+		return "", head + ", stele's code changed since " + last
+	}
+	return last, last + " (stele's code as tagged; the module is at " + head + ")"
+}
+
+// buildStele builds stele from the module at root into a temp directory,
+// carrying tag as its version when tag is not "".
+func buildStele(root, tag string) (string, error) {
 	dir, err := os.MkdirTemp("", "stele-eval-bin-")
 	if err != nil {
 		return "", err
@@ -251,7 +321,11 @@ func buildStele(root string) (string, error) {
 	if runtime.GOOS == "windows" {
 		out += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", out, "./cmd/stele")
+	args := []string{"build", "-o", out}
+	if tag != "" {
+		args = append(args, "-ldflags", "-X main.version="+tag)
+	}
+	cmd := exec.Command("go", append(args, "./cmd/stele")...)
 	cmd.Dir = root
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("building stele: %v\n%s", err, b)

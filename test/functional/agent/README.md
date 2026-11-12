@@ -11,6 +11,7 @@ go run ./test/functional/agent                       # every scenario, arms none
 go run ./test/functional/agent -reps 2 -parallel 3
 go run ./test/functional/agent -scenarios go-logging -arms stele,stele-tools
 go run ./test/functional/agent -agent codex          # Codex: arms none, agentsmd, stele
+go run ./test/functional/agent -eval -out eval-v1.5.0-pilot   # the published evaluation: docs/eval.md
 ```
 
 | Flag | Default |
@@ -25,7 +26,9 @@ go run ./test/functional/agent -agent codex          # Codex: arms none, agentsm
 | `-parallel` | 3 |
 | `-timeout` | 10m per run |
 | `-claude` | newest VS Code extension binary, else `claude` on `PATH` |
-| `-stele` | built from this module |
+| `-stele` | built from this module, with the latest tag as its version when stele's code is unchanged since that tag |
+| `-eval` | off: the published evaluation's 9 scenarios (not the probes), arms `claudemd` and `stele` |
+| `-out` | none: the files go in `results/`; with a name, in `results/<name>/` |
 | `-keep` | off: each run's temporary tree is deleted after grading, and its diff kept in `results/<time>/` |
 
 ## Arms
@@ -103,11 +106,14 @@ Every arm is graded the same way. The final tree is copied, the fixture's `stele
 
 ## Output
 
-`results/<time>.jsonl` holds one line per run. `results/<time>.md` holds means per scenario and arm, and stele's differences against the other arms. `results/<time>/` keeps each run's stream and session transcript.
+`results/<time>.jsonl` holds one line per run. `results/<time>.md` holds the plain numbers per arm, means per scenario and arm, stele's differences against the other arms, and every violation and note. `results/<time>/` keeps each run's stream, session transcript and diff, and in `<scenario>-<arm>-<rep>.setup/` what the agent was given: the prompt and the rule files. Streams and transcripts stay out of git, except in folders named `eval-*`.
+
+A finding the grade does not count is still listed in the run's notes: a line the fixture already had, a non-blocking rule, a file `stele check` could not read, findings past its limit of 100 per rule and file.
 
 The reported counts:
 
 - `denies`: writes stele paused to show rules.
+- `agent_version`, `api_key_source`: Claude Code's version, and where its credentials came from (`none` is a claude.ai login).
 - `blocks`: post-write violations, read from the session transcript.
 - `hook bytes`: the text stele added.
 - `bash writes`: shell commands that look like they wrote a file, which the hooks cannot see (README, Limits 2).

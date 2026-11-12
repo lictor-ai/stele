@@ -368,18 +368,33 @@ func grade(cfg config, scenario, fixture, repo string, env []string) (Grade, err
 		g.Compliant = false
 		return g, err
 	}
-	c.violations = vs
+	c.violations = vs.findings
+	for _, s := range vs.skipped {
+		// A file stele check could not read was not graded: say so.
+		c.note("not checked: " + s)
+	}
+	if vs.truncated > 0 {
+		c.note(fmt.Sprintf("stele check left out %d more findings (at most 100 per rule and file)", vs.truncated))
+	}
 	graders[scenario](c)
 	return g, nil
 }
 
+// checked is what stele check reported over every project.
+type checked struct {
+	findings  []finding
+	skipped   []string // "file: reason"
+	truncated int
+}
+
 // checkRules runs stele check --all on a copy of repo that has the fixture's
-// rules, whatever the arm left of them, and returns its findings in every
+// rules, whatever the arm left of them, and returns what it found in every
 // project.
-func checkRules(cfg config, fixture, repo string, env []string) ([]finding, error) {
+func checkRules(cfg config, fixture, repo string, env []string) (checked, error) {
+	var out checked
 	graded, err := os.MkdirTemp("", "stele-eval-graded-")
 	if err != nil {
-		return nil, err
+		return out, err
 	}
 	defer os.RemoveAll(graded)
 	skip := func(rel string, d fs.DirEntry) bool {
@@ -390,36 +405,35 @@ func checkRules(cfg config, fixture, repo string, env []string) ([]finding, erro
 		return false
 	}
 	if err := copyTree(repo, graded, skip); err != nil {
-		return nil, err
+		return out, err
 	}
 	var projects []string
 	for _, f := range ruleFiles(fixture) {
 		rel, _ := filepath.Rel(fixture, f)
 		b, _ := os.ReadFile(f)
 		if err := os.WriteFile(filepath.Join(graded, rel), b, 0o644); err != nil {
-			return nil, err
+			return out, err
 		}
 		projects = append(projects, filepath.Dir(rel))
 	}
 	if _, err := run(graded, env, "git", "init", "-q", "-b", "main"); err != nil {
-		return nil, err
+		return out, err
 	}
 	for _, p := range projects {
 		if _, err := run(filepath.Join(graded, p), env, cfg.stele, "compile"); err != nil {
-			return nil, err
+			return out, err
 		}
 	}
 	if err := commitAll(graded, env, "graded"); err != nil {
-		return nil, err
+		return out, err
 	}
-	var out []finding
 	for _, p := range projects {
 		cmd := exec.Command(cfg.stele, "check", "--all", "--format", "json")
 		cmd.Dir = filepath.Join(graded, p)
 		cmd.Env = env
 		b, err := cmd.Output()
 		if err != nil && cmd.ProcessState.ExitCode() != 1 {
-			return nil, fmt.Errorf("stele check in %s: %v", p, err)
+			return out, fmt.Errorf("stele check in %s: %v", p, err)
 		}
 		var rep struct {
 			Problems   []struct{ Message string }
@@ -430,31 +444,41 @@ func checkRules(cfg config, fixture, repo string, env []string) ([]finding, erro
 				Excerpt  string `json:"excerpt"`
 				Blocking bool   `json:"blocking"`
 			}
+			Skipped []struct {
+				File   string `json:"file"`
+				Reason string `json:"reason"`
+			}
+			Truncated int `json:"truncated"`
 		}
 		if err := json.Unmarshal(b, &rep); err != nil {
-			return nil, fmt.Errorf("stele check in %s: %v: %s", p, err, b)
+			return out, fmt.Errorf("stele check in %s: %v: %s", p, err, b)
 		}
 		for _, pr := range rep.Problems {
-			return nil, fmt.Errorf("stele check in %s: rule problem: %s", p, pr.Message)
+			return out, fmt.Errorf("stele check in %s: rule problem: %s", p, pr.Message)
 		}
 		for _, v := range rep.Violations {
 			file := filepath.ToSlash(filepath.Join(p, v.File))
-			out = append(out, finding{File: file, Line: v.Line, Message: v.Message, Excerpt: v.Excerpt, Blocking: v.Blocking})
+			out.findings = append(out.findings, finding{File: file, Line: v.Line, Message: v.Message, Excerpt: v.Excerpt, Blocking: v.Blocking})
 		}
+		for _, s := range rep.Skipped {
+			out.skipped = append(out.skipped, filepath.ToSlash(filepath.Join(p, s.File))+": "+s.Reason)
+		}
+		out.truncated += rep.Truncated
 	}
 	return out, nil
 }
 
 // ruleViolations counts stele check's findings, except those old says
-// were there before the agent started.
+// were there before the agent started: those are listed in the notes.
 func (c *gctx) ruleViolations(old func(finding) bool) {
 	for _, f := range c.violations {
-		if old != nil && old(f) {
-			continue
-		}
 		msg := f.Message
 		if msg == "" {
 			msg = f.Excerpt
+		}
+		if old != nil && old(f) {
+			c.note(fmt.Sprintf("in the fixture already, not counted: %s:%d: %s", f.File, f.Line, msg))
+			continue
 		}
 		if !f.Blocking {
 			// A non-blocking rule is advice: stele check passes with it.

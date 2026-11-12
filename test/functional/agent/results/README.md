@@ -19,6 +19,7 @@ regraded. Tokens are input + cache writes + cache reads + output, means per run.
 | `7-haiku-read-fix` | dev.2 + session text fix (branch `session-text-bash-reads`) | Haiku 5.5 | yes | stele only, `probe-local-style` × 8; claudemd reused from 6 |
 | `8-codex-d91354e` | `d91354e` (Codex adapter) | Codex 0.166.0, gpt-6-luna, effort medium | no | Codex: 3 big scenarios × none, agentsmd, stele × 6; `smoke/` holds the first pass, × 1 |
 | `smoke` | | | | single runs that checked the harness |
+| `eval-*` | | | | the published evaluation (`-eval`, [docs/eval.md](../../../../docs/eval.md)); these folders keep the streams and transcripts in git |
 | `invalid` | | | | not committed: a run cut short by a full disk, and one stopped by hand |
 | `analysis` | | | | why stele lost to CLAUDE.md in 1 and 2 |
 

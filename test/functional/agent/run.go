@@ -21,6 +21,11 @@ type Result struct {
 	Rep      int    `json:"rep"`
 	Model    string `json:"model"`
 	Agent    string `json:"agent,omitempty"` // empty for Claude Code, from before -agent
+	// AgentVersion and APIKeySource are what Claude Code's init event says:
+	// its version, and where its credentials came from ("none" is a
+	// claude.ai login, which bills the subscription, not the API).
+	AgentVersion string `json:"agent_version,omitempty"`
+	APIKeySource string `json:"api_key_source,omitempty"`
 
 	WallMS        int64   `json:"wall_ms"`
 	DurationMS    int64   `json:"duration_ms"`
@@ -87,6 +92,10 @@ func runOne(cfg config, scenario, arm string, rep int) Result {
 	}
 
 	stream := filepath.Join(cfg.streamDir, fmt.Sprintf("%s-%s-%d.jsonl", scenario, arm, rep))
+	if err := saveSetup(repo, prompt, strings.TrimSuffix(stream, ".jsonl")+".setup"); err != nil {
+		r.Error = "saving the setup: " + err.Error()
+		return r
+	}
 	start := time.Now()
 	err = runAgent(cfg, repo, arm, strings.TrimSpace(string(prompt)), env, stream)
 	r.WallMS = time.Since(start).Milliseconds()
@@ -119,6 +128,48 @@ func runOne(cfg config, scenario, arm string, rep int) Result {
 		}
 	}
 	return r
+}
+
+// saveSetup copies what the agent was given into dir: the prompt, and the
+// arm's rules and their setup as committed before the run (stele.md,
+// CLAUDE.md, AGENTS.md, stele.json, stele.lock, .claude/ and .codex/).
+// .stele/ is left out: it holds the run's state, not its setup.
+func saveSetup(repo string, prompt []byte, dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompt.txt"), prompt, 0o644); err != nil {
+		return err
+	}
+	return filepath.WalkDir(repo, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(repo, p)
+		top := strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
+		if d.IsDir() {
+			if d.Name() == ".git" || d.Name() == ".stele" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch {
+		case top == ".claude" || top == ".codex":
+		case d.Name() == "stele.md" || d.Name() == "CLAUDE.md" || d.Name() == "AGENTS.md" ||
+			d.Name() == "stele.json" || d.Name() == "stele.lock":
+		default:
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, b, 0o644)
+	})
 }
 
 // runEnv is the environment for stele and the agent: stele first on PATH,
@@ -295,9 +346,12 @@ func readStream(path string, r *Result) (session string) {
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
 	for sc.Scan() {
 		var ev struct {
-			Type      string `json:"type"`
-			SessionID string `json:"session_id"`
-			Message   struct {
+			Type         string `json:"type"`
+			Subtype      string `json:"subtype"`
+			SessionID    string `json:"session_id"`
+			Version      string `json:"claude_code_version"`
+			APIKeySource string `json:"apiKeySource"`
+			Message      struct {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 			DurationMS    int64   `json:"duration_ms"`
@@ -320,6 +374,10 @@ func readStream(path string, r *Result) (session string) {
 			session = ev.SessionID
 		}
 		switch ev.Type {
+		case "system":
+			if ev.Subtype == "init" {
+				r.AgentVersion, r.APIKeySource = ev.Version, ev.APIKeySource
+			}
 		case "result":
 			r.DurationMS, r.DurationAPIMS, r.NumTurns = ev.DurationMS, ev.DurationAPIMS, ev.NumTurns
 			r.IsError, r.CostUSD = ev.IsError, ev.CostUSD
