@@ -18,6 +18,7 @@ regraded. Tokens are input + cache writes + cache reads + output, means per run.
 | `6-probes-8x` | `v1.0.0-dev.2` | Haiku / Sonnet | yes | the two probes where claudemd slipped, claudemd and stele × 8 |
 | `7-haiku-read-fix` | dev.2 + session text fix (branch `session-text-bash-reads`) | Haiku 5.5 | yes | stele only, `probe-local-style` × 8; claudemd reused from 6 |
 | `8-codex-d91354e` | `d91354e` (Codex adapter) | Codex 0.166.0, gpt-6-luna, effort medium | no | Codex: 3 big scenarios × none, agentsmd, stele × 6; `smoke/` holds the first pass, × 1 |
+| `eval-v1.5.0-pilot` | `v1.5.0` | Sonnet 5.5 | no | the published evaluation's pilot (`-eval`): 9 scenarios × claudemd and stele × 1, Claude Code 2.1.322; regraded after the subproject fix, unchanged. Streams and transcripts kept, scrubbed. See [docs/eval.md](../../../../docs/eval.md#results) |
 | `smoke` | | | | single runs that checked the harness |
 | `eval-*` | | | | the published evaluation (`-eval`, [docs/eval.md](../../../../docs/eval.md)); these folders keep the streams and transcripts in git |
 | `invalid` | | | | not committed: a run cut short by a full disk, and one stopped by hand |

@@ -1,0 +1,9 @@
+Extend internal/billing in this Go module (standard library only).
+
+1. Discount codes: a code is either a percentage or a fixed amount off, has an optional expiry time, and can be used at most once per customer. Apply at most one code to an invoice; it never takes the total below zero.
+2. Tax by region: the invoice gets a region (for example "FR", "DE", "US-CA"). Tax rates come from a table passed in by the caller; tax is computed on the total after discount. Add a TaxCents field and a GrandTotalCents field.
+3. CSV export in internal/billing/export.go: write a list of invoices as CSV (id, customer, region, issued_at in RFC 3339, total, discount, tax, grand total, in cents) to an io.Writer.
+
+Existing callers of Compute and Describe must keep compiling. Add tests for discounts (expiry, reuse, floors at zero, percent rounding), tax and the CSV export.
+
+When you are done, go vet ./... and go test ./... must pass.

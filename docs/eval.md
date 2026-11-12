@@ -249,22 +249,50 @@ about 120k are output.
 
 ## Results
 
-*To come: the pilot, 9 scenarios × 2 arms × 1 run, then the full run. The
-per-run numbers count only the runs without an error.*
+### Pilot, v1.5.0
+
+This is a pilot: 1 run per scenario and arm, 18 runs. Model Sonnet 5.5
+(`claude-sonnet-5-5`, the same in both arms by Claude Code's own report),
+Claude Code 2.1.322, stele v1.5.0. The results are in
+[results/eval-v1.5.0-pilot/](../test/functional/agent/results/eval-v1.5.0-pilot/),
+with every run's stream, transcript, diff and setup.
+
+The runs were graded again after the subproject fix (`-regrade`), from their
+saved diffs. Nothing changed. The numbers below are from the regraded
+summary, `20261112-170804.regraded.md`.
 
 | | `claudemd` | `stele` |
 |---|---|---|
-| Runs | | |
-| Errors | | |
-| Compliant runs | | |
-| Violations | | |
-| Violations per run | | |
-| Denies per run | | |
-| Post-write flags per run | | |
-| Tokens per run | | |
-| Task ok | | |
+| Runs | 9 | 9 |
+| Errors | 0 | 0 |
+| Compliant runs | 9/9 | 9/9 |
+| Violations | 0 | 0 |
+| Violations per run | 0 | 0 |
+| Denies per run | 0 | 0.22 |
+| Post-write flags per run | 0 | 0.11 |
+| Tokens per run | 188k | 198k |
+| Output tokens per run | 7.3k | 6.0k |
+| Time per run | 46 s | 39 s |
+| Task ok | 9/9 | 9/9 |
 
-Stele version: . Claude Code version: . Model: . Results folder: .
+- **Both arms were compliant in every run.** The 9 scenarios don't separate
+  the arms on compliance, as in experiment 3. The probes, where `CLAUDE.md`
+  slipped before, are to come.
+- **stele used 5% more tokens** (198k against 188k per run). Most of the
+  difference is `subproject`, where stele denied 2 writes to show the
+  subproject's rules (155k against 100k).
+- **stele stopped or flagged 3 writes.** 2 denies in `subproject`, and 1
+  post-write flag in `big-log-analyzer`, which the agent fixed.
+- **The `CLAUDE.md` agent wrote files through Bash in 6 of 9 runs**, with
+  heredocs such as `cat > internal/greet/greet.go <<'EOF'`. The `stele`
+  agent did so in 0. stele's hooks don't see a write through Bash, so this
+  is where they would miss a violation. The grader still reads the final
+  tree, so these runs were graded like the others.
+- Both arms missed one guidance rule in `big-todo-service`: "Store methods
+  take ctx first". It does not count against compliance.
+
+With 1 run per scenario, these numbers show no difference on compliance.
+They are not a measure of how often either arm slips.
 
 ## History
 

@@ -83,11 +83,19 @@ Codex works the same way, with the rules in `AGENTS.md` and `apply_patch` in pla
 
 ## Does it work?
 
-We gave Claude Code the same coding work with no rules, with the rules pasted into `CLAUDE.md`, and with stele. Then we counted how often the rules were respected.
+We gave Claude Code the same coding work with no rules, with the rules pasted into `CLAUDE.md`, and with stele. Then we counted the runs that respected every rule.
+
+On the evaluation's 9 tasks, with Sonnet 5.5:
 
 | No rules | Rules in `CLAUDE.md` | stele |
 |---|---|---|
-| 33% | 63% | 100% |
+| 33% | 100% | 100% |
+
+No rules: 18 runs, in experiment 3. `CLAUDE.md` and stele: 18 runs each in experiment 3, and 9 each in the v1.5.0 pilot. On these tasks, `CLAUDE.md` is enough, and stele matches it.
+
+Where a task pulls against a rule, `CLAUDE.md` can slip. In the probe `probe-cli-marks`, testing an HTTP client wants `httptest.NewServer`, which the rules forbid. With Sonnet, 8 runs each: `CLAUDE.md` 5/8, stele 8/8 (experiment 6).
+
+How we measure it, and how to rerun it: [docs/eval.md](docs/eval.md).
 
 We did the same with Codex, on the three hardest tasks (74 rules), with the rules in `AGENTS.md` instead of `CLAUDE.md`. 18 runs each, model `gpt-6-luna`:
 
@@ -96,7 +104,7 @@ We did the same with Codex, on the three hardest tasks (74 rules), with the rule
 | Rules respected | 6/18 | 12/18 | 18/18 |
 | Tokens per run | 200k | 311k | 397k |
 
-With Codex, stele cost 28% more tokens than `AGENTS.md`, mostly from one more turn per run. With Claude Code on the same tasks, stele and `CLAUDE.md` cost the same.
+With Codex, stele cost 28% more tokens than `AGENTS.md`, mostly from one more turn per run. With Claude Code on the same tasks, stele and `CLAUDE.md` cost about the same.
 
 ### Speed
 
@@ -105,8 +113,6 @@ The hook adds about 0.1 s per write on Windows. With 500 rules, it adds up to 0.
 ### See for yourself
 
 Every experiment is in [test/functional/agent/results/](test/functional/agent/results/README.md), including the runs where stele lost.
-
-To rerun the evaluation yourself, with the rules in `CLAUDE.md` as the baseline, see [docs/eval.md](docs/eval.md).
 
 ## Install
 

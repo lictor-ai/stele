@@ -1,0 +1,27 @@
+diff --git a/cmd/app/main.go b/cmd/app/main.go
+index da29a2c..91a9344 100644
+--- a/cmd/app/main.go
++++ b/cmd/app/main.go
+@@ -1,4 +1,7 @@
+ package main
+ 
++import "example.com/x/internal/greet"
++
+ func main() {
++	greet.Greet("world")
+ }
+diff --git a/internal/greet/greet.go b/internal/greet/greet.go
+new file mode 100644
+index 0000000..3c7e001
+--- /dev/null
++++ b/internal/greet/greet.go
+@@ -0,0 +1,9 @@
++// Package greet greets users.
++package greet
++
++import "example.com/x/internal/log"
++
++// Greet prints a greeting to the user.
++func Greet(name string) {
++	log.Info("hello", "name", name)
++}

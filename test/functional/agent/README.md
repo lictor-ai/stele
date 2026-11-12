@@ -64,6 +64,9 @@ Each run is one `codex exec --json`, with the prompt on stdin. **It uses your Ch
   before each new scope.
 - **v1.0.0-dev.2 matches CLAUDE.md.** Over 9 scenarios, both arms were 100%
   compliant at 163k tokens a run.
+- **v1.5.0 pilot ([docs/eval.md](../../../docs/eval.md#results)):** the same 9
+  scenarios, 1 run each: both arms compliant in 9 of 9, at 188k and 198k
+  tokens a run.
 - **stele beats CLAUDE.md when the task pulls against a rule.** In
   `probe-cli-marks` with Sonnet, CLAUDE.md was compliant in 5 of 8 runs and
   stele in 8 of 8, for 8% more tokens.

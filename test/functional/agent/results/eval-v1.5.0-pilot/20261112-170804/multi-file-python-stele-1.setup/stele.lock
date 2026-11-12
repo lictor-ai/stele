@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "project": "c4cb7e7a-cae2-4ac2-8d59-d8ef58987190",
+  "rules": [
+    {
+      "id": "86e8ec47-2dcf-42cd-b7c7-b2fa043fdbfa",
+      "source": "stelemd",
+      "hash": "05aa75622fb822855a74a234c93b008993dd9aebedf631be6fdca358c7f373a4",
+      "position": 0
+    },
+    {
+      "id": "a7e7e590-4789-4c55-82fd-af7487b2f4c5",
+      "source": "stelemd",
+      "hash": "815bf1cda47500a9c9d196e501cfb93fffce41243a1b3d79c3bbb35de0fa3f52",
+      "position": 1
+    }
+  ]
+}
