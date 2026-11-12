@@ -125,7 +125,7 @@ func newScrubberFor(env scrubEnv) *scrubber {
 		}
 	}
 	slices.SortStableFunc(s.rules, func(a, b pathRule) int { return b.n - a.n })
-	if len(env.user) >= 3 {
+	if len(env.user) >= 3 && !slices.Contains(commonNames, strings.ToLower(env.user)) {
 		s.user = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(env.user) + `\b`)
 	}
 	for _, a := range env.account {
@@ -141,6 +141,10 @@ func newScrubberFor(env scrubEnv) *scrubber {
 	}
 	return s
 }
+
+// commonNames are account names too common to replace: they name no one,
+// and replacing them would rewrite ordinary words.
+var commonNames = []string{"root", "admin", "user", "runner", "dev", "test"}
 
 // caseFold makes path matches case-insensitive where paths are.
 var caseFold = func() string {

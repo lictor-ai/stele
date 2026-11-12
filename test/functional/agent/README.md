@@ -29,6 +29,7 @@ go run ./test/functional/agent -eval -out eval-v1.5.0-pilot   # the published ev
 | `-stele` | built from this module, with the latest tag as its version when stele's code is unchanged and nothing new is in it since that tag; a binary given here has its `go version -m` build info recorded |
 | `-eval` | off: the published evaluation's 9 scenarios (not the probes), arms `claudemd` and `stele` |
 | `-out` | none: the files go in `results/`; with a name, in `results/<name>/` |
+| `-regrade` | none: a `results/<out>/<time>` folder whose saved runs are graded again from their diffs, with no agent; it prints the grades and writes nothing |
 | `-keep` | off: each run's temporary tree is deleted after grading, and its diff kept in `results/<time>/` |
 
 ## Arms
@@ -98,7 +99,7 @@ does not affect `compliant`. A run costs roughly $0.3 to $2.
 
 ## Grading
 
-Every arm is graded the same way. The final tree is copied, the fixture's `stele.md` files are put back, and `stele check --all` runs in each project. Each scenario also has its own checks in `grade.go`:
+Every arm is graded the same way. The final tree is copied without its rule files, and for each of the fixture's `stele.md` files a copy gets that one file back and `stele check --all` runs in its folder. So a subproject's files are graded against its own rules and the root's. Each scenario also has its own checks in `grade.go`:
 
 - `compliant`: no rule violations.
 - `task_ok`: the task was done (the code builds, the function exists).
@@ -110,7 +111,7 @@ Every arm is graded the same way. The final tree is copied, the fixture's `stele
 
 A finding the grade does not count is still listed in the run's notes: a line the fixture already had (each old line excuses one finding per rule), a non-blocking rule, a file `stele check` did not check (binary, too large, or ignored by a `.gitignore`), findings past its limit of 100 per rule and file, and the rule files and agent setup the agent changed, which the grader leaves out.
 
-Everything written under `results/` is scrubbed first ([scrub.go](scrub.go)): local paths become `<run>`, `<tmp>` and `~`, your account name `<user>`, the account details in Claude Code's transcript and its `api-request-blob` lines are dropped, and emails other than example ones become `<email>`. Then the run's files are searched for the home directory, your account name, the account's ids and emails (`.claude.json`, git's `user.email`) and any organization id seen. A file that still holds one is replaced by a one-line marker, and the run gets an error. The summary and each results line are checked too: a find stops the eval. A transcript or Codex rollout that cannot be found is an error as well: the post-write flags were not counted.
+Everything written under `results/` is scrubbed first ([scrub.go](scrub.go)): local paths become `<run>`, `<tmp>` and `~`, your account name `<user>`, the account details in Claude Code's transcript and its `api-request-blob` lines are dropped, and emails other than example ones become `<email>`. Then the run's files are searched for the home directory, your account name, the account's ids and emails (`.claude.json`, git's `user.email`) and any organization id seen. A file that still holds one is replaced by a one-line marker, and the run gets an error. A results line that still holds one has those texts replaced and the run gets an error; a summary that does stops the eval. An account name that is a common one (`root`, `admin`, `user`, `runner`, `dev`, `test`) is not replaced. A transcript or Codex rollout that cannot be found is an error as well: the post-write flags were not counted.
 
 The reported counts:
 

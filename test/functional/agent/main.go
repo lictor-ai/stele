@@ -62,6 +62,7 @@ func main() {
 		baseline  = flag.String("baseline", "", "comma-separated results/*.jsonl whose runs of the arms not run now join the summary")
 		evalSet   = flag.Bool("eval", false, "the published evaluation (docs/eval.md): its 9 scenarios, arms claudemd and stele (agentsmd and stele for Codex)")
 		out       = flag.String("out", "", "a folder under results/ for this eval's files (default: results/ itself)")
+		regradeIn = flag.String("regrade", "", "a results/<out>/<time> folder: grade its saved runs again from their diffs, with no agent, and print the grades")
 		cfg       config
 	)
 	flag.StringVar(&cfg.claude, "claude", "", "claude binary (default: newest VS Code extension's, else claude on PATH)")
@@ -168,6 +169,15 @@ func main() {
 		}
 	}
 
+	if *regradeIn != "" {
+		rs, err := regrade(cfg, *regradeIn, split(*scenarios))
+		if err != nil {
+			fail(err)
+		}
+		fmt.Print(string(newScrubber("").text([]byte(regradeReport(rs)))))
+		return
+	}
+
 	stamp := time.Now().Format("20060102-150405")
 	cfg.streamDir = filepath.Join(cfg.outDir, stamp)
 	if err := os.MkdirAll(cfg.streamDir, 0o755); err != nil {
@@ -217,7 +227,8 @@ func main() {
 			mu.Lock()
 			defer mu.Unlock()
 			if what := guard.leak(line); what != "" {
-				fail(fmt.Errorf("%s-%s-%d: its result still holds %s after scrubbing: not written", r.Scenario, r.Arm, r.Rep, what))
+				r = withoutLeaks(guard, r, what)
+				line, _ = json.Marshal(r)
 			}
 			results = append(results, r)
 			jsonl.Write(append(line, '\n'))
@@ -250,6 +261,32 @@ func main() {
 		fail(err)
 	}
 	fmt.Print(sum)
+}
+
+// withoutLeaks replaces each of a result's texts that still holds private
+// data with a marker, keeping how many there are, and says so in its error.
+// When the result still leaks, only its name and the error are kept.
+func withoutLeaks(s *scrubber, r Result, what string) Result {
+	clean := func(texts []string) {
+		for i, t := range texts {
+			if s.leak([]byte(t)) != "" {
+				texts[i] = "removed by the eval: private data"
+			}
+		}
+	}
+	clean(r.Violations)
+	clean(r.Guidance)
+	clean(r.Notes)
+	msg := "its result still held " + what + " after scrubbing: those texts were removed"
+	if s.leak([]byte(r.Error)) != "" {
+		r.Error = msg
+	} else {
+		r.Error = addError(r.Error, msg)
+	}
+	if line, _ := json.Marshal(r); s.leak(line) != "" {
+		r = Result{Scenario: r.Scenario, Arm: r.Arm, Rep: r.Rep, Model: r.Model, Agent: r.Agent, Error: "its result held private data after scrubbing: not kept"}
+	}
+	return r
 }
 
 // homeless replaces the user's home directory with ~, so a summary meant to

@@ -414,10 +414,44 @@ type checked struct {
 	truncated int
 }
 
-// checkRules runs stele check --all on a copy of repo that has the fixture's
-// rules, whatever the arm left of them, and returns what it found in every
-// project.
+// checkRules runs stele check --all for each of the fixture's stele.md
+// files, on a copy of repo that holds that one rules file, whatever the arm
+// left of the rules. So every file is graded against the rules of each
+// stele.md above it: the root's rules reach a subproject's files too. With
+// both files in one copy, stele check at the root skips the subproject ("in
+// subproject"), and the subproject's own check applies only its own rules,
+// so the root's unscoped rules would never reach its files. It returns
+// every finding once, with paths from the repository's root.
 func checkRules(cfg config, fixture, repo string, env []string) (checked, error) {
+	var out checked
+	seen := map[finding]bool{}
+	seenSkip := map[string]bool{}
+	for _, f := range ruleFiles(fixture) {
+		rel, _ := filepath.Rel(fixture, f)
+		c, err := checkProject(cfg, f, filepath.Dir(rel), repo, env)
+		if err != nil {
+			return out, err
+		}
+		for _, x := range c.findings {
+			if !seen[x] {
+				seen[x] = true
+				out.findings = append(out.findings, x)
+			}
+		}
+		for _, x := range c.skipped {
+			if !seenSkip[x] {
+				seenSkip[x] = true
+				out.skipped = append(out.skipped, x)
+			}
+		}
+		out.truncated += c.truncated
+	}
+	return out, nil
+}
+
+// checkProject runs stele check --all in project (a folder of repo, from
+// its root) on a copy of repo whose only rules file is rules.
+func checkProject(cfg config, rules, project, repo string, env []string) (checked, error) {
 	var out checked
 	graded, err := os.MkdirTemp("", "stele-eval-graded-")
 	if err != nil {
@@ -430,74 +464,72 @@ func checkRules(cfg config, fixture, repo string, env []string) (checked, error)
 	if err := copyTree(repo, graded, skip); err != nil {
 		return out, err
 	}
-	var projects []string
-	for _, f := range ruleFiles(fixture) {
-		rel, _ := filepath.Rel(fixture, f)
-		b, _ := os.ReadFile(f)
-		if err := os.WriteFile(filepath.Join(graded, rel), b, 0o644); err != nil {
-			return out, err
-		}
-		projects = append(projects, filepath.Dir(rel))
+	b, err := os.ReadFile(rules)
+	if err != nil {
+		return out, err
+	}
+	dir := filepath.Join(graded, project)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return out, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stele.md"), b, 0o644); err != nil {
+		return out, err
 	}
 	if _, err := run(graded, env, "git", "init", "-q", "-b", "main"); err != nil {
 		return out, err
 	}
-	for _, p := range projects {
-		if _, err := run(filepath.Join(graded, p), env, cfg.stele, "compile"); err != nil {
-			return out, err
-		}
+	if _, err := run(dir, env, cfg.stele, "compile"); err != nil {
+		return out, err
 	}
 	if err := commitAll(graded, env, "graded"); err != nil {
 		return out, err
 	}
 	// stele check --all checks tracked files: one a .gitignore keeps out is
 	// not checked, and is listed.
-	if ign, err := run(graded, env, "git", "-c", "core.quotepath=off", "ls-files", "--others", "--ignored", "--exclude-standard"); err == nil {
+	if ign, err := run(dir, env, "git", "-c", "core.quotepath=off", "ls-files", "--others", "--ignored", "--exclude-standard"); err == nil {
 		for _, f := range strings.Split(strings.TrimSpace(ign), "\n") {
 			// .stele/ is the graded copy's own, from stele compile.
 			if f = strings.TrimSpace(f); f != "" && !strings.HasPrefix(f, ".stele/") && !strings.Contains(f, "/.stele/") {
-				out.skipped = append(out.skipped, f+": ignored by .gitignore")
+				out.skipped = append(out.skipped, filepath.ToSlash(filepath.Join(project, f))+": ignored by .gitignore")
 			}
 		}
 	}
-	for _, p := range projects {
-		cmd := exec.Command(cfg.stele, "check", "--all", "--format", "json")
-		cmd.Dir = filepath.Join(graded, p)
-		cmd.Env = env
-		b, err := cmd.Output()
-		if err != nil && cmd.ProcessState.ExitCode() != 1 {
-			return out, fmt.Errorf("stele check in %s: %v", p, err)
-		}
-		var rep struct {
-			Problems   []struct{ Message string }
-			Violations []struct {
-				File     string `json:"file"`
-				Line     int    `json:"line"`
-				Message  string `json:"message"`
-				Excerpt  string `json:"excerpt"`
-				Blocking bool   `json:"blocking"`
-			}
-			Skipped []struct {
-				File   string `json:"file"`
-				Reason string `json:"reason"`
-			}
-			Truncated int `json:"truncated"`
-		}
-		if err := json.Unmarshal(b, &rep); err != nil {
-			return out, fmt.Errorf("stele check in %s: %v: %s", p, err, b)
-		}
-		for _, pr := range rep.Problems {
-			return out, fmt.Errorf("stele check in %s: rule problem: %s", p, pr.Message)
-		}
-		for _, v := range rep.Violations {
-			file := filepath.ToSlash(filepath.Join(p, v.File))
-			out.findings = append(out.findings, finding{File: file, Line: v.Line, Message: v.Message, Excerpt: v.Excerpt, Blocking: v.Blocking})
-		}
-		for _, s := range rep.Skipped {
-			out.skipped = append(out.skipped, filepath.ToSlash(filepath.Join(p, s.File))+": "+s.Reason)
-		}
-		out.truncated += rep.Truncated
+	cmd := exec.Command(cfg.stele, "check", "--all", "--format", "json")
+	cmd.Dir = dir
+	cmd.Env = env
+	b, err = cmd.Output()
+	if err != nil && cmd.ProcessState.ExitCode() != 1 {
+		return out, fmt.Errorf("stele check in %s: %v", project, err)
 	}
+	var rep struct {
+		Problems   []struct{ Message string }
+		Violations []struct {
+			File     string `json:"file"`
+			Line     int    `json:"line"`
+			Message  string `json:"message"`
+			Excerpt  string `json:"excerpt"`
+			Blocking bool   `json:"blocking"`
+		}
+		Skipped []struct {
+			File   string `json:"file"`
+			Reason string `json:"reason"`
+		}
+		Truncated int `json:"truncated"`
+	}
+	if err := json.Unmarshal(b, &rep); err != nil {
+		return out, fmt.Errorf("stele check in %s: %v: %s", project, err, b)
+	}
+	for _, pr := range rep.Problems {
+		return out, fmt.Errorf("stele check in %s: rule problem: %s", project, pr.Message)
+	}
+	for _, v := range rep.Violations {
+		file := filepath.ToSlash(filepath.Join(project, v.File))
+		out.findings = append(out.findings, finding{File: file, Line: v.Line, Message: v.Message, Excerpt: v.Excerpt, Blocking: v.Blocking})
+	}
+	for _, s := range rep.Skipped {
+		out.skipped = append(out.skipped, filepath.ToSlash(filepath.Join(project, s.File))+": "+s.Reason)
+	}
+	out.truncated += rep.Truncated
 	return out, nil
 }
 

@@ -88,12 +88,15 @@ Every run is graded the same way, whatever its arm. The grader is
 
 1. The final tree is copied. Left out of the copy, at any depth: `.git/`,
    `.stele/`, `.claude/`, `.codex/`, `CLAUDE.md`, `AGENTS.md`, `stele.md`,
-   `stele.lock` and `__pycache__/`. Then the scenario's original `stele.md`
-   files are put back. So an agent that edited or deleted the rules is still
-   graded against them. If the agent changed one of the files left out, the
-   run's notes list it as "not graded: changed by the agent".
-2. `stele check --all` runs in each project. Each finding of a blocking rule
-   is a violation.
+   `stele.lock` and `__pycache__/`. If the agent changed one of the files
+   left out, the run's notes list it as "not graded: changed by the agent".
+2. For each of the scenario's original `stele.md` files, the copy gets that
+   one file back, and `stele check --all` runs in its folder. So an agent
+   that edited or deleted the rules is still graded against them, and every
+   file is graded against the rules of each `stele.md` above it. In
+   `subproject`, the root's "no `TODO`" rule reaches `services/api` too, as
+   it does in `CLAUDE.md`. stele itself checks a subproject only against its
+   own rules. Each finding of a blocking rule is a violation.
 3. Each scenario adds its own checks: the secret is nowhere in the repository,
    the merged migration is unchanged, and the task was done.
 
@@ -143,6 +146,9 @@ go run ./test/functional/agent -eval -reps 1 -model claude-sonnet-5-5 -out eval-
 - `-eval` runs the 9 scenarios above in the `claudemd` and `stele` arms.
 - `-reps` is the number of runs per scenario and arm.
 - `-out` names the results folder, under `test/functional/agent/results/`.
+- `-regrade <results>/<time>` grades saved runs again with today's grader,
+  with no agent and no cost: it sets each run up again and applies its saved
+  diff. Binary files aren't in a diff; they are listed as not restored.
 - `-parallel` is the number of runs at once: 2 with `-eval`, 3 otherwise.
   More agents at once ran one machine short of memory (experiment 7).
 
@@ -188,7 +194,8 @@ So the harness:
   `<run>`, `<tmp>` and `~`, in every spelling: Windows and forward slashes,
   JSON-escaped once or twice, MSYS, Claude Code's project folder name, 8.3
   short names. Only whole paths: `/home/al` is left alone in `/home/alice`;
-- replaces your account name with `<user>`;
+- replaces your account name with `<user>`, unless it is a common one
+  (`root`, `admin`, `user`, `runner`, `dev`, `test`);
 - replaces the account's ids and email from Claude Code's `.claude.json`,
   and your git `user.email`, with `<account>` and `<email>`;
 - drops the account details: the `credential_org` and
@@ -206,8 +213,9 @@ So the harness:
 Then it searches the run's files for the home folder, your account name,
 the account's ids and emails, and the organization ids it saw. A file that
 still holds one is replaced by a one-line marker, and the run gets an error.
-The summary and the results line of each run are checked the same way; a
-find stops the eval before anything is written. The code is
+The results line of each run is checked the same way: a text that still
+holds one is replaced by a marker, and the run gets an error. The summary is
+checked too; a find there stops the eval before it is written. The code is
 [scrub.go](../test/functional/agent/scrub.go).
 
 ## Cost per run

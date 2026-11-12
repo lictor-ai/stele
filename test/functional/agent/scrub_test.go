@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -170,5 +171,26 @@ func TestHomeless(t *testing.T) {
 	t.Setenv("USERPROFILE", root)
 	if in := root + "bin"; homeless(in) != in {
 		t.Errorf("homeless(%q) = %q with home at the root, want it unchanged", in, homeless(in))
+	}
+}
+
+func TestCommonAccountNameKept(t *testing.T) {
+	s := newScrubberFor(scrubEnv{user: "Runner"})
+	in := "the runner ran as root"
+	if got := string(s.paths([]byte(in))); got != in {
+		t.Errorf("paths = %q, want %q unchanged", got, in)
+	}
+}
+
+func TestWithoutLeaks(t *testing.T) {
+	s := newScrubberFor(fakeEnv(t))
+	r := Result{Scenario: "a", Arm: "stele", Rep: 1, Error: "boom",
+		Grade: Grade{Violations: []string{"x.go:1: fine", "y.go:2: owned by fakeuser"}, Notes: []string{"note"}}}
+	got := withoutLeaks(s, r, "the account name")
+	if want := []string{"x.go:1: fine", "removed by the eval: private data"}; !slices.Equal(got.Violations, want) {
+		t.Errorf("violations = %q, want %q", got.Violations, want)
+	}
+	if !strings.HasPrefix(got.Error, "boom; its result still held the account name") {
+		t.Errorf("error = %q", got.Error)
 	}
 }
