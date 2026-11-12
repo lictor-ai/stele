@@ -49,9 +49,8 @@ type config struct {
 	timeout              time.Duration
 	scenarioDir, outDir  string
 	streamDir            string
-	gitEmail             string // the user's git user.email: no file under results/ may hold it
-	keep                 bool   // keep each run's temporary tree
-	rtk                  bool   // add the user's rtk hook, and nothing else of theirs
+	keep                 bool // keep each run's temporary tree
+	rtk                  bool // add the user's rtk hook, and nothing else of theirs
 }
 
 func main() {
@@ -139,7 +138,6 @@ func main() {
 	default:
 		fail(fmt.Errorf("unknown agent %q", cfg.agent))
 	}
-	cfg.gitEmail = gitUserEmail(here)
 	var steleDesc string
 	if cfg.stele != "" {
 		steleDesc = cfg.stele + ", given with -stele: " + buildInfo(cfg.stele)
@@ -205,6 +203,9 @@ func main() {
 		wg      sync.WaitGroup
 		sem     = make(chan struct{}, max(1, *parallel))
 	)
+	// The last check before results/: nothing written there may hold the
+	// home directory, the account name or the account's emails and ids.
+	guard := newScrubber("")
 	for _, j := range jobs {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -215,6 +216,9 @@ func main() {
 			line, _ := json.Marshal(r)
 			mu.Lock()
 			defer mu.Unlock()
+			if what := guard.leak(line); what != "" {
+				fail(fmt.Errorf("%s-%s-%d: its result still holds %s after scrubbing: not written", r.Scenario, r.Arm, r.Rep, what))
+			}
 			results = append(results, r)
 			jsonl.Write(append(line, '\n'))
 			fmt.Fprintf(os.Stderr, "%-18s %-8s #%d  %6.1fs  $%.3f  compliant=%v task_ok=%v denies=%d blocks=%d %s\n",
@@ -238,7 +242,10 @@ func main() {
 		"stele: " + homeless(steleDesc) + ".",
 		"Command: `go run ./test/functional/agent " + homeless(strings.Join(os.Args[1:], " ")) + "`.",
 	}
-	sum := string(newScrubber("").text([]byte(summary(results, cfg.model, about))))
+	sum := string(guard.text([]byte(summary(results, cfg.model, about))))
+	if what := guard.leak([]byte(sum)); what != "" {
+		fail(fmt.Errorf("the summary still holds %s after scrubbing: not written", what))
+	}
 	if err := os.WriteFile(filepath.Join(cfg.outDir, stamp+".md"), []byte(sum), 0o644); err != nil {
 		fail(err)
 	}
@@ -255,14 +262,6 @@ func homeless(s string) string {
 	}
 	re := regexp.MustCompile(caseFold + regexp.QuoteMeta(home) + `([\\/]|$|[^\w.-])`)
 	return re.ReplaceAllString(s, "~$1")
-}
-
-// gitUserEmail is git's user.email in dir, or "".
-func gitUserEmail(dir string) string {
-	cmd := exec.Command("git", "config", "user.email")
-	cmd.Dir = dir
-	b, _ := cmd.Output()
-	return strings.TrimSpace(string(b))
 }
 
 // buildInfo says what a stele binary was built from: its module version,

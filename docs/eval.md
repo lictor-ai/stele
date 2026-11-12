@@ -180,21 +180,35 @@ In `test/functional/agent/results/<out>/`:
 Streams and transcripts are kept in git only for folders named `eval-*`.
 
 **Everything under `results/` is scrubbed before it is written.** Claude
-Code's transcript holds the account's email and organization, and local
-paths name the user. So the harness:
+Code's transcript holds the account's email and organization, local paths
+and `ls -l` output name the user, and some lines hold the whole API request.
+So the harness:
 
 - replaces the run's folder, the temp folder and the home folder with
-  `<run>`, `<tmp>` and `~`, in every spelling (Windows and forward slashes,
-  JSON-escaped, MSYS, Claude Code's project folder name, 8.3 short names);
+  `<run>`, `<tmp>` and `~`, in every spelling: Windows and forward slashes,
+  JSON-escaped once or twice, MSYS, Claude Code's project folder name, 8.3
+  short names. Only whole paths: `/home/al` is left alone in `/home/alice`;
+- replaces your account name with `<user>`;
+- replaces the account's ids and email from Claude Code's `.claude.json`,
+  and your git `user.email`, with `<account>` and `<email>`;
 - drops the account details: the `credential_org` and
-  `remote_session_change` attachments, `userEmail`, `organizationUuid`,
-  `accountUuid`, `emailAddress`, `oauthAccount`, `userID`, `memory_paths`,
-  and plugin paths;
-- replaces every other email with `<email>`.
+  `remote_session_change` attachments (with their rendered text),
+  `userEmail`, `organizationUuid`, `accountUuid`, `emailAddress`,
+  `oauthAccount`, `userID`, `memory_paths`, their snake_case forms, and
+  plugin paths;
+- replaces each `api-request-blob` line, the raw API request with Claude
+  Code's system prompt, with a line saying it was removed;
+- in streams and transcripts, replaces every other email with `<email>`,
+  except addresses at the example domains (`example.com`, `.test`, ...)
+  and `git@` hosts. Diffs and setup files get only the path, name and
+  account replacements, so the agent's code keeps its own example emails.
 
-Then it searches the run's files for the home folder, your git
-`user.email` and the organization ids it saw. If it finds one, the run gets
-an error. The code is [scrub.go](../test/functional/agent/scrub.go).
+Then it searches the run's files for the home folder, your account name,
+the account's ids and emails, and the organization ids it saw. A file that
+still holds one is replaced by a one-line marker, and the run gets an error.
+The summary and the results line of each run are checked the same way; a
+find stops the eval before anything is written. The code is
+[scrub.go](../test/functional/agent/scrub.go).
 
 ## Cost per run
 

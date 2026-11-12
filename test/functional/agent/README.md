@@ -110,7 +110,7 @@ Every arm is graded the same way. The final tree is copied, the fixture's `stele
 
 A finding the grade does not count is still listed in the run's notes: a line the fixture already had (each old line excuses one finding per rule), a non-blocking rule, a file `stele check` did not check (binary, too large, or ignored by a `.gitignore`), findings past its limit of 100 per rule and file, and the rule files and agent setup the agent changed, which the grader leaves out.
 
-Everything written under `results/` is scrubbed first ([scrub.go](scrub.go)): local paths become `<run>`, `<tmp>` and `~`, the account details in Claude Code's transcript are dropped, and emails become `<email>`. Then the run's files are searched for the home directory, your git `user.email` and any organization id seen; a find is the run's error. A transcript that cannot be found is an error too: the post-write flags were not counted.
+Everything written under `results/` is scrubbed first ([scrub.go](scrub.go)): local paths become `<run>`, `<tmp>` and `~`, your account name `<user>`, the account details in Claude Code's transcript and its `api-request-blob` lines are dropped, and emails other than example ones become `<email>`. Then the run's files are searched for the home directory, your account name, the account's ids and emails (`.claude.json`, git's `user.email`) and any organization id seen. A file that still holds one is replaced by a one-line marker, and the run gets an error. The summary and each results line are checked too: a find stops the eval. A transcript or Codex rollout that cannot be found is an error as well: the post-write flags were not counted.
 
 The reported counts:
 

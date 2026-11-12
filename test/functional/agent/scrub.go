@@ -5,19 +5,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // What a run leaves under results/ is meant to be published, so it is
 // scrubbed first: the run's work directory, the temp directory and the
-// home directory become <run>, <tmp> and ~, the account details Claude Code
-// writes into its transcript are dropped, and emails become <email>.
+// home directory become <run>, <tmp> and ~, the user's account name
+// becomes <user>, the account details Claude Code writes into its
+// transcript are dropped, and emails become <email>.
 
-// pathRule replaces one spelling of a local path.
+// scrubEnv is what the scrubber hides. Tests set it; newScrubber reads it
+// from the machine.
+type scrubEnv struct {
+	work, tmp, home string
+	user            string   // the account name, without a domain
+	account         []string // the account's emails and ids: .claude.json, git's user.email
+}
+
+// pathRule replaces one spelling of a local path or name.
 type pathRule struct {
 	re   *regexp.Regexp
 	with string
@@ -26,27 +38,107 @@ type pathRule struct {
 
 // scrubber scrubs one run's files.
 type scrubber struct {
-	rules []pathRule
-	home  []*regexp.Regexp // every spelling of the home directory, for leak
+	rules   []pathRule
+	home    []*regexp.Regexp // every spelling of the home directory, for leak
+	user    *regexp.Regexp   // the account name, or nil
+	account []string
+	accRe   []pathRule // account, as case-insensitive rules
 	// orgs are the organizationUuid values seen while scrubbing, which
 	// leak looks for afterwards.
 	orgs map[string]bool
 }
 
-// newScrubber scrubs the run whose work directory is work ("" for none).
+// newScrubber scrubs the run whose work directory is work ("" for none),
+// on this machine.
 func newScrubber(work string) *scrubber {
+	env := machineEnv()
+	env.work = work
+	return newScrubberFor(env)
+}
+
+var (
+	machineOnce sync.Once
+	machine     scrubEnv
+)
+
+// machineEnv reads, once, what this machine has to hide.
+func machineEnv() scrubEnv {
+	machineOnce.Do(func() {
+		machine.tmp = os.TempDir()
+		machine.home, _ = os.UserHomeDir()
+		if u, err := user.Current(); err == nil {
+			name := u.Username
+			if i := strings.LastIndex(name, `\`); i >= 0 {
+				name = name[i+1:]
+			}
+			machine.user = name
+		}
+		machine.account = claudeAccount(machine.home)
+		if out, err := exec.Command("git", "config", "user.email").Output(); err == nil {
+			if e := strings.TrimSpace(string(out)); e != "" {
+				machine.account = append(machine.account, e)
+			}
+		}
+	})
+	return machine
+}
+
+// claudeAccount returns the account's organization and account ids and its
+// email, from Claude Code's .claude.json: under CLAUDE_CONFIG_DIR, else in
+// the home directory. They are never printed.
+func claudeAccount(home string) []string {
+	path := filepath.Join(home, ".claude.json")
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		path = filepath.Join(dir, ".claude.json")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var cfg struct {
+		OAuthAccount struct {
+			OrganizationUUID string `json:"organizationUuid"`
+			AccountUUID      string `json:"accountUuid"`
+			EmailAddress     string `json:"emailAddress"`
+		} `json:"oauthAccount"`
+	}
+	if json.Unmarshal(b, &cfg) != nil {
+		return nil
+	}
+	var out []string
+	for _, v := range []string{cfg.OAuthAccount.OrganizationUUID, cfg.OAuthAccount.AccountUUID, cfg.OAuthAccount.EmailAddress} {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func newScrubberFor(env scrubEnv) *scrubber {
 	s := &scrubber{orgs: map[string]bool{}}
-	home, _ := os.UserHomeDir()
-	for _, p := range []struct{ path, with string }{{work, "<run>"}, {os.TempDir(), "<tmp>"}, {home, "~"}} {
-		for _, sp := range spellings(p.path) {
-			re := regexp.MustCompile(caseFold + regexp.QuoteMeta(sp))
-			s.rules = append(s.rules, pathRule{re, p.with, len(sp)})
+	for _, p := range []struct{ path, with string }{{env.work, "<run>"}, {env.tmp, "<tmp>"}, {env.home, "~"}} {
+		for _, r := range pathRules(p.path, p.with) {
+			s.rules = append(s.rules, r)
 			if p.with == "~" {
-				s.home = append(s.home, re)
+				s.home = append(s.home, r.re)
 			}
 		}
 	}
 	slices.SortStableFunc(s.rules, func(a, b pathRule) int { return b.n - a.n })
+	if len(env.user) >= 3 {
+		s.user = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(env.user) + `\b`)
+	}
+	for _, a := range env.account {
+		if len(a) < 3 {
+			continue
+		}
+		with := "<account>"
+		if strings.Contains(a, "@") {
+			with = "<email>"
+		}
+		s.account = append(s.account, a)
+		s.accRe = append(s.accRe, pathRule{re: regexp.MustCompile(`(?i)` + regexp.QuoteMeta(a)), with: with})
+	}
 	return s
 }
 
@@ -58,14 +150,29 @@ var caseFold = func() string {
 	return ""
 }()
 
-var drivePath = regexp.MustCompile(`^([A-Za-z]):[\\/](.*)$`)
-var notAlnum = regexp.MustCompile(`[^A-Za-z0-9]`)
+var (
+	drivePath = regexp.MustCompile(`^([A-Za-z]):[\\/](.*)$`)
+	notAlnum  = regexp.MustCompile(`[^A-Za-z0-9]`)
+	pathSep   = regexp.MustCompile(`[\\/]`)
+)
 
-// spellings are the ways path p can appear in a stream or transcript: as
-// is, JSON-escaped, with forward slashes, as MSYS writes it (/c/Users/x),
-// as Claude Code's project folder slug (C--Users-x), and in its long and
-// 8.3 short forms on Windows. A root, or "", has none.
-func spellings(p string) []string {
+// Around a path: what may come before it (not part of a longer path, or a
+// JSON escape such as \n), and after it (a separator, the end, or a
+// character no name goes on with).
+const (
+	before = `(^|[^A-Za-z0-9_.\-\\/]|\\[nrt"])`
+	after  = `((?:\\+|/)|$|[^A-Za-z0-9_.\-]|\.(?:\s|$))`
+	// A slug goes on with -.
+	afterSlug = `(-|$|[^A-Za-z0-9_.])`
+)
+
+// pathRules are the ways path p can appear in a stream or transcript, each
+// one regexp: its parts joined by any run of backslashes or a slash, which
+// covers it as is, JSON-escaped once or twice, and with forward slashes;
+// as MSYS writes it (/c/Users/x); and as Claude Code's project folder slug
+// (C--Users-x). Each comes in its long and 8.3 short forms on Windows. A
+// root, or "", has none.
+func pathRules(p, with string) []pathRule {
 	if p == "" || filepath.Dir(p) == p {
 		return nil
 	}
@@ -73,28 +180,57 @@ func spellings(p string) []string {
 	if r, err := filepath.EvalSymlinks(p); err == nil {
 		forms = append(forms, r)
 	}
-	var out []string
+	var spellings []string // each a regexp
 	for _, f := range forms {
 		if f == "" || filepath.Dir(f) == f {
 			continue
 		}
-		fwd := strings.ReplaceAll(f, `\`, "/")
-		out = append(out, f, strings.ReplaceAll(f, `\`, `\\`), fwd)
+		spellings = append(spellings, before+sepFlexible(f)+after)
 		if m := drivePath.FindStringSubmatch(f); m != nil {
-			out = append(out, "/"+strings.ToLower(m[1])+"/"+strings.ReplaceAll(m[2], `\`, "/"))
+			spellings = append(spellings, before+sepFlexible("/"+m[1]+"/"+m[2])+after)
 		}
 		// A slug of a one-part path (-tmp) would match ordinary words.
-		if strings.Count(strings.Trim(fwd, "/"), "/") >= 1 {
-			out = append(out, notAlnum.ReplaceAllString(f, "-"))
+		if strings.Count(strings.Trim(filepath.ToSlash(f), "/"), "/") >= 1 {
+			spellings = append(spellings, `(^|[^A-Za-z0-9_.\-])`+regexp.QuoteMeta(notAlnum.ReplaceAllString(f, "-"))+afterSlug)
 		}
 	}
-	slices.Sort(out)
-	return slices.Compact(out)
+	slices.Sort(spellings)
+	var out []pathRule
+	for _, sp := range slices.Compact(spellings) {
+		out = append(out, pathRule{regexp.MustCompile(caseFold + sp), with, len(sp)})
+	}
+	return out
 }
 
-// paths replaces every spelling of the work, temp and home directories.
+// sepFlexible is a regexp for path p with each separator matching any run
+// of backslashes or a slash.
+func sepFlexible(p string) string {
+	parts := pathSep.Split(p, -1)
+	for i, x := range parts {
+		parts[i] = regexp.QuoteMeta(x)
+	}
+	return strings.Join(parts, `(?:\\+|/)`)
+}
+
+// paths replaces every spelling of the work, temp and home directories,
+// the account name, and the account's emails and ids. It is all a diff or
+// a setup file gets: the agent's code keeps its own example emails.
 func (s *scrubber) paths(b []byte) []byte {
 	for _, r := range s.rules {
+		// A match takes the character around it, so two paths one
+		// character apart need a second pass.
+		for i := 0; i < 4; i++ {
+			next := r.re.ReplaceAll(b, []byte("${1}"+r.with+"${2}"))
+			if bytes.Equal(next, b) {
+				break
+			}
+			b = next
+		}
+	}
+	if s.user != nil {
+		b = s.user.ReplaceAllLiteral(b, []byte("<user>"))
+	}
+	for _, r := range s.accRe {
 		b = r.re.ReplaceAllLiteral(b, []byte(r.with))
 	}
 	return b
@@ -102,14 +238,33 @@ func (s *scrubber) paths(b []byte) []byte {
 
 var email = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}`)
 
-// keptEmails are not anyone's: the harness's commit author, and the
-// address of a trailer the agent may write.
-var keptEmails = []string{"eval@example.com", "noreply@anthropic.com"}
+// keptEmail reports an address that is no one's: the harness's commit
+// author, the address of a trailer the agent may write, a git host, or one
+// at a domain reserved for examples and tests (RFC 2606, RFC 6761).
+func keptEmail(m string) bool {
+	m = strings.ToLower(m)
+	if m == "noreply@anthropic.com" || strings.HasPrefix(m, "git@") {
+		return true
+	}
+	domain := m[strings.LastIndex(m, "@")+1:]
+	for _, d := range []string{"example.com", "example.org", "example.net"} {
+		if domain == d || strings.HasSuffix(domain, "."+d) {
+			return true
+		}
+	}
+	for _, tld := range []string{".test", ".example", ".invalid", ".localhost"} {
+		if strings.HasSuffix(domain, tld) {
+			return true
+		}
+	}
+	return false
+}
 
-// text scrubs plain text: paths, then emails.
+// text scrubs a stream or transcript's text: paths, then every email but
+// the kept ones.
 func (s *scrubber) text(b []byte) []byte {
 	return email.ReplaceAllFunc(s.paths(b), func(m []byte) []byte {
-		if slices.Contains(keptEmails, strings.ToLower(string(m))) {
+		if keptEmail(string(m)) {
 			return m
 		}
 		return []byte("<email>")
@@ -117,7 +272,10 @@ func (s *scrubber) text(b []byte) []byte {
 }
 
 // droppedKeys are account details, dropped at any depth.
-var droppedKeys = []string{"organizationUuid", "accountUuid", "emailAddress", "oauthAccount", "userID", "memory_paths"}
+var droppedKeys = []string{
+	"organizationUuid", "accountUuid", "emailAddress", "oauthAccount", "userID", "memory_paths",
+	"organization_uuid", "account_uuid", "email_address", "user_id",
+}
 
 // droppedAttachments are attachments about the account or the user's other
 // sessions; remote_session_change carries their commit trailers.
@@ -133,9 +291,15 @@ func (s *scrubber) transcriptLine(line []byte) []byte {
 		return s.text(line)
 	}
 	s.collectOrgs(ev)
+	if ev["type"] == "api-request-blob" {
+		// The whole API request, Claude Code's system prompt included.
+		return []byte(`{"type":"api-request-blob","removed":"by the eval: the raw API request"}`)
+	}
 	if a, ok := ev["attachment"].(map[string]any); ok {
 		if t, _ := a["type"].(string); slices.Contains(droppedAttachments, t) {
 			ev["attachment"] = map[string]any{"type": t, "removed": "by the eval: account details"}
+			// The same attachment, as Claude Code shows it.
+			delete(ev, "rendered")
 		} else if c, ok := a["context"].(map[string]any); ok {
 			delete(c, "userEmail")
 		}
@@ -173,7 +337,7 @@ func (s *scrubber) collectOrgs(v any) {
 	switch v := v.(type) {
 	case map[string]any:
 		for k, x := range v {
-			if str, ok := x.(string); ok && k == "organizationUuid" && str != "" {
+			if str, ok := x.(string); ok && (k == "organizationUuid" || k == "organization_uuid") && str != "" {
 				s.orgs[str] = true
 			}
 			s.collectOrgs(x)
@@ -202,19 +366,25 @@ func dropKeys(v any) {
 }
 
 // leak says what private data b still holds: the home directory, the
-// user's git email, or an organizationUuid seen while scrubbing. "" when
-// none.
-func (s *scrubber) leak(b []byte, gitEmail string) string {
+// account name, the account's emails and ids, or an organizationUuid seen
+// while scrubbing. "" when none. It never says the value.
+func (s *scrubber) leak(b []byte) string {
 	for _, re := range s.home {
 		if re.Match(b) {
 			return "the home directory"
 		}
 	}
-	if gitEmail != "" && bytes.Contains(bytes.ToLower(b), []byte(strings.ToLower(gitEmail))) {
-		return "the git user.email"
+	if s.user != nil && s.user.Match(b) {
+		return "the account name"
+	}
+	low := bytes.ToLower(b)
+	for _, a := range s.account {
+		if bytes.Contains(low, []byte(strings.ToLower(a))) {
+			return "an account email or id"
+		}
 	}
 	for o := range s.orgs {
-		if bytes.Contains(b, []byte(o)) {
+		if bytes.Contains(low, []byte(strings.ToLower(o))) {
 			return "an organizationUuid"
 		}
 	}
@@ -227,8 +397,9 @@ func writeScrubbed(path string, b []byte, how func([]byte) []byte) error {
 }
 
 // checkLeaks reads every file of one run under results (base.* and the
-// base.setup folder) and reports the first that still holds private data.
-func (s *scrubber) checkLeaks(base, gitEmail string) error {
+// base.setup folder). A file that still holds private data is replaced by
+// a one-line marker, and named in the error.
+func (s *scrubber) checkLeaks(base string) error {
 	files, _ := filepath.Glob(base + ".*")
 	var all []string
 	for _, f := range files {
@@ -239,14 +410,19 @@ func (s *scrubber) checkLeaks(base, gitEmail string) error {
 			return nil
 		})
 	}
+	var found []string
 	for _, f := range all {
 		b, err := os.ReadFile(f)
 		if err != nil {
 			continue
 		}
-		if what := s.leak(b, gitEmail); what != "" {
-			return fmt.Errorf("%s still holds %s after scrubbing", filepath.Base(f), what)
+		if what := s.leak(b); what != "" {
+			os.WriteFile(f, []byte("removed by the eval: it still held "+what+" after scrubbing\n"), 0o644)
+			found = append(found, filepath.Base(f)+" ("+what+")")
 		}
+	}
+	if len(found) > 0 {
+		return fmt.Errorf("removed after scrubbing, private data left: %s", strings.Join(found, ", "))
 	}
 	return nil
 }

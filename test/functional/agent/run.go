@@ -90,9 +90,9 @@ func runOne(cfg config, scenario, arm string, rep int) (r Result) {
 			r.Notes[i] = string(sc.text([]byte(r.Notes[i])))
 		}
 		for i := range r.Violations {
-			r.Violations[i] = string(sc.text([]byte(r.Violations[i])))
+			r.Violations[i] = string(sc.paths([]byte(r.Violations[i])))
 		}
-		if err := sc.checkLeaks(base, cfg.gitEmail); err != nil {
+		if err := sc.checkLeaks(base); err != nil {
 			r.Error = addError(r.Error, err.Error())
 		}
 	}()
@@ -112,7 +112,7 @@ func runOne(cfg config, scenario, arm string, rep int) (r Result) {
 		return r
 	}
 
-	if err := saveSetup(repo, prompt, base+".setup", sc.text); err != nil {
+	if err := saveSetup(repo, prompt, base+".setup", sc.paths); err != nil {
 		r.Error = "saving the setup: " + err.Error()
 		return r
 	}
@@ -128,6 +128,9 @@ func runOne(cfg config, scenario, arm string, rep int) (r Result) {
 		// codex exec reports no durations: the wall time stands in.
 		r.DurationMS = r.WallMS
 		transcript = readRollout(cfg, readCodexStream(stream, &r), &r)
+		if transcript == nil {
+			r.Error = addError(r.Error, "rollout not found: post-write flags not counted")
+		}
 		if b, err := os.ReadFile(strings.TrimSuffix(stream, ".jsonl") + ".stderr.txt"); err == nil {
 			writeScrubbed(base+".stderr.txt", b, sc.text)
 		}
@@ -155,7 +158,7 @@ func runOne(cfg config, scenario, arm string, rep int) (r Result) {
 	r.Grade = g
 	if _, err := run(repo, env, "git", "add", "-A"); err == nil {
 		if diff, err := run(repo, env, "git", "diff", "--cached", "HEAD"); err == nil {
-			writeScrubbed(base+".diff", []byte(diff), sc.text)
+			writeScrubbed(base+".diff", []byte(diff), sc.paths)
 		}
 		if names, err := run(repo, env, "git", "-c", "core.quotepath=off", "diff", "--cached", "--name-only", "HEAD"); err == nil {
 			if ung := ungraded(strings.Split(strings.TrimSpace(names), "\n")); len(ung) > 0 {
@@ -173,7 +176,7 @@ func runOne(cfg config, scenario, arm string, rep int) (r Result) {
 func ungraded(names []string) []string {
 	var out []string
 	for _, n := range names {
-		if n == ".claude/rules/stele-rules.md" {
+		if n == ".claude/rules/stele-rules.md" || strings.HasSuffix(n, "/.claude/rules/stele-rules.md") {
 			continue
 		}
 		for _, seg := range strings.Split(n, "/") {

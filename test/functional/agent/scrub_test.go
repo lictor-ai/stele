@@ -28,9 +28,20 @@ func jsonEscaped(t *testing.T, s string) string {
 	return strings.Trim(string(b), `"`)
 }
 
+// fakeEnv is a scrubEnv of made-up values, under temp directories.
+func fakeEnv(t *testing.T) scrubEnv {
+	return scrubEnv{
+		work:    t.TempDir(),
+		tmp:     os.TempDir(),
+		home:    t.TempDir(),
+		user:    "fakeuser",
+		account: []string{"00000000-0000-4000-8000-0000000000c1", "owner@account.test"},
+	}
+}
+
 func TestScrubTranscript(t *testing.T) {
-	home := fakeHome(t)
-	work := t.TempDir()
+	env := fakeEnv(t)
+	home := env.home
 	fwd := filepath.ToSlash(home)
 	msys := fwd
 	if m := drivePath.FindStringSubmatch(home); m != nil {
@@ -42,30 +53,41 @@ func TestScrubTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := strings.NewReplacer(
-		"{{HOME}}", jsonEscaped(t, home), "{{WORK}}", jsonEscaped(t, work),
-		"{{FWD}}", fwd, "{{MSYS}}", msys, "{{SLUG}}", slug,
+		"{{HOME}}", jsonEscaped(t, home), "{{WORK}}", jsonEscaped(t, env.work),
+		"{{FWD}}", fwd, "{{MSYS}}", msys, "{{SLUG}}", slug, "{{USER}}", "FakeUser",
 	).Replace(strings.ReplaceAll(string(raw), "\r\n", "\n"))
+	// Hook output nested in a tool result: a path escaped twice.
+	nested, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{
+		"content": `{"cwd":"` + jsonEscaped(t, filepath.Join(home, "proj")) + `"}`}})
+	in += string(nested) + "\n"
 
-	s := newScrubber(work)
+	s := newScrubberFor(env)
 	out := string(s.jsonl([]byte(in)))
 
-	if what := s.leak([]byte(out), "fake.person@example.net"); what != "" {
+	if what := s.leak([]byte(out)); what != "" {
 		t.Errorf("scrubbed transcript still holds %s:\n%s", what, out)
 	}
 	for _, gone := range []string{
-		"fake.person@example.net", "Co-Authored-By", "Fake Person", "Fake Org",
+		"fake.person@corp.internal", "Co-Authored-By", "Fake Person", "Fake Org",
 		"00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b",
-		"memory_paths", "userID", "fake-user-id", "oauthAccount", "userEmail", `"path"`,
+		"00000000-0000-4000-8000-0000000000c1", "OWNER@ACCOUNT.TEST",
+		"memory_paths", "userID", "user_id", "fake-user-id", "oauthAccount", "userEmail", `"path"`,
+		"FAKE-SYSTEM-PROMPT", "FakeUser 197121", "owner FakeUser,", "~ice",
 	} {
 		if strings.Contains(out, gone) {
 			t.Errorf("scrubbed transcript still holds %q:\n%s", gone, out)
 		}
 	}
 	for _, kept := range []string{
-		`"cwd":"<run>"`, `"cwd":"~"`, "eval@example.com", "mail <email>",
-		"see ~/a, ~/b and ~-c", "12345678901234567890", `"name":"fake-plugin"`,
-		`"type":"credential_org"`, "not JSON: ~",
+		`"cwd":"<run>"`, `"cwd":"~"`, "mail <email>, eval@example.com, dev@example.org, a@b.test or git@github.com:o/r",
+		"see ~/a, ~/b, ~-c and <tmp>/", "ice/d", "12345678901234567890", `"name":"fake-plugin"`,
+		`"type":"credential_org"`, "not JSON: ~", "1 <user> 197121", "owner <user>, not FakeUserx",
+		"account <account> and <email>", `{"type":"api-request-blob","removed":"by the eval: the raw API request"}`,
+		`{\"cwd\":\"~\\\\proj\"}`,
 	} {
+		if strings.Contains(kept, `~\\\\proj`) && filepath.Separator == '/' {
+			kept = `{\"cwd\":\"~/proj\"}`
+		}
 		if !strings.Contains(out, kept) {
 			t.Errorf("scrubbed transcript lacks %q:\n%s", kept, out)
 		}
@@ -73,27 +95,60 @@ func TestScrubTranscript(t *testing.T) {
 	if !s.orgs["00000000-0000-4000-8000-00000000000a"] {
 		t.Errorf("organizationUuid not recorded: %v", s.orgs)
 	}
-	if what := s.leak([]byte(in), ""); what == "" {
+	if what := s.leak([]byte(in)); what == "" {
 		t.Error("leak found nothing in the raw transcript")
 	}
 }
 
+func TestPathsKeepTheAgentsEmails(t *testing.T) {
+	s := newScrubberFor(fakeEnv(t))
+	in := "+// Contact: maintainer@corp.internal, owner@account.test\n"
+	want := "+// Contact: maintainer@corp.internal, <email>\n"
+	if got := string(s.paths([]byte(in))); got != want {
+		t.Errorf("paths = %q, want %q", got, want)
+	}
+}
+
+func TestPathBoundaries(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "al")
+	s := newScrubberFor(scrubEnv{home: home})
+	sep := string(filepath.Separator)
+	for in, want := range map[string]string{
+		home + sep + "x":                  "~" + sep + "x",
+		"(" + home + ")":                  "(~)",
+		home + "ice" + sep + "x":          home + "ice" + sep + "x",
+		filepath.Join(base, "var", "al"):  filepath.Join(base, "var", "al"),
+		"cd " + home + ". Then":           "cd ~. Then",
+		"two: " + home + ";" + home + sep: "two: ~;~" + sep,
+	} {
+		if got := string(s.paths([]byte(in))); got != want {
+			t.Errorf("paths(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestCheckLeaks(t *testing.T) {
-	home := fakeHome(t)
+	env := fakeEnv(t)
 	dir := t.TempDir()
 	base := filepath.Join(dir, "go-logging-stele-1")
 	if err := os.MkdirAll(base+".setup", 0o755); err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(base+".diff", []byte("clean"), 0o644)
-	os.WriteFile(filepath.Join(dir, "go-logging-stele-10.diff"), []byte(home), 0o644) // another run
-	s := newScrubber("")
-	if err := s.checkLeaks(base, "fake.person@example.net"); err != nil {
+	os.WriteFile(filepath.Join(dir, "go-logging-stele-10.diff"), []byte(env.home), 0o644) // another run
+	s := newScrubberFor(env)
+	if err := s.checkLeaks(base); err != nil {
 		t.Errorf("checkLeaks on clean files: %v", err)
 	}
-	os.WriteFile(filepath.Join(base+".setup", "CLAUDE.md"), []byte("ask FAKE.person@example.net"), 0o644)
-	if err := s.checkLeaks(base, "fake.person@example.net"); err == nil || !strings.Contains(err.Error(), "git user.email") {
-		t.Errorf("checkLeaks = %v, want the git email found", err)
+	leaky := filepath.Join(base+".setup", "CLAUDE.md")
+	os.WriteFile(leaky, []byte("ask the FAKEUSER account"), 0o644)
+	err := s.checkLeaks(base)
+	if err == nil || !strings.Contains(err.Error(), "CLAUDE.md (the account name)") {
+		t.Errorf("checkLeaks = %v, want CLAUDE.md named", err)
+	}
+	if b, _ := os.ReadFile(leaky); strings.Contains(string(b), "FAKEUSER") || !strings.HasPrefix(string(b), "removed by the eval") {
+		t.Errorf("leaky file not replaced: %q", b)
 	}
 }
 
