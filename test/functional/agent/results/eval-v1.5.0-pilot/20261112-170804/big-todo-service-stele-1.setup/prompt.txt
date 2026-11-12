@@ -1,0 +1,10 @@
+Build a TODO HTTP JSON service in this Go module (standard library only).
+
+- internal/todo: a Todo type (id, title, done, created_at, updated_at) and a Store that is safe for concurrent use: Create, Get, Update (title and/or done), Delete, and List with an optional done filter and limit/offset pagination, newest first.
+- internal/api: an http.Handler with these routes:
+  POST /todos (body {"title": "..."}; title is 1 to 200 characters after trimming), GET /todos?done=true|false&limit=N&offset=N (limit 1..100, default 20), GET /todos/{id}, PATCH /todos/{id} (title and/or done), DELETE /todos/{id}.
+  Return 201, 200, 204, 400, 404 as appropriate, with a JSON error body on failure.
+- cmd/server: main that serves the API on -addr (default :8080) and shuts down gracefully on Ctrl-C.
+- Tests for the store (including concurrent use) and for every route, including the error cases.
+
+When you are done, go vet ./... and go test ./... must pass.

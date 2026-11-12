@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -31,6 +32,7 @@ type gctx struct {
 	env           []string
 	violations    []finding // from stele check, in every project
 	g             *Grade
+	excused       map[finding]bool // the findings old excuses, once worked out
 }
 
 type finding struct {
@@ -75,16 +77,7 @@ var graders = map[string]func(*gctx){
 	},
 	"edit-legacy": func(c *gctx) {
 		// The fixture's fmt.Printf lines are old violations, not the agent's.
-		old := map[string]bool{}
-		b, _ := os.ReadFile(filepath.Join(c.fixture, "internal", "report", "report.go"))
-		for _, l := range strings.Split(string(normalize(b)), "\n") {
-			if strings.Contains(l, "fmt.Printf") {
-				old[strings.TrimSpace(l)] = true
-			}
-		}
-		c.ruleViolations(func(f finding) bool {
-			return f.File == "internal/report/report.go" && old[strings.TrimSpace(c.line(f.File, f.Line))]
-		})
+		c.ruleViolations(c.old)
 		if del := c.deletions("internal/report/report.go"); del > 0 {
 			c.g.ScopeCreep = true
 			c.note(fmt.Sprintf("changed %d existing lines of report.go", del))
@@ -219,19 +212,47 @@ func (c *gctx) onlyIn(rel, pattern string) bool {
 }
 
 // old reports whether a finding is on a line the fixture already had in that
-// file: a violation from before the agent started.
+// file: a violation from before the agent started. A fixture line excuses
+// one finding of each rule: when the agent copies an old line, the copy
+// counts. A blank line excuses nothing.
 func (c *gctx) old(f finding) bool {
-	b, err := os.ReadFile(filepath.Join(c.fixture, filepath.FromSlash(f.File)))
-	if err != nil {
-		return false
-	}
-	want := strings.TrimSpace(c.line(f.File, f.Line))
-	for _, l := range strings.Split(string(normalize(b)), "\n") {
-		if strings.TrimSpace(l) == want {
-			return true
+	if c.excused == nil {
+		c.excused = map[finding]bool{}
+		left := map[string]int{} // file, rule and line text -> fixture lines not yet used
+		seen := map[string]bool{}
+		for _, v := range c.violations {
+			text := strings.TrimSpace(c.line(v.File, v.Line))
+			if text == "" {
+				continue
+			}
+			k := v.File + "\x00" + v.Message + "\x00" + text
+			if !seen[k] {
+				seen[k] = true
+				left[k] = c.fixtureLines(v.File, text)
+			}
+			if left[k] > 0 {
+				left[k]--
+				c.excused[v] = true
+			}
 		}
 	}
-	return false
+	return c.excused[f]
+}
+
+// fixtureLines counts the lines of rel in the fixture that read text, once
+// trimmed.
+func (c *gctx) fixtureLines(rel, text string) int {
+	b, err := os.ReadFile(filepath.Join(c.fixture, filepath.FromSlash(rel)))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, l := range strings.Split(string(normalize(b)), "\n") {
+		if strings.TrimSpace(l) == text {
+			n++
+		}
+	}
+	return n
 }
 
 // guide records a guidance rule the run broke.
@@ -368,93 +389,161 @@ func grade(cfg config, scenario, fixture, repo string, env []string) (Grade, err
 		g.Compliant = false
 		return g, err
 	}
-	c.violations = vs
+	c.violations = vs.findings
+	for _, s := range vs.skipped {
+		// A file stele check could not read was not graded: say so.
+		c.note("not checked: " + s)
+	}
+	if vs.truncated > 0 {
+		c.note(fmt.Sprintf("stele check left out %d more findings (at most 100 per rule and file)", vs.truncated))
+	}
 	graders[scenario](c)
 	return g, nil
 }
 
-// checkRules runs stele check --all on a copy of repo that has the fixture's
-// rules, whatever the arm left of them, and returns its findings in every
-// project.
-func checkRules(cfg config, fixture, repo string, env []string) ([]finding, error) {
-	graded, err := os.MkdirTemp("", "stele-eval-graded-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(graded)
-	skip := func(rel string, d fs.DirEntry) bool {
-		switch d.Name() {
-		case ".git", ".stele", ".claude", ".codex", "CLAUDE.md", "AGENTS.md", "stele.md", "stele.lock", "__pycache__":
-			return true
-		}
-		return false
-	}
-	if err := copyTree(repo, graded, skip); err != nil {
-		return nil, err
-	}
-	var projects []string
+// gradeSkips are the names the grader leaves out of its copy, at any
+// depth: rule files and agent setup. The agent's changes to them are listed
+// in the notes (ungraded). .git and .stele are left out too: they are not
+// the project's files.
+var gradeSkips = []string{".claude", ".codex", "CLAUDE.md", "AGENTS.md", "stele.md", "stele.lock", "__pycache__"}
+
+// checked is what stele check reported over every project.
+type checked struct {
+	findings  []finding
+	skipped   []string // "file: reason"
+	truncated int
+}
+
+// checkRules runs stele check --all for each of the fixture's stele.md
+// files, on a copy of repo that holds that one rules file, whatever the arm
+// left of the rules. So every file is graded against the rules of each
+// stele.md above it: the root's rules reach a subproject's files too. With
+// both files in one copy, stele check at the root skips the subproject ("in
+// subproject"), and the subproject's own check applies only its own rules,
+// so the root's unscoped rules would never reach its files. It returns
+// every finding once, with paths from the repository's root.
+func checkRules(cfg config, fixture, repo string, env []string) (checked, error) {
+	var out checked
+	seen := map[finding]bool{}
+	seenSkip := map[string]bool{}
 	for _, f := range ruleFiles(fixture) {
 		rel, _ := filepath.Rel(fixture, f)
-		b, _ := os.ReadFile(f)
-		if err := os.WriteFile(filepath.Join(graded, rel), b, 0o644); err != nil {
-			return nil, err
+		c, err := checkProject(cfg, f, filepath.Dir(rel), repo, env)
+		if err != nil {
+			return out, err
 		}
-		projects = append(projects, filepath.Dir(rel))
-	}
-	if _, err := run(graded, env, "git", "init", "-q", "-b", "main"); err != nil {
-		return nil, err
-	}
-	for _, p := range projects {
-		if _, err := run(filepath.Join(graded, p), env, cfg.stele, "compile"); err != nil {
-			return nil, err
-		}
-	}
-	if err := commitAll(graded, env, "graded"); err != nil {
-		return nil, err
-	}
-	var out []finding
-	for _, p := range projects {
-		cmd := exec.Command(cfg.stele, "check", "--all", "--format", "json")
-		cmd.Dir = filepath.Join(graded, p)
-		cmd.Env = env
-		b, err := cmd.Output()
-		if err != nil && cmd.ProcessState.ExitCode() != 1 {
-			return nil, fmt.Errorf("stele check in %s: %v", p, err)
-		}
-		var rep struct {
-			Problems   []struct{ Message string }
-			Violations []struct {
-				File     string `json:"file"`
-				Line     int    `json:"line"`
-				Message  string `json:"message"`
-				Excerpt  string `json:"excerpt"`
-				Blocking bool   `json:"blocking"`
+		for _, x := range c.findings {
+			if !seen[x] {
+				seen[x] = true
+				out.findings = append(out.findings, x)
 			}
 		}
-		if err := json.Unmarshal(b, &rep); err != nil {
-			return nil, fmt.Errorf("stele check in %s: %v: %s", p, err, b)
+		for _, x := range c.skipped {
+			if !seenSkip[x] {
+				seenSkip[x] = true
+				out.skipped = append(out.skipped, x)
+			}
 		}
-		for _, pr := range rep.Problems {
-			return nil, fmt.Errorf("stele check in %s: rule problem: %s", p, pr.Message)
-		}
-		for _, v := range rep.Violations {
-			file := filepath.ToSlash(filepath.Join(p, v.File))
-			out = append(out, finding{File: file, Line: v.Line, Message: v.Message, Excerpt: v.Excerpt, Blocking: v.Blocking})
-		}
+		out.truncated += c.truncated
 	}
 	return out, nil
 }
 
+// checkProject runs stele check --all in project (a folder of repo, from
+// its root) on a copy of repo whose only rules file is rules.
+func checkProject(cfg config, rules, project, repo string, env []string) (checked, error) {
+	var out checked
+	graded, err := os.MkdirTemp("", "stele-eval-graded-")
+	if err != nil {
+		return out, err
+	}
+	defer os.RemoveAll(graded)
+	skip := func(rel string, d fs.DirEntry) bool {
+		return d.Name() == ".git" || d.Name() == ".stele" || slices.Contains(gradeSkips, d.Name())
+	}
+	if err := copyTree(repo, graded, skip); err != nil {
+		return out, err
+	}
+	b, err := os.ReadFile(rules)
+	if err != nil {
+		return out, err
+	}
+	dir := filepath.Join(graded, project)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return out, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stele.md"), b, 0o644); err != nil {
+		return out, err
+	}
+	if _, err := run(graded, env, "git", "init", "-q", "-b", "main"); err != nil {
+		return out, err
+	}
+	if _, err := run(dir, env, cfg.stele, "compile"); err != nil {
+		return out, err
+	}
+	if err := commitAll(graded, env, "graded"); err != nil {
+		return out, err
+	}
+	// stele check --all checks tracked files: one a .gitignore keeps out is
+	// not checked, and is listed.
+	if ign, err := run(dir, env, "git", "-c", "core.quotepath=off", "ls-files", "--others", "--ignored", "--exclude-standard"); err == nil {
+		for _, f := range strings.Split(strings.TrimSpace(ign), "\n") {
+			// .stele/ is the graded copy's own, from stele compile.
+			if f = strings.TrimSpace(f); f != "" && !strings.HasPrefix(f, ".stele/") && !strings.Contains(f, "/.stele/") {
+				out.skipped = append(out.skipped, filepath.ToSlash(filepath.Join(project, f))+": ignored by .gitignore")
+			}
+		}
+	}
+	cmd := exec.Command(cfg.stele, "check", "--all", "--format", "json")
+	cmd.Dir = dir
+	cmd.Env = env
+	b, err = cmd.Output()
+	if err != nil && cmd.ProcessState.ExitCode() != 1 {
+		return out, fmt.Errorf("stele check in %s: %v", project, err)
+	}
+	var rep struct {
+		Problems   []struct{ Message string }
+		Violations []struct {
+			File     string `json:"file"`
+			Line     int    `json:"line"`
+			Message  string `json:"message"`
+			Excerpt  string `json:"excerpt"`
+			Blocking bool   `json:"blocking"`
+		}
+		Skipped []struct {
+			File   string `json:"file"`
+			Reason string `json:"reason"`
+		}
+		Truncated int `json:"truncated"`
+	}
+	if err := json.Unmarshal(b, &rep); err != nil {
+		return out, fmt.Errorf("stele check in %s: %v: %s", project, err, b)
+	}
+	for _, pr := range rep.Problems {
+		return out, fmt.Errorf("stele check in %s: rule problem: %s", project, pr.Message)
+	}
+	for _, v := range rep.Violations {
+		file := filepath.ToSlash(filepath.Join(project, v.File))
+		out.findings = append(out.findings, finding{File: file, Line: v.Line, Message: v.Message, Excerpt: v.Excerpt, Blocking: v.Blocking})
+	}
+	for _, s := range rep.Skipped {
+		out.skipped = append(out.skipped, filepath.ToSlash(filepath.Join(project, s.File))+": "+s.Reason)
+	}
+	out.truncated += rep.Truncated
+	return out, nil
+}
+
 // ruleViolations counts stele check's findings, except those old says
-// were there before the agent started.
+// were there before the agent started: those are listed in the notes.
 func (c *gctx) ruleViolations(old func(finding) bool) {
 	for _, f := range c.violations {
-		if old != nil && old(f) {
-			continue
-		}
 		msg := f.Message
 		if msg == "" {
 			msg = f.Excerpt
+		}
+		if old != nil && old(f) {
+			c.note(fmt.Sprintf("in the fixture already, not counted: %s:%d: %s", f.File, f.Line, msg))
+			continue
 		}
 		if !f.Blocking {
 			// A non-blocking rule is advice: stele check passes with it.

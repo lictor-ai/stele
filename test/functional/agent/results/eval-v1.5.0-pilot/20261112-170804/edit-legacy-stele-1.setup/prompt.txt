@@ -1,0 +1,1 @@
+Add a function Total(items []int) int to internal/report/report.go that returns the sum of items, and a short test for it.

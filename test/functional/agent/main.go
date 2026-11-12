@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -28,6 +29,15 @@ import (
 // told to change files only with its file tools, which the hooks see; it is
 // a diagnostic, not run by default.
 var arms = []string{"none", "claudemd", "agentsmd", "stele", "stele-tools"}
+
+// evalScenarios are the published evaluation's scenarios (-eval,
+// docs/eval.md): every scenario but the probes, which were written to find
+// where a rules file slips.
+var evalScenarios = []string{
+	"big-billing-refactor", "big-log-analyzer", "big-todo-service",
+	"edit-legacy", "go-logging", "migrations", "multi-file-python",
+	"no-secrets", "subproject",
+}
 
 type config struct {
 	agent                string // claude-code or codex
@@ -48,8 +58,12 @@ func main() {
 		scenarios = flag.String("scenarios", "", "comma-separated scenarios to run (default: all)")
 		armList   = flag.String("arms", "", "comma-separated arms: none, claudemd, agentsmd, stele, stele-tools (default: none,claudemd,stele, or none,agentsmd,stele for Codex)")
 		reps      = flag.Int("reps", 1, "runs per scenario and arm")
-		parallel  = flag.Int("parallel", 3, "runs at once")
+		parallel  = flag.Int("parallel", 3, "runs at once (default 2 with -eval)")
 		baseline  = flag.String("baseline", "", "comma-separated results/*.jsonl whose runs of the arms not run now join the summary")
+		evalSet   = flag.Bool("eval", false, "the published evaluation (docs/eval.md): its 9 scenarios, arms claudemd and stele (agentsmd and stele for Codex)")
+		out       = flag.String("out", "", "a folder under results/ for this eval's files (default: results/ itself)")
+		regradeIn = flag.String("regrade", "", "a results/<out>/<time> folder: grade its saved runs again from their diffs, with no agent, and print the grades")
+		regradeW  = flag.Bool("regrade-write", false, "with -regrade: also write <time>.regraded.md and <time>.regraded.jsonl beside the folder")
 		cfg       config
 	)
 	flag.StringVar(&cfg.claude, "claude", "", "claude binary (default: newest VS Code extension's, else claude on PATH)")
@@ -68,11 +82,29 @@ func main() {
 		fail(err)
 	}
 	cfg.scenarioDir = filepath.Join(here, "scenarios")
-	cfg.outDir = filepath.Join(here, "results")
+	if *out != "" && (filepath.Base(*out) != *out || *out == "." || *out == "..") {
+		fail(fmt.Errorf("-out %q: give a folder name, not a path", *out))
+	}
+	cfg.outDir = filepath.Join(here, "results", *out)
+	if *evalSet {
+		// Fewer agents at once: 4 ran this machine short of memory (results,
+		// experiment 7).
+		set := false
+		flag.Visit(func(f *flag.Flag) { set = set || f.Name == "parallel" })
+		if !set {
+			*parallel = 2
+		}
+	}
+	if *evalSet && *scenarios == "" {
+		*scenarios = strings.Join(evalScenarios, ",")
+	}
 	switch cfg.agent {
 	case "claude-code":
 		if cfg.model == "" {
 			cfg.model = "claude-sonnet-5-5"
+		}
+		if *armList == "" && *evalSet {
+			*armList = "claudemd,stele"
 		}
 		if *armList == "" {
 			*armList = "none,claudemd,stele"
@@ -83,6 +115,9 @@ func main() {
 	case "codex":
 		if cfg.model == "" {
 			cfg.model = "gpt-6-luna"
+		}
+		if *armList == "" && *evalSet {
+			*armList = "agentsmd,stele"
 		}
 		if *armList == "" {
 			*armList = "none,agentsmd,stele"
@@ -105,11 +140,18 @@ func main() {
 	default:
 		fail(fmt.Errorf("unknown agent %q", cfg.agent))
 	}
+	var steleDesc string
+	if cfg.stele != "" {
+		steleDesc = cfg.stele + ", given with -stele: " + buildInfo(cfg.stele)
+	}
 	if cfg.stele == "" {
-		cfg.stele, err = buildStele(filepath.Join(here, "..", "..", ".."))
+		root := filepath.Join(here, "..", "..", "..")
+		tag, desc := steleSource(root)
+		cfg.stele, err = buildStele(root, tag)
 		if err != nil {
 			fail(err)
 		}
+		steleDesc = "built from this module: " + desc
 	}
 
 	names := split(*scenarios)
@@ -126,6 +168,28 @@ func main() {
 		if !slices.Contains(arms, a) {
 			fail(fmt.Errorf("unknown arm %q", a))
 		}
+	}
+
+	if *regradeIn != "" {
+		rs, err := regrade(cfg, *regradeIn, split(*scenarios))
+		if err != nil {
+			fail(err)
+		}
+		fmt.Print(string(newScrubber("").text([]byte(regradeReport(rs, homeless(steleDesc))))))
+		if *regradeW {
+			model := cfg.model
+			if len(rs) > 0 && rs[0].Model != "" {
+				model = rs[0].Model
+			}
+			about := append([]string{
+				"Regraded with the current grader at " + moduleVersion(filepath.Join(here, "..", "..", "..")) + ", from the saved diffs in " + filepath.Base(filepath.Clean(*regradeIn)) + ". Time, tokens, denies and post-write flags are the original runs'.",
+				"stele: " + homeless(steleDesc) + ".",
+			}, regradeLimits...)
+			if err := writeRegraded(*regradeIn, rs, model, about); err != nil {
+				fail(err)
+			}
+		}
+		return
 	}
 
 	stamp := time.Now().Format("20060102-150405")
@@ -155,7 +219,7 @@ func main() {
 	if cfg.agent == "codex" {
 		agentBin = strings.Join(cfg.codex, " ") + ", effort " + cfg.effort
 	}
-	fmt.Fprintf(os.Stderr, "%d runs, agent %s, model %s, %s, stele %s\n", len(jobs), cfg.agent, cfg.model, agentBin, cfg.stele)
+	fmt.Fprintf(os.Stderr, "%d runs, agent %s, model %s, %s, stele %s (%s)\n", len(jobs), cfg.agent, cfg.model, agentBin, cfg.stele, steleDesc)
 
 	var (
 		mu      sync.Mutex
@@ -163,6 +227,9 @@ func main() {
 		wg      sync.WaitGroup
 		sem     = make(chan struct{}, max(1, *parallel))
 	)
+	// The last check before results/: nothing written there may hold the
+	// home directory, the account name or the account's emails and ids.
+	guard := newScrubber("")
 	for _, j := range jobs {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -173,6 +240,10 @@ func main() {
 			line, _ := json.Marshal(r)
 			mu.Lock()
 			defer mu.Unlock()
+			if what := guard.leak(line); what != "" {
+				r = withoutLeaks(guard, r, what)
+				line, _ = json.Marshal(r)
+			}
 			results = append(results, r)
 			jsonl.Write(append(line, '\n'))
 			fmt.Fprintf(os.Stderr, "%-18s %-8s #%d  %6.1fs  $%.3f  compliant=%v task_ok=%v denies=%d blocks=%d %s\n",
@@ -191,11 +262,81 @@ func main() {
 		results = append(results, old...)
 	}
 
-	sum := summary(results, cfg.model)
+	about := []string{
+		"Agent: " + cfg.agent + ", " + homeless(agentBin) + ".",
+		"stele: " + homeless(steleDesc) + ".",
+		"Command: `go run ./test/functional/agent " + homeless(strings.Join(os.Args[1:], " ")) + "`.",
+	}
+	sum := string(guard.text([]byte(summary(results, cfg.model, about))))
+	if what := guard.leak([]byte(sum)); what != "" {
+		fail(fmt.Errorf("the summary still holds %s after scrubbing: not written", what))
+	}
 	if err := os.WriteFile(filepath.Join(cfg.outDir, stamp+".md"), []byte(sum), 0o644); err != nil {
 		fail(err)
 	}
 	fmt.Print(sum)
+}
+
+// withoutLeaks replaces each of a result's texts that still holds private
+// data with a marker, keeping how many there are, and says so in its error.
+// When the result still leaks, only its name and the error are kept.
+func withoutLeaks(s *scrubber, r Result, what string) Result {
+	clean := func(texts []string) {
+		for i, t := range texts {
+			if s.leak([]byte(t)) != "" {
+				texts[i] = "removed by the eval: private data"
+			}
+		}
+	}
+	clean(r.Violations)
+	clean(r.Guidance)
+	clean(r.Notes)
+	msg := "its result still held " + what + " after scrubbing: those texts were removed"
+	if s.leak([]byte(r.Error)) != "" {
+		r.Error = msg
+	} else {
+		r.Error = addError(r.Error, msg)
+	}
+	if line, _ := json.Marshal(r); s.leak(line) != "" {
+		// Its violations are markers by now: keep the grade, so no count
+		// is lost.
+		r = Result{Scenario: r.Scenario, Arm: r.Arm, Rep: r.Rep, Model: r.Model, Agent: r.Agent,
+			Grade: Grade{Compliant: r.Compliant, TaskOK: r.TaskOK, Violations: r.Violations},
+			Error: "its result held private data after scrubbing: not kept"}
+	}
+	return r
+}
+
+// homeless replaces the user's home directory with ~, so a summary meant to
+// be published names no local account. It replaces it only where a path
+// ends or goes on (a separator), and never a home that is a root.
+func homeless(s string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || filepath.Dir(home) == home {
+		return s
+	}
+	re := regexp.MustCompile(caseFold + regexp.QuoteMeta(home) + `([\\/]|$|[^\w.-])`)
+	return re.ReplaceAllString(s, "~$1")
+}
+
+// buildInfo says what a stele binary was built from: its module version,
+// commit and -ldflags, from go version -m. stele has no version command.
+func buildInfo(bin string) string {
+	b, err := exec.Command("go", "version", "-m", bin).Output()
+	if err != nil {
+		return "no build info"
+	}
+	var parts []string
+	for _, l := range strings.Split(string(b), "\n") {
+		f := strings.Fields(l)
+		switch {
+		case len(f) >= 3 && f[0] == "mod":
+			parts = append(parts, f[1]+" "+f[2])
+		case len(f) >= 2 && f[0] == "build" && (strings.HasPrefix(f[1], "-ldflags=") || strings.HasPrefix(f[1], "vcs.revision=") || strings.HasPrefix(f[1], "vcs.modified=")):
+			parts = append(parts, strings.Join(f[1:], " "))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // sourceDir is this package's directory, so the harness runs from any cwd.
@@ -241,8 +382,50 @@ func versionLess(a, b string) bool {
 	return slices.Compare(num(a), num(b)) < 0
 }
 
-// buildStele builds stele from the module at root into a temp directory.
-func buildStele(root string) (string, error) {
+// steleSource says which stele the module at root builds. When stele's own
+// code (cmd/, internal/, go.mod, go.sum) is as it was at the latest tag, in
+// the work tree too, tag is that tag, and the build carries it as a release
+// build does (.goreleaser.yaml). Otherwise tag is "" and the build reports
+// "devel".
+func steleSource(root string) (tag, desc string) {
+	git := func(args ...string) (string, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		b, err := cmd.Output()
+		return strings.TrimSpace(string(b)), err
+	}
+	head, err := git("describe", "--tags", "--always", "--dirty")
+	if err != nil {
+		return "", "commit unknown"
+	}
+	last, err := git("describe", "--tags", "--abbrev=0")
+	if err != nil {
+		return "", head
+	}
+	// git diff --quiet exits 1 when the code differs from the tag; status
+	// lists new files git does not track yet.
+	_, diff := git("diff", "--quiet", last, "--", "cmd", "internal", "go.mod", "go.sum")
+	untracked, err := git("status", "--porcelain", "--untracked-files=all", "--", "cmd", "internal", "go.mod", "go.sum")
+	if diff != nil || err != nil || untracked != "" {
+		return "", head + ", stele's code changed since " + last
+	}
+	return last, last + " (stele's code as tagged; the module is at " + head + ")"
+}
+
+// moduleVersion is git describe of the module at root.
+func moduleVersion(root string) string {
+	cmd := exec.Command("git", "describe", "--tags", "--always", "--dirty")
+	cmd.Dir = root
+	b, err := cmd.Output()
+	if err != nil {
+		return "an unknown commit"
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// buildStele builds stele from the module at root into a temp directory,
+// carrying tag as its version when tag is not "".
+func buildStele(root, tag string) (string, error) {
 	dir, err := os.MkdirTemp("", "stele-eval-bin-")
 	if err != nil {
 		return "", err
@@ -251,7 +434,11 @@ func buildStele(root string) (string, error) {
 	if runtime.GOOS == "windows" {
 		out += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", out, "./cmd/stele")
+	args := []string{"build", "-o", out}
+	if tag != "" {
+		args = append(args, "-ldflags", "-X main.version="+tag)
+	}
+	cmd := exec.Command("go", append(args, "./cmd/stele")...)
 	cmd.Dir = root
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("building stele: %v\n%s", err, b)

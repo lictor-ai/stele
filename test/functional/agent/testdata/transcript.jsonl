@@ -1,0 +1,9 @@
+{"type":"system","subtype":"init","cwd":"{{WORK}}","apiKeySource":"none","model":"claude-sonnet-5-5","claude_code_version":"9.9.9","plugins":[{"name":"fake-plugin","path":"{{HOME}}/plugins/fake-plugin"}],"memory_paths":["{{HOME}}/memory"]}
+{"type":"attachment","attachment":{"type":"credential_org","organizationUuid":"00000000-0000-4000-8000-00000000000a","organizationName":"Fake Org"}}
+{"type":"attachment","attachment":{"type":"remote_session_change","commit":"Co-Authored-By: Fake Person <fake.person@corp.internal>"},"rendered":[{"content":"Co-Authored-By: Fake Person"}],"renderedRole":"user"}
+{"type":"user","attachment":{"type":"hook_additional_context","context":{"userEmail":"fake.person@corp.internal","cwd":"{{HOME}}"}},"oauthAccount":{"emailAddress":"fake.person@corp.internal","accountUuid":"00000000-0000-4000-8000-00000000000b"},"userID":"fake-user-id","user_id":"fake-user-id-2","message":{"content":"mail fake.person@corp.internal, eval@example.com, dev@example.org, a@b.test or git@github.com:o/r"}}
+{"type":"user","message":{"content":"see {{FWD}}/a, {{MSYS}}/b, {{SLUG}}-c and {{FWD}}ice/d"},"big":12345678901234567890}
+{"type":"user","message":{"content":"-rw-r--r-- 1 {{USER}} 197121 12 Nov 12 10:00 main.go\nowner {{USER}}, not {{USER}}x"}}
+{"type":"user","message":{"content":"account 00000000-0000-4000-8000-0000000000c1 and OWNER@ACCOUNT.TEST"}}
+{"type":"api-request-blob","body":{"system":"FAKE-SYSTEM-PROMPT","cwd":"{{HOME}}"}}
+not JSON: {{HOME}}

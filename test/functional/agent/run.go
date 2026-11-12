@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -21,6 +22,14 @@ type Result struct {
 	Rep      int    `json:"rep"`
 	Model    string `json:"model"`
 	Agent    string `json:"agent,omitempty"` // empty for Claude Code, from before -agent
+	// AgentVersion and APIKeySource are what Claude Code's init event says:
+	// its version, and where its credentials came from ("none" is a
+	// claude.ai login, which bills the subscription, not the API).
+	AgentVersion string `json:"agent_version,omitempty"`
+	APIKeySource string `json:"api_key_source,omitempty"`
+	// ResolvedModel is the model Claude Code's init event names: the one
+	// the session ran on, whatever -model said.
+	ResolvedModel string `json:"resolved_model,omitempty"`
 
 	WallMS        int64   `json:"wall_ms"`
 	DurationMS    int64   `json:"duration_ms"`
@@ -54,8 +63,8 @@ type Result struct {
 }
 
 // runOne runs one scenario in one arm and grades it.
-func runOne(cfg config, scenario, arm string, rep int) Result {
-	r := Result{Scenario: scenario, Arm: arm, Rep: rep, Model: cfg.model}
+func runOne(cfg config, scenario, arm string, rep int) (r Result) {
+	r = Result{Scenario: scenario, Arm: arm, Rep: rep, Model: cfg.model}
 	if cfg.agent != "claude-code" {
 		r.Agent = cfg.agent
 	}
@@ -70,6 +79,23 @@ func runOne(cfg config, scenario, arm string, rep int) Result {
 		// beside the stream instead.
 		defer os.RemoveAll(work)
 	}
+	// Everything written under results/ is scrubbed first (scrub.go). The
+	// stream is written live in the work directory, and only its scrubbed
+	// copy is kept.
+	sc := newScrubber(work)
+	base := filepath.Join(cfg.streamDir, fmt.Sprintf("%s-%s-%d", scenario, arm, rep))
+	defer func() {
+		r.Error = string(sc.text([]byte(r.Error)))
+		for i := range r.Notes {
+			r.Notes[i] = string(sc.text([]byte(r.Notes[i])))
+		}
+		for i := range r.Violations {
+			r.Violations[i] = string(sc.paths([]byte(r.Violations[i])))
+		}
+		if err := sc.checkLeaks(base); err != nil {
+			r.Error = addError(r.Error, err.Error())
+		}
+	}()
 	repo := filepath.Join(work, "repo")
 	keys := filepath.Join(work, "config")
 	fixture := filepath.Join(cfg.scenarioDir, scenario, "repo")
@@ -86,20 +112,37 @@ func runOne(cfg config, scenario, arm string, rep int) Result {
 		return r
 	}
 
-	stream := filepath.Join(cfg.streamDir, fmt.Sprintf("%s-%s-%d.jsonl", scenario, arm, rep))
+	if err := saveSetup(repo, prompt, base+".setup", sc.paths); err != nil {
+		r.Error = "saving the setup: " + err.Error()
+		return r
+	}
+	stream := filepath.Join(work, "stream.jsonl")
 	start := time.Now()
 	err = runAgent(cfg, repo, arm, strings.TrimSpace(string(prompt)), env, stream)
 	r.WallMS = time.Since(start).Milliseconds()
 	if err != nil {
 		r.Error = err.Error()
 	}
+	var transcript []byte
 	if cfg.agent == "codex" {
 		// codex exec reports no durations: the wall time stands in.
 		r.DurationMS = r.WallMS
-		readRollout(cfg, readCodexStream(stream, &r), stream, &r)
+		transcript = readRollout(cfg, readCodexStream(stream, &r), &r)
+		if transcript == nil {
+			r.Error = addError(r.Error, "rollout not found: post-write flags not counted")
+		}
+		if b, err := os.ReadFile(strings.TrimSuffix(stream, ".jsonl") + ".stderr.txt"); err == nil {
+			writeScrubbed(base+".stderr.txt", b, sc.text)
+		}
 	} else {
 		sid := readStream(stream, &r)
-		readTranscript(sid, stream, &r)
+		transcript = readTranscript(sid, &r)
+	}
+	if b, err := os.ReadFile(stream); err == nil {
+		writeScrubbed(base+".jsonl", b, sc.jsonl)
+	}
+	if transcript != nil {
+		writeScrubbed(base+".transcript.jsonl", transcript, sc.jsonl)
 	}
 	if fi, err := os.Stat(filepath.Join(repo, ".stele", "state")); err == nil && fi.IsDir() {
 		entries, _ := os.ReadDir(filepath.Join(repo, ".stele", "state"))
@@ -110,15 +153,83 @@ func runOne(cfg config, scenario, arm string, rep int) Result {
 
 	g, err := grade(cfg, scenario, fixture, repo, env)
 	if err != nil {
-		r.Error = strings.TrimSpace(r.Error + "; grade: " + err.Error())
+		r.Error = addError(r.Error, "grade: "+err.Error())
 	}
 	r.Grade = g
 	if _, err := run(repo, env, "git", "add", "-A"); err == nil {
 		if diff, err := run(repo, env, "git", "diff", "--cached", "HEAD"); err == nil {
-			os.WriteFile(strings.TrimSuffix(stream, ".jsonl")+".diff", []byte(diff), 0o644)
+			writeScrubbed(base+".diff", []byte(diff), sc.paths)
+		}
+		if names, err := run(repo, env, "git", "-c", "core.quotepath=off", "diff", "--cached", "--name-only", "HEAD"); err == nil {
+			if ung := ungraded(strings.Split(strings.TrimSpace(names), "\n")); len(ung) > 0 {
+				r.Notes = append(r.Notes, "not graded: changed by the agent: "+strings.Join(ung, ", "))
+			}
 		}
 	}
 	return r
+}
+
+// ungraded are the files of names (paths from the repository's root) that
+// the grader leaves out of its copy (checkRules): rule files and agent
+// setup, at any depth. stele's own compiled rules file is stele's, not the
+// agent's.
+func ungraded(names []string) []string {
+	var out []string
+	for _, n := range names {
+		if n == ".claude/rules/stele-rules.md" || strings.HasSuffix(n, "/.claude/rules/stele-rules.md") {
+			continue
+		}
+		for _, seg := range strings.Split(n, "/") {
+			if slices.Contains(gradeSkips, seg) {
+				out = append(out, n)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// saveSetup copies what the agent was given into dir, through scrub: the
+// prompt, and the arm's rules and their setup as committed before the run
+// (stele.md, CLAUDE.md, AGENTS.md, stele.json, stele.lock, and every
+// .claude/ and .codex/ folder). .stele/ is left out: it holds the run's
+// state, not its setup.
+func saveSetup(repo string, prompt []byte, dir string, scrub func([]byte) []byte) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompt.txt"), scrub(prompt), 0o644); err != nil {
+		return err
+	}
+	return filepath.WalkDir(repo, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(repo, p)
+		segs := strings.Split(filepath.ToSlash(rel), "/")
+		if d.IsDir() {
+			if d.Name() == ".git" || d.Name() == ".stele" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch {
+		case slices.Contains(segs, ".claude") || slices.Contains(segs, ".codex"):
+		case d.Name() == "stele.md" || d.Name() == "CLAUDE.md" || d.Name() == "AGENTS.md" ||
+			d.Name() == "stele.json" || d.Name() == "stele.lock":
+		default:
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, scrub(b), 0o644)
+	})
 }
 
 // runEnv is the environment for stele and the agent: stele first on PATH,
@@ -295,9 +406,13 @@ func readStream(path string, r *Result) (session string) {
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
 	for sc.Scan() {
 		var ev struct {
-			Type      string `json:"type"`
-			SessionID string `json:"session_id"`
-			Message   struct {
+			Type         string `json:"type"`
+			Subtype      string `json:"subtype"`
+			SessionID    string `json:"session_id"`
+			Version      string `json:"claude_code_version"`
+			APIKeySource string `json:"apiKeySource"`
+			Model        string `json:"model"`
+			Message      struct {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 			DurationMS    int64   `json:"duration_ms"`
@@ -320,6 +435,10 @@ func readStream(path string, r *Result) (session string) {
 			session = ev.SessionID
 		}
 		switch ev.Type {
+		case "system":
+			if ev.Subtype == "init" {
+				r.AgentVersion, r.APIKeySource, r.ResolvedModel = ev.Version, ev.APIKeySource, ev.Model
+			}
 		case "result":
 			r.DurationMS, r.DurationAPIMS, r.NumTurns = ev.DurationMS, ev.DurationAPIMS, ev.NumTurns
 			r.IsError, r.CostUSD = ev.IsError, ev.CostUSD
@@ -367,18 +486,28 @@ func readStream(path string, r *Result) (session string) {
 
 // readTranscript counts the post-write blocks, which the stream leaves out:
 // Claude Code records them in the session transcript as attachments. It
-// keeps a copy of the transcript next to the stream.
-func readTranscript(session, stream string, r *Result) {
-	home, _ := os.UserHomeDir()
-	paths, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", session+".jsonl"))
-	if session == "" || len(paths) == 0 {
-		return
+// returns the transcript, to be kept beside the stream. Claude Code keeps
+// it under CLAUDE_CONFIG_DIR, else ~/.claude.
+func readTranscript(session string, r *Result) []byte {
+	if session == "" {
+		r.Error = addError(r.Error, "no session id in the stream: post-write flags not counted")
+		return nil
 	}
-	data, err := os.ReadFile(paths[0])
+	dir := os.Getenv("CLAUDE_CONFIG_DIR")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".claude")
+	}
+	paths, _ := filepath.Glob(filepath.Join(dir, "projects", "*", session+".jsonl"))
+	var data []byte
+	err := fmt.Errorf("no %s.jsonl", session)
+	if len(paths) > 0 {
+		data, err = os.ReadFile(paths[0])
+	}
 	if err != nil {
-		return
+		r.Error = addError(r.Error, "transcript not found: post-write flags not counted")
+		return nil
 	}
-	os.WriteFile(strings.TrimSuffix(stream, ".jsonl")+".transcript.jsonl", data, 0o644)
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		var ev struct {
 			Attachment struct {
@@ -401,6 +530,15 @@ func readTranscript(session, stream string, r *Result) {
 			r.Blocks++
 		}
 	}
+	return data
+}
+
+// addError adds msg to a run's error, after what is there.
+func addError(old, msg string) string {
+	if old == "" {
+		return msg
+	}
+	return old + "; " + msg
 }
 
 type block struct {

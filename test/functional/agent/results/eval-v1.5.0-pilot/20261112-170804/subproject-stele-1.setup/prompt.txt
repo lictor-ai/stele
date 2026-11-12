@@ -1,0 +1,1 @@
+Add a GET /health handler in services/api that pings the database with conn.Ping and answers 200 "ok" or 503, and register it in main. Then add a short "Health checks" section to the root README.md describing the endpoint and noting that readiness checks are still to be done later.
