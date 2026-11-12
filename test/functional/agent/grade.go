@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -31,6 +32,7 @@ type gctx struct {
 	env           []string
 	violations    []finding // from stele check, in every project
 	g             *Grade
+	excused       map[finding]bool // the findings old excuses, once worked out
 }
 
 type finding struct {
@@ -75,16 +77,7 @@ var graders = map[string]func(*gctx){
 	},
 	"edit-legacy": func(c *gctx) {
 		// The fixture's fmt.Printf lines are old violations, not the agent's.
-		old := map[string]bool{}
-		b, _ := os.ReadFile(filepath.Join(c.fixture, "internal", "report", "report.go"))
-		for _, l := range strings.Split(string(normalize(b)), "\n") {
-			if strings.Contains(l, "fmt.Printf") {
-				old[strings.TrimSpace(l)] = true
-			}
-		}
-		c.ruleViolations(func(f finding) bool {
-			return f.File == "internal/report/report.go" && old[strings.TrimSpace(c.line(f.File, f.Line))]
-		})
+		c.ruleViolations(c.old)
 		if del := c.deletions("internal/report/report.go"); del > 0 {
 			c.g.ScopeCreep = true
 			c.note(fmt.Sprintf("changed %d existing lines of report.go", del))
@@ -219,19 +212,47 @@ func (c *gctx) onlyIn(rel, pattern string) bool {
 }
 
 // old reports whether a finding is on a line the fixture already had in that
-// file: a violation from before the agent started.
+// file: a violation from before the agent started. A fixture line excuses
+// one finding of each rule: when the agent copies an old line, the copy
+// counts. A blank line excuses nothing.
 func (c *gctx) old(f finding) bool {
-	b, err := os.ReadFile(filepath.Join(c.fixture, filepath.FromSlash(f.File)))
-	if err != nil {
-		return false
-	}
-	want := strings.TrimSpace(c.line(f.File, f.Line))
-	for _, l := range strings.Split(string(normalize(b)), "\n") {
-		if strings.TrimSpace(l) == want {
-			return true
+	if c.excused == nil {
+		c.excused = map[finding]bool{}
+		left := map[string]int{} // file, rule and line text -> fixture lines not yet used
+		seen := map[string]bool{}
+		for _, v := range c.violations {
+			text := strings.TrimSpace(c.line(v.File, v.Line))
+			if text == "" {
+				continue
+			}
+			k := v.File + "\x00" + v.Message + "\x00" + text
+			if !seen[k] {
+				seen[k] = true
+				left[k] = c.fixtureLines(v.File, text)
+			}
+			if left[k] > 0 {
+				left[k]--
+				c.excused[v] = true
+			}
 		}
 	}
-	return false
+	return c.excused[f]
+}
+
+// fixtureLines counts the lines of rel in the fixture that read text, once
+// trimmed.
+func (c *gctx) fixtureLines(rel, text string) int {
+	b, err := os.ReadFile(filepath.Join(c.fixture, filepath.FromSlash(rel)))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, l := range strings.Split(string(normalize(b)), "\n") {
+		if strings.TrimSpace(l) == text {
+			n++
+		}
+	}
+	return n
 }
 
 // guide records a guidance rule the run broke.
@@ -380,6 +401,12 @@ func grade(cfg config, scenario, fixture, repo string, env []string) (Grade, err
 	return g, nil
 }
 
+// gradeSkips are the names the grader leaves out of its copy, at any
+// depth: rule files and agent setup. The agent's changes to them are listed
+// in the notes (ungraded). .git and .stele are left out too: they are not
+// the project's files.
+var gradeSkips = []string{".claude", ".codex", "CLAUDE.md", "AGENTS.md", "stele.md", "stele.lock", "__pycache__"}
+
 // checked is what stele check reported over every project.
 type checked struct {
 	findings  []finding
@@ -398,11 +425,7 @@ func checkRules(cfg config, fixture, repo string, env []string) (checked, error)
 	}
 	defer os.RemoveAll(graded)
 	skip := func(rel string, d fs.DirEntry) bool {
-		switch d.Name() {
-		case ".git", ".stele", ".claude", ".codex", "CLAUDE.md", "AGENTS.md", "stele.md", "stele.lock", "__pycache__":
-			return true
-		}
-		return false
+		return d.Name() == ".git" || d.Name() == ".stele" || slices.Contains(gradeSkips, d.Name())
 	}
 	if err := copyTree(repo, graded, skip); err != nil {
 		return out, err
@@ -426,6 +449,16 @@ func checkRules(cfg config, fixture, repo string, env []string) (checked, error)
 	}
 	if err := commitAll(graded, env, "graded"); err != nil {
 		return out, err
+	}
+	// stele check --all checks tracked files: one a .gitignore keeps out is
+	// not checked, and is listed.
+	if ign, err := run(graded, env, "git", "-c", "core.quotepath=off", "ls-files", "--others", "--ignored", "--exclude-standard"); err == nil {
+		for _, f := range strings.Split(strings.TrimSpace(ign), "\n") {
+			// .stele/ is the graded copy's own, from stele compile.
+			if f = strings.TrimSpace(f); f != "" && !strings.HasPrefix(f, ".stele/") && !strings.Contains(f, "/.stele/") {
+				out.skipped = append(out.skipped, f+": ignored by .gitignore")
+			}
+		}
 	}
 	for _, p := range projects {
 		cmd := exec.Command(cfg.stele, "check", "--all", "--format", "json")

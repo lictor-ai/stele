@@ -14,8 +14,13 @@ For each run we count:
 
 - **Violations:** the blocking rules broken in the final code.
 - **Compliant:** a run with no violation.
-- **Task ok:** the task was done. The code builds, the function exists, and
-  for the big tasks `go vet` and `go test` pass.
+- **Task ok:** the task was done, by the scenario's own checks. In the Go
+  scenarios `go vet ./...` passes (the grader runs vet, not a separate
+  build) and the function or package exists; in the big ones `go test`
+  passes too. `migrations` needs a migration that adds the email. In
+  `multi-file-python` the 4 modules must exist and compile with `python -m py_compile`;
+  without Python on the machine, that check is skipped and the run noted,
+  and the task still counts as ok.
 - **Denies:** writes stele paused to show the rules first.
 - **Post-write flags:** writes stele checked after they were made and sent
   back to the agent for a violation.
@@ -36,9 +41,11 @@ to that. So the baseline gets the same rules, the same model, the same
 prompts and the same tasks. The only difference is how the rules reach the
 agent.
 
-The `CLAUDE.md` arm sees each rule's full text, including its `check:` and
-`pattern:` lines. The `stele` arm sees the scope and the text, without the
-pattern. If anything, that favors the baseline.
+The `CLAUDE.md` arm has each rule's full text in `CLAUDE.md`, which Claude
+Code loads, including its `check:` and `pattern:` lines. The `stele` arm has
+the scope and the text in `.claude/rules/stele-rules.md`, which Claude Code
+loads, without the pattern. But in the `stele` arm `stele.md` stays in the
+repository, so the agent can read the patterns too if it opens that file.
 
 The harness also has a `none` arm (no rules) and a `stele-tools` arm (a
 diagnostic). They are not part of this evaluation. Their past numbers are in
@@ -61,7 +68,7 @@ are in [test/functional/agent/scenarios/](../test/functional/agent/scenarios/).
 | `big-log-analyzer` | an nginx log parser and CLI, with tests | the same 74 rules |
 | `big-billing-refactor` | discount codes, tax and CSV export in a legacy package | the same 74 rules. The package has 4 old violations, which don't count. |
 
-The 74 rules are 16 KB, about 4k tokens. 49 have a regex check; 2 of those
+The 74 rules are 16 KB, an estimated 4k tokens. 49 have a regex check; 2 of those
 are non-blocking. The rest are guidance with no check, plus decoy rules
 for web, scripts, CI, Docker, SQL and Kubernetes files that these tasks never
 touch.
@@ -79,10 +86,12 @@ make the baseline fail. Their results are in [the history](#history).
 Every run is graded the same way, whatever its arm. The grader is
 [grade.go](../test/functional/agent/grade.go).
 
-1. The final tree is copied. Rule files and agent setup are left out of the
-   copy (`stele.md`, `CLAUDE.md`, `.claude/`, `.stele/`), and the scenario's
-   original `stele.md` files are put back. So an agent that edited or deleted
-   the rules is still graded against them.
+1. The final tree is copied. Left out of the copy, at any depth: `.git/`,
+   `.stele/`, `.claude/`, `.codex/`, `CLAUDE.md`, `AGENTS.md`, `stele.md`,
+   `stele.lock` and `__pycache__/`. Then the scenario's original `stele.md`
+   files are put back. So an agent that edited or deleted the rules is still
+   graded against them. If the agent changed one of the files left out, the
+   run's notes list it as "not graded: changed by the agent".
 2. `stele check --all` runs in each project. Each finding of a blocking rule
    is a violation.
 3. Each scenario adds its own checks: the secret is nowhere in the repository,
@@ -93,11 +102,14 @@ the run's notes:
 
 - A finding on a line the fixture already had, in the same file. These are
   the old violations of `edit-legacy`, the big scenarios and the probes. They
-  are listed as "in the fixture already, not counted".
+  are listed as "in the fixture already, not counted". Each old line excuses
+  one finding per rule: a copy the agent makes of an old line counts.
 - A finding of a non-blocking rule, listed as "warning". `stele check` passes
   with it too.
-- A file `stele check` could not read (binary, or over 32 MiB), and findings
-  past 100 per rule and file.
+- A file `stele check` did not check: binary, over 32 MiB, or kept out of git
+  by a `.gitignore` (`stele check --all` checks the files git tracks). And the
+  number of findings past 100 per rule and file.
+- A file left out of the graded copy that the agent changed (step 1).
 - The guidance rules a regex can't check (doc comments, table tests, `ctx`
   first...). The big scenarios grade them by heuristics, as "guidance
   missed". That count does not affect "compliant".
@@ -112,8 +124,9 @@ Limits of the grading:
 - A write through the shell (a heredoc, `sed -i`) is graded like any other:
   the grader reads the final tree. But stele's hooks don't see it. The
   results count these as "bash writes".
-- `stele check --all` checks the files git tracks. A file the agent added to a
-  `.gitignore` of its own would not be checked.
+- A file a `.gitignore` keeps out is not checked by `stele check`. It is
+  listed, not graded.
+- Rule files and agent setup the agent changed are listed, not graded.
 
 ## Rerun it
 
@@ -130,20 +143,22 @@ go run ./test/functional/agent -eval -reps 1 -model claude-sonnet-5-5 -out eval-
 - `-eval` runs the 9 scenarios above in the `claudemd` and `stele` arms.
 - `-reps` is the number of runs per scenario and arm.
 - `-out` names the results folder, under `test/functional/agent/results/`.
-- `-parallel` (default 3) is the number of runs at once. On a machine short of
-  memory, use 2.
+- `-parallel` is the number of runs at once: 2 with `-eval`, 3 otherwise.
+  More agents at once ran one machine short of memory (experiment 7).
 
 **It costs money.** Each run is one `claude -p` session. Claude Code uses
 whatever login it has: an `ANTHROPIC_API_KEY` in the environment bills the API;
 a claude.ai login uses your subscription's quota. The results record which,
-as `api_key_source` (`none` means a claude.ai login). See
+as `api_key_source`: `none` means no API key, for example a claude.ai login.
+They also record the model each session ran on, from Claude Code's own
+report, so you can see both arms used the same one. See
 [Cost](#cost-per-run).
 
 **Which stele.** The harness builds stele from the repository you run it in.
 When stele's code (`cmd/`, `internal/`, `go.mod`, `go.sum`) is the same as at
 the latest tag, the build carries that tag as its version, as a release build
 does. The summary says which. To test a stele binary you downloaded, pass it
-with `-stele`.
+with `-stele`; the summary then records its build info (`go version -m`).
 
 Each run starts from a fresh copy of the scenario, committed to git. Claude
 Code runs with `--setting-sources project` and no MCP servers, so your own
@@ -164,10 +179,29 @@ In `test/functional/agent/results/<out>/`:
 
 Streams and transcripts are kept in git only for folders named `eval-*`.
 
+**Everything under `results/` is scrubbed before it is written.** Claude
+Code's transcript holds the account's email and organization, and local
+paths name the user. So the harness:
+
+- replaces the run's folder, the temp folder and the home folder with
+  `<run>`, `<tmp>` and `~`, in every spelling (Windows and forward slashes,
+  JSON-escaped, MSYS, Claude Code's project folder name, 8.3 short names);
+- drops the account details: the `credential_org` and
+  `remote_session_change` attachments, `userEmail`, `organizationUuid`,
+  `accountUuid`, `emailAddress`, `oauthAccount`, `userID`, `memory_paths`,
+  and plugin paths;
+- replaces every other email with `<email>`.
+
+Then it searches the run's files for the home folder, your git
+`user.email` and the organization ids it saw. If it finds one, the run gets
+an error. The code is [scrub.go](../test/functional/agent/scrub.go).
+
 ## Cost per run
 
 From experiment 3 (Sonnet 5.5, 2 runs per scenario and arm), means per run.
-Most of the tokens are cache reads.
+Most of the tokens are cache reads. The `stele` column ran in experiment 3
+with stele v1.0.0-dev.2. The `claudemd` column is reused from experiments 1
+and 2, run on another day.
 
 | Scenario | `claudemd` tokens | `stele` tokens |
 |---|---|---|
@@ -187,11 +221,13 @@ about 120k are output.
 
 ## Results
 
-*To come: the pilot, 9 scenarios × 2 arms × 1 run, then the full run.*
+*To come: the pilot, 9 scenarios × 2 arms × 1 run, then the full run. The
+per-run numbers count only the runs without an error.*
 
 | | `claudemd` | `stele` |
 |---|---|---|
 | Runs | | |
+| Errors | | |
 | Compliant runs | | |
 | Violations | | |
 | Violations per run | | |

@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","cwd":"{{WORK}}","apiKeySource":"none","model":"claude-sonnet-5-5","claude_code_version":"9.9.9","plugins":[{"name":"fake-plugin","path":"{{HOME}}/plugins/fake-plugin"}],"memory_paths":["{{HOME}}/memory"]}
+{"type":"attachment","attachment":{"type":"credential_org","organizationUuid":"00000000-0000-4000-8000-00000000000a","organizationName":"Fake Org"}}
+{"type":"attachment","attachment":{"type":"remote_session_change","content":"Co-Authored-By: Fake Person <fake.person@example.net>"}}
+{"type":"user","attachment":{"type":"hook_additional_context","context":{"userEmail":"fake.person@example.net","cwd":"{{HOME}}"}},"oauthAccount":{"emailAddress":"fake.person@example.net","accountUuid":"00000000-0000-4000-8000-00000000000b"},"userID":"fake-user-id","message":{"content":"mail fake.person@example.net or eval@example.com"}}
+{"type":"user","message":{"content":"see {{FWD}}/a, {{MSYS}}/b and {{SLUG}}-c"},"big":12345678901234567890}
+not JSON: {{HOME}}

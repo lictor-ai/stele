@@ -23,10 +23,10 @@ go run ./test/functional/agent -eval -out eval-v1.5.0-pilot   # the published ev
 | `-model` | `claude-sonnet-5-5`; `gpt-6-luna` for Codex |
 | `-effort` | `medium`: Codex's `model_reasoning_effort` |
 | `-codex` | the npm package's `codex.js` (run with `node`), else `codex` on `PATH` |
-| `-parallel` | 3 |
+| `-parallel` | 3; 2 with `-eval` |
 | `-timeout` | 10m per run |
 | `-claude` | newest VS Code extension binary, else `claude` on `PATH` |
-| `-stele` | built from this module, with the latest tag as its version when stele's code is unchanged since that tag |
+| `-stele` | built from this module, with the latest tag as its version when stele's code is unchanged and nothing new is in it since that tag; a binary given here has its `go version -m` build info recorded |
 | `-eval` | off: the published evaluation's 9 scenarios (not the probes), arms `claudemd` and `stele` |
 | `-out` | none: the files go in `results/`; with a name, in `results/<name>/` |
 | `-keep` | off: each run's temporary tree is deleted after grading, and its diff kept in `results/<time>/` |
@@ -108,7 +108,9 @@ Every arm is graded the same way. The final tree is copied, the fixture's `stele
 
 `results/<time>.jsonl` holds one line per run. `results/<time>.md` holds the plain numbers per arm, means per scenario and arm, stele's differences against the other arms, and every violation and note. `results/<time>/` keeps each run's stream, session transcript and diff, and in `<scenario>-<arm>-<rep>.setup/` what the agent was given: the prompt and the rule files. Streams and transcripts stay out of git, except in folders named `eval-*`.
 
-A finding the grade does not count is still listed in the run's notes: a line the fixture already had, a non-blocking rule, a file `stele check` could not read, findings past its limit of 100 per rule and file.
+A finding the grade does not count is still listed in the run's notes: a line the fixture already had (each old line excuses one finding per rule), a non-blocking rule, a file `stele check` did not check (binary, too large, or ignored by a `.gitignore`), findings past its limit of 100 per rule and file, and the rule files and agent setup the agent changed, which the grader leaves out.
+
+Everything written under `results/` is scrubbed first ([scrub.go](scrub.go)): local paths become `<run>`, `<tmp>` and `~`, the account details in Claude Code's transcript are dropped, and emails become `<email>`. Then the run's files are searched for the home directory, your git `user.email` and any organization id seen; a find is the run's error. A transcript that cannot be found is an error too: the post-write flags were not counted.
 
 The reported counts:
 

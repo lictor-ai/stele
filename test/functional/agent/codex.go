@@ -278,10 +278,10 @@ func readCodexStream(path string, r *Result) (thread string) {
 // readRollout reads the session's rollout in CODEX_HOME: the model requests
 // (turns), and what stele said in the tool results: writes denied to show
 // rules, shell commands stopped, and writes sent back for a violation. It
-// keeps a copy beside the stream.
-func readRollout(cfg config, thread, stream string, r *Result) {
+// returns the rollout, to be kept beside the stream.
+func readRollout(cfg config, thread string, r *Result) []byte {
 	if thread == "" {
-		return
+		return nil
 	}
 	var path string
 	filepath.WalkDir(filepath.Join(cfg.codexHome, "sessions"), func(p string, d fs.DirEntry, err error) error {
@@ -292,13 +292,12 @@ func readRollout(cfg config, thread, stream string, r *Result) {
 		return nil
 	})
 	if path == "" {
-		return
+		return nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return nil
 	}
-	os.WriteFile(strings.TrimSuffix(stream, ".jsonl")+".transcript.jsonl", data, 0o644)
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		var ev struct {
 			Type    string `json:"type"`
@@ -333,6 +332,7 @@ func readRollout(cfg config, thread, stream string, r *Result) {
 			r.HookBytes += len(text)
 		}
 	}
+	return data
 }
 
 // outputText is a tool output's text: a string, an object with output, or

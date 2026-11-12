@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -48,8 +49,9 @@ type config struct {
 	timeout              time.Duration
 	scenarioDir, outDir  string
 	streamDir            string
-	keep                 bool // keep each run's temporary tree
-	rtk                  bool // add the user's rtk hook, and nothing else of theirs
+	gitEmail             string // the user's git user.email: no file under results/ may hold it
+	keep                 bool   // keep each run's temporary tree
+	rtk                  bool   // add the user's rtk hook, and nothing else of theirs
 }
 
 func main() {
@@ -57,7 +59,7 @@ func main() {
 		scenarios = flag.String("scenarios", "", "comma-separated scenarios to run (default: all)")
 		armList   = flag.String("arms", "", "comma-separated arms: none, claudemd, agentsmd, stele, stele-tools (default: none,claudemd,stele, or none,agentsmd,stele for Codex)")
 		reps      = flag.Int("reps", 1, "runs per scenario and arm")
-		parallel  = flag.Int("parallel", 3, "runs at once")
+		parallel  = flag.Int("parallel", 3, "runs at once (default 2 with -eval)")
 		baseline  = flag.String("baseline", "", "comma-separated results/*.jsonl whose runs of the arms not run now join the summary")
 		evalSet   = flag.Bool("eval", false, "the published evaluation (docs/eval.md): its 9 scenarios, arms claudemd and stele (agentsmd and stele for Codex)")
 		out       = flag.String("out", "", "a folder under results/ for this eval's files (default: results/ itself)")
@@ -83,6 +85,15 @@ func main() {
 		fail(fmt.Errorf("-out %q: give a folder name, not a path", *out))
 	}
 	cfg.outDir = filepath.Join(here, "results", *out)
+	if *evalSet {
+		// Fewer agents at once: 4 ran this machine short of memory (results,
+		// experiment 7).
+		set := false
+		flag.Visit(func(f *flag.Flag) { set = set || f.Name == "parallel" })
+		if !set {
+			*parallel = 2
+		}
+	}
 	if *evalSet && *scenarios == "" {
 		*scenarios = strings.Join(evalScenarios, ",")
 	}
@@ -128,7 +139,11 @@ func main() {
 	default:
 		fail(fmt.Errorf("unknown agent %q", cfg.agent))
 	}
-	steleDesc := cfg.stele + ", given with -stele"
+	cfg.gitEmail = gitUserEmail(here)
+	var steleDesc string
+	if cfg.stele != "" {
+		steleDesc = cfg.stele + ", given with -stele: " + buildInfo(cfg.stele)
+	}
 	if cfg.stele == "" {
 		root := filepath.Join(here, "..", "..", "..")
 		tag, desc := steleSource(root)
@@ -223,7 +238,7 @@ func main() {
 		"stele: " + homeless(steleDesc) + ".",
 		"Command: `go run ./test/functional/agent " + homeless(strings.Join(os.Args[1:], " ")) + "`.",
 	}
-	sum := summary(results, cfg.model, about)
+	sum := string(newScrubber("").text([]byte(summary(results, cfg.model, about))))
 	if err := os.WriteFile(filepath.Join(cfg.outDir, stamp+".md"), []byte(sum), 0o644); err != nil {
 		fail(err)
 	}
@@ -231,13 +246,43 @@ func main() {
 }
 
 // homeless replaces the user's home directory with ~, so a summary meant to
-// be published names no local account.
+// be published names no local account. It replaces it only where a path
+// ends or goes on (a separator), and never a home that is a root.
 func homeless(s string) string {
 	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
+	if err != nil || home == "" || filepath.Dir(home) == home {
 		return s
 	}
-	return strings.ReplaceAll(s, home, "~")
+	re := regexp.MustCompile(caseFold + regexp.QuoteMeta(home) + `([\\/]|$|[^\w.-])`)
+	return re.ReplaceAllString(s, "~$1")
+}
+
+// gitUserEmail is git's user.email in dir, or "".
+func gitUserEmail(dir string) string {
+	cmd := exec.Command("git", "config", "user.email")
+	cmd.Dir = dir
+	b, _ := cmd.Output()
+	return strings.TrimSpace(string(b))
+}
+
+// buildInfo says what a stele binary was built from: its module version,
+// commit and -ldflags, from go version -m. stele has no version command.
+func buildInfo(bin string) string {
+	b, err := exec.Command("go", "version", "-m", bin).Output()
+	if err != nil {
+		return "no build info"
+	}
+	var parts []string
+	for _, l := range strings.Split(string(b), "\n") {
+		f := strings.Fields(l)
+		switch {
+		case len(f) >= 3 && f[0] == "mod":
+			parts = append(parts, f[1]+" "+f[2])
+		case len(f) >= 2 && f[0] == "build" && (strings.HasPrefix(f[1], "-ldflags=") || strings.HasPrefix(f[1], "vcs.revision=") || strings.HasPrefix(f[1], "vcs.modified=")):
+			parts = append(parts, strings.Join(f[1:], " "))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // sourceDir is this package's directory, so the harness runs from any cwd.
@@ -303,8 +348,11 @@ func steleSource(root string) (tag, desc string) {
 	if err != nil {
 		return "", head
 	}
-	// git diff --quiet exits 1 when the code differs from the tag.
-	if _, err := git("diff", "--quiet", last, "--", "cmd", "internal", "go.mod", "go.sum"); err != nil {
+	// git diff --quiet exits 1 when the code differs from the tag; status
+	// lists new files git does not track yet.
+	_, diff := git("diff", "--quiet", last, "--", "cmd", "internal", "go.mod", "go.sum")
+	untracked, err := git("status", "--porcelain", "--untracked-files=all", "--", "cmd", "internal", "go.mod", "go.sum")
+	if diff != nil || err != nil || untracked != "" {
 		return "", head + ", stele's code changed since " + last
 	}
 	return last, last + " (stele's code as tagged; the module is at " + head + ")"

@@ -175,10 +175,12 @@ func summary(results []Result, model string, about []string) string {
 	return b.String()
 }
 
-// ranWith says which Claude Code versions ran and where their credentials
-// came from, from the runs made now.
+// ranWith says, from the runs made now, which Claude Code versions ran,
+// where their credentials came from, and the model each arm's sessions ran
+// on.
 func ranWith(results []Result) []string {
 	versions, keys := map[string]bool{}, map[string]bool{}
+	models := map[string]map[string]bool{} // arm -> resolved models
 	for _, r := range results {
 		if r.Baseline != "" {
 			continue
@@ -189,13 +191,28 @@ func ranWith(results []Result) []string {
 		if r.APIKeySource != "" {
 			keys[r.APIKeySource] = true
 		}
+		if r.ResolvedModel != "" {
+			if models[r.Arm] == nil {
+				models[r.Arm] = map[string]bool{}
+			}
+			models[r.Arm][r.ResolvedModel] = true
+		}
 	}
 	var out []string
 	if len(versions) > 0 {
 		out = append(out, "Claude Code version: "+strings.Join(slices.Sorted(maps.Keys(versions)), ", ")+".")
 	}
 	if len(keys) > 0 {
-		out = append(out, "Credentials (apiKeySource): "+strings.Join(slices.Sorted(maps.Keys(keys)), ", ")+"; none is a claude.ai login, billed to the subscription.")
+		out = append(out, "Credentials (apiKeySource): "+strings.Join(slices.Sorted(maps.Keys(keys)), ", ")+"; none means no API key, for example a claude.ai login.")
+	}
+	var per []string
+	for _, a := range arms {
+		if len(models[a]) > 0 {
+			per = append(per, a+" "+strings.Join(slices.Sorted(maps.Keys(models[a])), ", "))
+		}
+	}
+	if len(per) > 0 {
+		out = append(out, "Model each arm ran on, from Claude Code's init event: "+strings.Join(per, "; ")+".")
 	}
 	return out
 }
@@ -208,8 +225,8 @@ func plain(b *strings.Builder, results []Result) {
 		byArm[r.Arm] = append(byArm[r.Arm], r)
 	}
 	b.WriteString("## Plain numbers\n\n")
-	b.WriteString("Per arm, over every scenario. A violation is a blocking rule broken in the final tree, found by `stele check --all` or by the scenario's own checks. Denies are writes stele paused to show rules; post-write flags are writes stele's check sent back after they were made.\n\n")
-	b.WriteString("| arm | runs | compliant runs | violations | violations per run | denies per run | post-write flags per run | tokens per run | task ok | errors |\n")
+	b.WriteString("Per arm, over every scenario. A violation is a blocking rule broken in the final tree, found by `stele check --all` or by the scenario's own checks. Denies are writes stele paused to show rules; post-write flags are writes stele's check sent back after they were made. Runs, errors, compliant runs, violations and task ok count every run. The per-run means count only the runs without an error, whose numbers are whole.\n\n")
+	b.WriteString("| arm | runs | errors | compliant runs | violations | violations per run (no error) | denies per run (no error) | post-write flags per run (no error) | tokens per run (no error) | task ok |\n")
 	b.WriteString("|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, a := range arms {
 		rs := byArm[a]
@@ -217,7 +234,11 @@ func plain(b *strings.Builder, results []Result) {
 			continue
 		}
 		compliant, violations, taskOK := 0, 0, 0
+		var clean []Result
 		for _, r := range rs {
+			if r.Error == "" {
+				clean = append(clean, r)
+			}
 			if r.Compliant {
 				compliant++
 			}
@@ -226,9 +247,10 @@ func plain(b *strings.Builder, results []Result) {
 			}
 			violations += len(r.Violations)
 		}
-		s := mean(rs)
-		fmt.Fprintf(b, "| %s | %d | %d/%d | %d | %.2f | %.2f | %.2f | %.0f | %d/%d | %d |\n",
-			a, s.n, compliant, s.n, violations, s.violations, s.denies, s.blocks, s.tokens(), taskOK, s.n, s.errors)
+		s := mean(clean)
+		n := len(rs)
+		fmt.Fprintf(b, "| %s | %d | %d | %d/%d | %d | %.2f | %.2f | %.2f | %.0f | %d/%d |\n",
+			a, n, n-len(clean), compliant, n, violations, s.violations, s.denies, s.blocks, s.tokens(), taskOK, n)
 	}
 	b.WriteString("\n")
 }
