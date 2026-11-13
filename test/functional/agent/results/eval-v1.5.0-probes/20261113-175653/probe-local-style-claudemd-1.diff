@@ -1,0 +1,123 @@
+diff --git a/internal/cmds/registry.go b/internal/cmds/registry.go
+index b04ca94..c14ac3e 100644
+--- a/internal/cmds/registry.go
++++ b/internal/cmds/registry.go
+@@ -18,4 +18,5 @@ var All = []Command{
+ 	{"cache", "show cache statistics", Cache},
+ 	{"tenants", "list tenants", Tenants},
+ 	{"flags", "list feature flags", Flags},
++	{"version", "show the version", VersionCmd},
+ }
+diff --git a/internal/cmds/version.go b/internal/cmds/version.go
+new file mode 100644
+index 0000000..3fb6eca
+--- /dev/null
++++ b/internal/cmds/version.go
+@@ -0,0 +1,34 @@
++package cmds
++
++import (
++	"fmt"
++	"io"
++	"os"
++	"runtime"
++)
++
++// Version is the build version. Set it at build time with
++// -ldflags "-X example.com/app/internal/cmds.Version=1.2.3".
++var Version = "dev"
++
++// appName is the name the version report shows.
++const appName = "app"
++
++// VersionCmd prints the app name, build version and Go version.
++func VersionCmd(args []string) error {
++	return writeVersion(os.Stdout, Version, runtime.Version(), args)
++}
++
++// writeVersion writes the version report to w.
++func writeVersion(w io.Writer, version, goVersion string, args []string) error {
++	if _, err := fmt.Fprintf(w, "%-10s %s\n%-10s %s\n%-10s %s\n",
++		"name:", appName, "version:", version, "go:", goVersion); err != nil {
++		return fmt.Errorf("write version: %w", err)
++	}
++	if len(args) > 0 {
++		if _, err := fmt.Fprintf(w, "(ignoring %d arguments)\n", len(args)); err != nil {
++			return fmt.Errorf("write version: %w", err)
++		}
++	}
++	return nil
++}
+diff --git a/internal/cmds/version_test.go b/internal/cmds/version_test.go
+new file mode 100644
+index 0000000..c5aa86a
+--- /dev/null
++++ b/internal/cmds/version_test.go
+@@ -0,0 +1,67 @@
++package cmds
++
++import (
++	"errors"
++	"runtime"
++	"strings"
++	"testing"
++)
++
++type failWriter struct{}
++
++var errWrite = errors.New("write failed")
++
++func (failWriter) Write([]byte) (int, error) { return 0, errWrite }
++
++func TestWriteVersion(t *testing.T) {
++	tests := []struct {
++		name    string
++		version string
++		args    []string
++		want    string
++	}{
++		{"default", "dev", nil, "name:      app\nversion:   dev\ngo:        go1.x\n"},
++		{"release", "1.2.3", []string{}, "name:      app\nversion:   1.2.3\ngo:        go1.x\n"},
++		{"empty version", "", nil, "name:      app\nversion:   \ngo:        go1.x\n"},
++		{"extra args", "dev", []string{"a", "b"}, "name:      app\nversion:   dev\ngo:        go1.x\n(ignoring 2 arguments)\n"},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			var sb strings.Builder
++			if err := writeVersion(&sb, tt.version, "go1.x", tt.args); err != nil {
++				t.Fatalf("writeVersion(%q, %v) error = %v, want nil", tt.version, tt.args, err)
++			}
++			if got := sb.String(); got != tt.want {
++				t.Errorf("writeVersion(%q, %v) = %q, want %q", tt.version, tt.args, got, tt.want)
++			}
++		})
++	}
++}
++
++func TestWriteVersionWriteError(t *testing.T) {
++	err := writeVersion(failWriter{}, "dev", "go1.x", nil)
++	if !errors.Is(err, errWrite) {
++		t.Errorf("writeVersion(failWriter) error = %v, want wrapping %v", err, errWrite)
++	}
++}
++
++func TestVersionRegistered(t *testing.T) {
++	for _, c := range All {
++		if c.Name == "version" {
++			if c.Run == nil {
++				t.Fatalf("command %q has nil Run", c.Name)
++			}
++			return
++		}
++	}
++	t.Errorf("All has no %q command", "version")
++}
++
++func TestVersionCmdUsesRuntime(t *testing.T) {
++	if runtime.Version() == "" {
++		t.Fatalf("runtime.Version() = %q, want non-empty", runtime.Version())
++	}
++	if err := VersionCmd(nil); err != nil {
++		t.Errorf("VersionCmd(nil) = %v, want nil", err)
++	}
++}
