@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -203,7 +204,9 @@ func TestScrubPATH(t *testing.T) {
 	vendor := filepath.Join(base, "FakeVendor", "bin")
 	spaced := filepath.Join(base, "Other Vendor", "bin")
 	third := filepath.Join(base, "ToolC", "bin")
-	raw := strings.Join([]string{homeBin, "/usr/bin", tool, vendor, spaced, "/bin", third}, string(os.PathListSeparator))
+	// System dirs a Linux or macOS PATH holds are not the user's own.
+	raw := strings.Join([]string{homeBin, "/usr/bin", tool, vendor, spaced, "/bin", third,
+		"/usr/local/go/bin", "/snap/bin", "/usr/games", "/opt/homebrew/bin"}, string(os.PathListSeparator))
 	t.Setenv("PATH", raw)
 	env.path = filepath.SplitList(os.Getenv("PATH"))
 	s := newScrubberFor(env)
@@ -224,9 +227,15 @@ func TestScrubPATH(t *testing.T) {
 		"PATH=" + raw + "\nnext":               "PATH=<PATH>\nnext",
 		"echo: " + bash + " done":              "echo: <PATH> done",
 		// Lists that are not the machine's PATH stay.
-		"ENV PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin": "ENV PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
-		"at 10:30:45, a:b:c and /x:/y:/z":                         "at 10:30:45, a:b:c and /x:/y:/z",
-		"two: " + tilde(homeBin) + ":/usr/bin":                    "two: ~/bin:/usr/bin",
+		"ENV PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin":     "ENV PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+		"PATH=/opt/homebrew/bin:/snap/bin:/usr/games:/usr/bin":        "PATH=/opt/homebrew/bin:/snap/bin:/usr/games:/usr/bin",
+		"at 10:30:45, a:b:c and /x:/y:/z":                             "at 10:30:45, a:b:c and /x:/y:/z",
+		"two: " + tilde(homeBin) + ":/usr/bin":                        "two: ~/bin:/usr/bin",
+		"github.com/a/b:github.com/c/d:golang.org/x/tools":            "github.com/a/b:github.com/c/d:golang.org/x/tools",
+		"https://a.example/x;https://b.example/y;https://c.example/z": "https://a.example/x;https://b.example/y;https://c.example/z",
+		// which's output cut short: the text after it stays.
+		"which: no docker in (/usr/bin:/bin\nlater text (with parens) and more)": "which: no docker in (/usr/bin:/bin\nlater text (with parens) and more)",
+		"which: no docker in (/usr/bin:/bin\" then \"x)":                         "which: no docker in (/usr/bin:/bin\" then \"x)",
 	} {
 		if got := string(s.paths([]byte(in))); got != want {
 			t.Errorf("paths(%q)\n = %q\nwant %q", in, got, want)
@@ -244,14 +253,63 @@ func TestScrubPATH(t *testing.T) {
 		t.Errorf("transcript content = %q", got)
 	}
 
-	// leak: 3 of the machine's own entries, anywhere.
-	if what := s.leak([]byte("see " + vendor + ", " + spaced + " and " + third)); what != "the machine's PATH" {
+	// which cut short in a transcript, its ) in another field.
+	line, _ = json.Marshal(map[string]any{"type": "user", "a": "which: no docker in (/usr/bin:/c/x", "b": "ok)"})
+	out = s.jsonl(line)
+	ev = nil
+	if err := json.Unmarshal(out, &ev); err != nil {
+		t.Fatalf("scrubbed line is not JSON: %v\n%s", err, out)
+	}
+	if ev["a"] != "which: no docker in (/usr/bin:/c/x" || ev["b"] != "ok)" {
+		t.Errorf("cut-short which in JSON = %s", out)
+	}
+
+	// leak: 2 of the machine's own entries, anywhere.
+	if what := s.leak([]byte("see " + vendor + " and " + spaced)); what != "the machine's PATH" {
 		t.Errorf("leak = %q, want the machine's PATH", what)
 	}
-	if what := s.leak([]byte("see " + vendor + " and /usr/bin")); what != "" {
-		t.Errorf("leak = %q on one entry, want none", what)
+	if what := s.leak([]byte("see " + vendor + " and /usr/bin, /usr/local/go/bin, /opt/homebrew/bin")); what != "" {
+		t.Errorf("leak = %q on one own entry, want none", what)
 	}
 	if what := s.leak(s.text([]byte("PATH=" + raw))); what != "" {
 		t.Errorf("leak = %q after scrubbing", what)
+	}
+}
+
+// TestScrubWindowsPATH is a Windows PATH, as cmd and PowerShell print it.
+func TestScrubWindowsPATH(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("drive-letter paths")
+	}
+	home := `C:\Users\Someone`
+	entries := []string{
+		home + `\bin`,
+		`C:\Program Files\Git\cmd`,
+		`C:\Program Files\Go\bin`,
+		`C:\Windows\system32`,
+		`C:\Windows`,
+		home + `\Local\Programs\Tool\bin`,
+		`D:\tools\fakecli`,
+	}
+	win := strings.Join(entries, ";")
+	t.Setenv("PATH", win)
+	t.Setenv("SystemRoot", `C:\Windows`)
+	s := newScrubberFor(scrubEnv{home: home, path: filepath.SplitList(os.Getenv("PATH"))})
+	for in, want := range map[string]string{
+		"Path=" + win + "\r\n":                       "Path=<PATH>\r\n",
+		"Path=" + strings.ReplaceAll(win, `\`, `\\`): "Path=<PATH>",
+		// An entry not on PATH, with a space, does not split the list.
+		"Path=" + entries[0] + `;C:\Some Unknown Dir\x;` + strings.Join(entries[1:], ";"):                              "Path=<PATH>",
+		"Path=" + strings.Join(entries[:2], ";") + `;C:\Unknown Space\y;` + entries[6]:                                 "Path=<PATH>",
+		"/c/Users/Someone/bin:/c/Program Files/Git/cmd:/mingw64/bin:/usr/bin:/c/Program Files/Go/bin:/d/tools/fakecli": "<PATH>",
+		// 2 own entries are enough.
+		`C:\Program Files\Git\cmd;C:\Program Files\Go\bin`:       "<PATH>",
+		`C:\Windows\system32;C:\Windows;C:\Program Files\Go\bin`: "<PATH>",
+		// System dirs only stay.
+		`C:\Windows\system32;C:\Windows`: `C:\Windows\system32;C:\Windows`,
+	} {
+		if got := string(s.paths([]byte(in))); got != want {
+			t.Errorf("paths(%q)\n = %q\nwant %q", in, got, want)
+		}
 	}
 }

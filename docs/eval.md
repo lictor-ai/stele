@@ -211,9 +211,11 @@ So the harness:
   `oauthAccount`, `userID`, `memory_paths`, their snake_case forms, and
   plugin paths;
 - replaces a printed `PATH` with `<PATH>`: what `which: no x in (...)`
-  lists, and any list of folders joined by `:` or `;` that holds 3 of your
-  `PATH`'s entries, one of them your own (under the home folder, or not a
-  standard system folder). It names the software you have installed;
+  lists, and any list of folders joined by `:` or `;` that holds 2 of your
+  own `PATH` entries, or 3 entries one of which is your own. Your own is
+  under the home folder, or outside the system folders (`/usr`, `/opt`,
+  `/snap`, `/bin`, `/sbin`, the Windows folder). It names the software you
+  have installed;
 - replaces each `api-request-blob` line, the raw API request with Claude
   Code's system prompt, with a line saying it was removed;
 - in streams and transcripts, replaces every other email with `<email>`,
@@ -222,7 +224,7 @@ So the harness:
   account replacements, so the agent's code keeps its own example emails.
 
 Then it searches the run's files for the home folder, your account name,
-the account's ids and emails, the organization ids it saw, and 3 or more of
+the account's ids and emails, the organization ids it saw, and 2 or more of
 your own `PATH` entries. A file that
 still holds one is replaced by a one-line marker, and the run gets an error.
 The results line of each run is checked the same way: a text that still
@@ -342,7 +344,7 @@ numbers below are from `20261113-175653.regraded.md`.
 | Bash writes per run | 0.6 | 0 |
 | Tokens per run | 188k | 187k |
 | Output tokens per run | 3.9k | 3.9k |
-| Time per run | 38 s | 39 s |
+| Time per run | 38.5 s | 39.1 s |
 | Task ok | 12/12 | 12/12 |
 
 - **The one non-compliant run is `probe-cli-marks`, `claudemd` #2.** Its

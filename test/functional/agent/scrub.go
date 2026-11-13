@@ -444,8 +444,10 @@ func (s *scrubber) checkLeaks(base string) error {
 // prints it: which lists it when it finds nothing, and so does echo $PATH.
 // What `which: no x in (...)` lists becomes <PATH>, and so does any list of
 // directories, joined by : or ;, that holds 3 of PATH's entries, one of them
-// this machine's own: under the home directory, or not a standard system
-// directory. A list of standard ones only, as a Dockerfile sets, is kept.
+// this machine's own, or 2 of its own. Own is under the home directory, or
+// not a system directory (under /usr, /opt, /snap, /bin, /sbin, or the
+// Windows directory). A list of system ones only, as a Dockerfile sets, is
+// kept.
 
 // pathList finds the machine's PATH in a text.
 type pathList struct {
@@ -455,20 +457,29 @@ type pathList struct {
 }
 
 // whichNo is what which prints when it finds nothing: the PATH it searched.
-var whichNo = regexp.MustCompile(`(which: no \S+ in \()(?:[^()]|\([^()]*\))*(\))`)
+// It stops at a quote, a newline, or a JSON \n or \r: a list cut short is
+// left to pathList, and the text after it is kept.
+var whichNo = regexp.MustCompile(`(which: no \S+ in \()(?:[^()"\r\n\\]|\\\\|\\[^nr"\\]|\([^()"\r\n\\]*\))*(\))`)
 
 // otherEntry is a directory that is not PATH's: an absolute path with no
 // space, which never ends in a backslash (it may be a JSON escape's).
 const otherEntry = `(?:~|/|[A-Za-z]:(?:\\+|/))(?:[^\s:;"'()<>|,\\]|\\+[^\s:;"'()<>|,\\])*`
 
-// unixDirs are the standard directories of a Unix PATH.
-var unixDirs = []string{"/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/local/bin", "/usr/local/sbin"}
+// spacedEntry is a Windows directory that is not PATH's, spaces and all, up
+// to the ; that ends it.
+const spacedEntry = `[A-Za-z]:(?:\\+|/)[^;"'\r\n<>|]*`
 
-// standardDir reports a system directory every machine has: a Unix
-// standard one, or the Windows directory and what is under it.
+// systemDirs hold the system's own directories on Unix, which name no
+// software of the user's.
+var systemDirs = []string{"/usr", "/opt", "/snap", "/bin", "/sbin"}
+
+// standardDir reports a system directory: under one of systemDirs, or the
+// Windows directory and what is under it.
 func standardDir(e string) bool {
-	if slices.Contains(unixDirs, e) {
-		return true
+	for _, d := range systemDirs {
+		if e == d || strings.HasPrefix(e, d+"/") {
+			return true
+		}
 	}
 	root := os.Getenv("SystemRoot")
 	if runtime.GOOS != "windows" || root == "" {
@@ -525,7 +536,7 @@ func newPathList(entries []string, home string) *pathList {
 		}
 		seen[key] = true
 		sp := entrySpellings(e, home)
-		if standardDir(e) {
+		if underDir(e, home) == "" && standardDir(e) {
 			std = append(std, sp...)
 			continue
 		}
@@ -545,8 +556,9 @@ func newPathList(entries []string, home string) *pathList {
 	}
 	ownAlt, stdAlt := alt(own), alt(std)
 	entry := `(?:` + ownAlt + `|` + stdAlt + `|` + otherEntry + `)`
-	p.list = regexp.MustCompile(caseFold + before + `(` + entry + `(?:[:;]` + entry + `)+)($|[^A-Za-z0-9_.\-])`)
-	p.entry = regexp.MustCompile(caseFold + `^(?:(` + ownAlt + `)|(` + stdAlt + `)|` + otherEntry + `)(?:[:;]|$)`)
+	// An entry with a space that is not PATH's goes only before a ;.
+	p.list = regexp.MustCompile(caseFold + before + `((?:` + entry + `[:;]|` + spacedEntry + `;)+` + entry + `)($|[^A-Za-z0-9_.\-])`)
+	p.entry = regexp.MustCompile(caseFold + `^(?:(?:(` + ownAlt + `)|(` + stdAlt + `)|` + otherEntry + `)(?:[:;]|$)|` + spacedEntry + `;)`)
 	return p
 }
 
@@ -570,7 +582,7 @@ func (p *pathList) scrub(b []byte) []byte {
 }
 
 // isPATH reports a list that holds 3 of PATH's entries, one of them its
-// own.
+// own, or 2 of its own.
 func (p *pathList) isPATH(list []byte) bool {
 	own, known := 0, 0
 	for len(list) > 0 {
@@ -587,10 +599,10 @@ func (p *pathList) isPATH(list []byte) bool {
 		}
 		list = list[m[1]:]
 	}
-	return own >= 1 && known >= 3
+	return own >= 2 || (own >= 1 && known >= 3)
 }
 
-// leak reports a text that still names 3 of the machine's own PATH
+// leak reports a text that still names 2 of the machine's own PATH
 // entries, anywhere in it.
 func (p *pathList) leak(b []byte) bool {
 	if p == nil {
@@ -599,7 +611,7 @@ func (p *pathList) leak(b []byte) bool {
 	n := 0
 	for _, re := range p.own {
 		if re.Match(b) {
-			if n++; n >= 3 {
+			if n++; n >= 2 {
 				return true
 			}
 		}
