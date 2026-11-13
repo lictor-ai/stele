@@ -194,3 +194,64 @@ func TestWithoutLeaks(t *testing.T) {
 		t.Errorf("error = %q", got.Error)
 	}
 }
+
+func TestScrubPATH(t *testing.T) {
+	env := fakeEnv(t)
+	base := t.TempDir()
+	homeBin := filepath.Join(env.home, "bin")
+	tool := filepath.Join(env.home, "Local", "FakeTool", "bin")
+	vendor := filepath.Join(base, "FakeVendor", "bin")
+	spaced := filepath.Join(base, "Other Vendor", "bin")
+	third := filepath.Join(base, "ToolC", "bin")
+	raw := strings.Join([]string{homeBin, "/usr/bin", tool, vendor, spaced, "/bin", third}, string(os.PathListSeparator))
+	t.Setenv("PATH", raw)
+	env.path = filepath.SplitList(os.Getenv("PATH"))
+	s := newScrubberFor(env)
+
+	// As Git Bash prints it: MSYS drives, the home as ~, and its own dirs.
+	msys := func(p string) string {
+		if m := drivePath.FindStringSubmatch(p); m != nil {
+			return "/" + strings.ToLower(m[1]) + "/" + filepath.ToSlash(m[2])
+		}
+		return p
+	}
+	tilde := func(p string) string { return "~" + filepath.ToSlash(strings.TrimPrefix(p, env.home)) }
+	bash := strings.Join([]string{tilde(homeBin), "/mingw64/bin", "/usr/bin", tilde(tool), msys(vendor), msys(spaced), "/tmp/stele-eval-bin-1", msys(third)}, ":")
+
+	for in, want := range map[string]string{
+		"which: no docker in (" + bash + ")\n": "which: no docker in (<PATH>)\n",
+		"which: no docker in (/a (x86)/b:/c)":  "which: no docker in (<PATH>)",
+		"PATH=" + raw + "\nnext":               "PATH=<PATH>\nnext",
+		"echo: " + bash + " done":              "echo: <PATH> done",
+		// Lists that are not the machine's PATH stay.
+		"ENV PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin": "ENV PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+		"at 10:30:45, a:b:c and /x:/y:/z":                         "at 10:30:45, a:b:c and /x:/y:/z",
+		"two: " + tilde(homeBin) + ":/usr/bin":                    "two: ~/bin:/usr/bin",
+	} {
+		if got := string(s.paths([]byte(in))); got != want {
+			t.Errorf("paths(%q)\n = %q\nwant %q", in, got, want)
+		}
+	}
+
+	// In a transcript, escaped in JSON.
+	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"content": "PATH is " + raw + "\nok"}})
+	out := s.jsonl(line)
+	var ev map[string]any
+	if err := json.Unmarshal(out, &ev); err != nil {
+		t.Fatalf("scrubbed line is not JSON: %v\n%s", err, out)
+	}
+	if got := ev["message"].(map[string]any)["content"]; got != "PATH is <PATH>\nok" {
+		t.Errorf("transcript content = %q", got)
+	}
+
+	// leak: 3 of the machine's own entries, anywhere.
+	if what := s.leak([]byte("see " + vendor + ", " + spaced + " and " + third)); what != "the machine's PATH" {
+		t.Errorf("leak = %q, want the machine's PATH", what)
+	}
+	if what := s.leak([]byte("see " + vendor + " and /usr/bin")); what != "" {
+		t.Errorf("leak = %q on one entry, want none", what)
+	}
+	if what := s.leak(s.text([]byte("PATH=" + raw))); what != "" {
+		t.Errorf("leak = %q after scrubbing", what)
+	}
+}

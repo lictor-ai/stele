@@ -19,7 +19,8 @@ import (
 // scrubbed first: the run's work directory, the temp directory and the
 // home directory become <run>, <tmp> and ~, the user's account name
 // becomes <user>, the account details Claude Code writes into its
-// transcript are dropped, and emails become <email>.
+// transcript are dropped, emails become <email>, and a printed PATH
+// becomes <PATH>.
 
 // scrubEnv is what the scrubber hides. Tests set it; newScrubber reads it
 // from the machine.
@@ -27,6 +28,7 @@ type scrubEnv struct {
 	work, tmp, home string
 	user            string   // the account name, without a domain
 	account         []string // the account's emails and ids: .claude.json, git's user.email
+	path            []string // PATH's entries
 }
 
 // pathRule replaces one spelling of a local path or name.
@@ -38,11 +40,12 @@ type pathRule struct {
 
 // scrubber scrubs one run's files.
 type scrubber struct {
-	rules   []pathRule
-	home    []*regexp.Regexp // every spelling of the home directory, for leak
-	user    *regexp.Regexp   // the account name, or nil
-	account []string
-	accRe   []pathRule // account, as case-insensitive rules
+	rules    []pathRule
+	home     []*regexp.Regexp // every spelling of the home directory, for leak
+	user     *regexp.Regexp   // the account name, or nil
+	account  []string
+	accRe    []pathRule // account, as case-insensitive rules
+	pathList *pathList  // the machine's PATH, or nil
 	// orgs are the organizationUuid values seen while scrubbing, which
 	// leak looks for afterwards.
 	orgs map[string]bool
@@ -74,6 +77,7 @@ func machineEnv() scrubEnv {
 			machine.user = name
 		}
 		machine.account = claudeAccount(machine.home)
+		machine.path = filepath.SplitList(os.Getenv("PATH"))
 		if out, err := exec.Command("git", "config", "user.email").Output(); err == nil {
 			if e := strings.TrimSpace(string(out)); e != "" {
 				machine.account = append(machine.account, e)
@@ -139,6 +143,7 @@ func newScrubberFor(env scrubEnv) *scrubber {
 		s.account = append(s.account, a)
 		s.accRe = append(s.accRe, pathRule{re: regexp.MustCompile(`(?i)` + regexp.QuoteMeta(a)), with: with})
 	}
+	s.pathList = newPathList(env.path, env.home)
 	return s
 }
 
@@ -220,6 +225,7 @@ func sepFlexible(p string) string {
 // the account name, and the account's emails and ids. It is all a diff or
 // a setup file gets: the agent's code keeps its own example emails.
 func (s *scrubber) paths(b []byte) []byte {
+	b = s.pathList.scrub(b)
 	for _, r := range s.rules {
 		// A match takes the character around it, so two paths one
 		// character apart need a second pass.
@@ -392,6 +398,9 @@ func (s *scrubber) leak(b []byte) string {
 			return "an organizationUuid"
 		}
 	}
+	if s.pathList.leak(b) {
+		return "the machine's PATH"
+	}
 	return ""
 }
 
@@ -429,4 +438,171 @@ func (s *scrubber) checkLeaks(base string) error {
 		return fmt.Errorf("removed after scrubbing, private data left: %s", strings.Join(found, ", "))
 	}
 	return nil
+}
+
+// The machine's PATH names the software installed on it, and an agent
+// prints it: which lists it when it finds nothing, and so does echo $PATH.
+// What `which: no x in (...)` lists becomes <PATH>, and so does any list of
+// directories, joined by : or ;, that holds 3 of PATH's entries, one of them
+// this machine's own: under the home directory, or not a standard system
+// directory. A list of standard ones only, as a Dockerfile sets, is kept.
+
+// pathList finds the machine's PATH in a text.
+type pathList struct {
+	list  *regexp.Regexp   // a run of 2 or more entries
+	entry *regexp.Regexp   // one entry and its separator: group 1 an own entry, group 2 a standard one
+	own   []*regexp.Regexp // each own entry alone, for leak
+}
+
+// whichNo is what which prints when it finds nothing: the PATH it searched.
+var whichNo = regexp.MustCompile(`(which: no \S+ in \()(?:[^()]|\([^()]*\))*(\))`)
+
+// otherEntry is a directory that is not PATH's: an absolute path with no
+// space, which never ends in a backslash (it may be a JSON escape's).
+const otherEntry = `(?:~|/|[A-Za-z]:(?:\\+|/))(?:[^\s:;"'()<>|,\\]|\\+[^\s:;"'()<>|,\\])*`
+
+// unixDirs are the standard directories of a Unix PATH.
+var unixDirs = []string{"/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/local/bin", "/usr/local/sbin"}
+
+// standardDir reports a system directory every machine has: a Unix
+// standard one, or the Windows directory and what is under it.
+func standardDir(e string) bool {
+	if slices.Contains(unixDirs, e) {
+		return true
+	}
+	root := os.Getenv("SystemRoot")
+	if runtime.GOOS != "windows" || root == "" {
+		return false
+	}
+	return strings.EqualFold(e, strings.TrimRight(root, `\/`)) || underDir(e, root) != ""
+}
+
+// underDir is e's part below dir, from its separator on, or "".
+func underDir(e, dir string) string {
+	dir = strings.TrimRight(dir, `\/`)
+	if dir == "" || len(e) <= len(dir) || (e[len(dir)] != '\\' && e[len(dir)] != '/') {
+		return ""
+	}
+	if e[:len(dir)] == dir || (caseFold != "" && strings.EqualFold(e[:len(dir)], dir)) {
+		return e[len(dir):]
+	}
+	return ""
+}
+
+// entrySpellings are the regexps for PATH entry e: as it is, as MSYS
+// writes it (/c/x), and under ~ when it is in home; each with its
+// separators as sepFlexible matches them.
+func entrySpellings(e, home string) []string {
+	forms := []string{e}
+	if m := drivePath.FindStringSubmatch(e); m != nil {
+		forms = append(forms, "/"+m[1]+"/"+m[2])
+	}
+	if rest := underDir(e, home); rest != "" && filepath.Dir(home) != home {
+		forms = append(forms, "~"+rest)
+	}
+	var out []string
+	for _, f := range forms {
+		out = append(out, sepFlexible(f))
+	}
+	return out
+}
+
+// newPathList finds the PATH whose entries are entries; nil when none of
+// them is the machine's own.
+func newPathList(entries []string, home string) *pathList {
+	var own, std []string
+	p := &pathList{}
+	seen := map[string]bool{}
+	for _, e := range entries {
+		e = strings.TrimRight(strings.TrimSpace(e), `\/`)
+		key := e
+		if caseFold != "" {
+			key = strings.ToLower(e)
+		}
+		if e == "" || seen[key] || !(filepath.IsAbs(e) || strings.HasPrefix(e, "/")) || filepath.Dir(e) == e ||
+			(home != "" && strings.EqualFold(e, strings.TrimRight(home, `\/`))) {
+			continue
+		}
+		seen[key] = true
+		sp := entrySpellings(e, home)
+		if standardDir(e) {
+			std = append(std, sp...)
+			continue
+		}
+		own = append(own, sp...)
+		p.own = append(p.own, regexp.MustCompile(caseFold+before+`(?:`+strings.Join(sp, "|")+`)`+after))
+	}
+	if len(own) == 0 {
+		return nil
+	}
+	alt := func(sp []string) string {
+		if len(sp) == 0 {
+			return `[^\s\S]` // matches nothing
+		}
+		// Longer first, so an entry is not cut at a shorter one's end.
+		slices.SortStableFunc(sp, func(a, b string) int { return len(b) - len(a) })
+		return strings.Join(sp, "|")
+	}
+	ownAlt, stdAlt := alt(own), alt(std)
+	entry := `(?:` + ownAlt + `|` + stdAlt + `|` + otherEntry + `)`
+	p.list = regexp.MustCompile(caseFold + before + `(` + entry + `(?:[:;]` + entry + `)+)($|[^A-Za-z0-9_.\-])`)
+	p.entry = regexp.MustCompile(caseFold + `^(?:(` + ownAlt + `)|(` + stdAlt + `)|` + otherEntry + `)(?:[:;]|$)`)
+	return p
+}
+
+// scrub replaces the PATH which printed, and each list that is the
+// machine's PATH, with <PATH>. p may be nil: then only which's.
+func (p *pathList) scrub(b []byte) []byte {
+	b = whichNo.ReplaceAll(b, []byte("${1}<PATH>${2}"))
+	if p == nil {
+		return b
+	}
+	var out []byte
+	last := 0
+	for _, m := range p.list.FindAllSubmatchIndex(b, -1) {
+		if !p.isPATH(b[m[4]:m[5]]) {
+			continue
+		}
+		out = append(append(out, b[last:m[4]]...), "<PATH>"...)
+		last = m[5]
+	}
+	return append(out, b[last:]...)
+}
+
+// isPATH reports a list that holds 3 of PATH's entries, one of them its
+// own.
+func (p *pathList) isPATH(list []byte) bool {
+	own, known := 0, 0
+	for len(list) > 0 {
+		m := p.entry.FindSubmatchIndex(list)
+		if m == nil || m[1] == 0 {
+			break
+		}
+		switch {
+		case m[2] >= 0:
+			own++
+			known++
+		case m[4] >= 0:
+			known++
+		}
+		list = list[m[1]:]
+	}
+	return own >= 1 && known >= 3
+}
+
+// leak reports a text that still names 3 of the machine's own PATH
+// entries, anywhere in it.
+func (p *pathList) leak(b []byte) bool {
+	if p == nil {
+		return false
+	}
+	n := 0
+	for _, re := range p.own {
+		if re.Match(b) {
+			if n++; n >= 3 {
+				return true
+			}
+		}
+	}
+	return false
 }

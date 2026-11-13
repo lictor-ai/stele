@@ -1,0 +1,281 @@
+diff --git a/cmd/healthcheck/main.go b/cmd/healthcheck/main.go
+new file mode 100644
+index 0000000..73112ec
+--- /dev/null
++++ b/cmd/healthcheck/main.go
+@@ -0,0 +1,73 @@
++// Command healthcheck sends a GET to each URL and reports which are healthy.
++package main
++
++import (
++	"context"
++	"errors"
++	"flag"
++	"fmt"
++	"io"
++	"net/http"
++	"os"
++	"os/signal"
++	"syscall"
++	"time"
++
++	"example.com/app/internal/clock"
++	"example.com/app/internal/health"
++)
++
++const requestTimeout = 5 * time.Second
++
++func main() {
++	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
++	defer stop()
++	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
++		fmt.Fprintln(os.Stderr, "healthcheck:", err)
++		stop()
++		os.Exit(1)
++	}
++}
++
++func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
++	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
++	fs.SetOutput(stderr)
++	fs.Usage = func() {
++		fmt.Fprintln(stderr, "usage: healthcheck URL [URL...]")
++	}
++	if err := fs.Parse(args); err != nil {
++		return err
++	}
++	urls := fs.Args()
++	if len(urls) == 0 {
++		fs.Usage()
++		return errors.New("no URLs given")
++	}
++
++	client := &http.Client{Timeout: requestTimeout}
++	checker := health.NewChecker(client, clock.Real{})
++	results := checker.CheckAll(ctx, urls)
++
++	width := 0
++	for _, r := range results {
++		width = max(width, len(r.URL))
++	}
++	for _, r := range results {
++		mark, status := "[ OK ]", fmt.Sprintf("%d", r.Status)
++		if !r.Healthy() {
++			mark = "[FAIL]"
++		}
++		if r.Err != nil {
++			status = "ERR"
++		}
++		fmt.Fprintf(stdout, "%s  %-*s  %3s  %8s\n", mark, width, r.URL, status,
++			r.Latency.Round(time.Millisecond))
++	}
++
++	healthy := health.CountHealthy(results)
++	fmt.Fprintf(stdout, "\n%d of %d healthy\n", healthy, len(results))
++	if healthy != len(results) {
++		return fmt.Errorf("%d of %d URLs unhealthy", len(results)-healthy, len(results))
++	}
++	return nil
++}
+diff --git a/internal/health/health.go b/internal/health/health.go
+new file mode 100644
+index 0000000..4d86080
+--- /dev/null
++++ b/internal/health/health.go
+@@ -0,0 +1,82 @@
++// Package health checks whether HTTP endpoints are healthy.
++package health
++
++import (
++	"context"
++	"fmt"
++	"net/http"
++	"sync"
++	"time"
++
++	"example.com/app/internal/clock"
++)
++
++// Result is the outcome of checking one URL.
++type Result struct {
++	URL     string
++	Status  int
++	Latency time.Duration
++	Err     error
++}
++
++// Healthy reports whether the check got a 2xx response.
++func (r Result) Healthy() bool {
++	return r.Err == nil && r.Status >= http.StatusOK && r.Status < http.StatusMultipleChoices
++}
++
++// Checker sends GET requests and measures how long they take.
++type Checker struct {
++	client *http.Client
++	clock  clock.Clock
++}
++
++// NewChecker returns a Checker that uses client for requests and clk for timing.
++func NewChecker(client *http.Client, clk clock.Clock) *Checker {
++	return &Checker{client: client, clock: clk}
++}
++
++// Check sends one GET request to url and returns the result.
++func (c *Checker) Check(ctx context.Context, url string) Result {
++	res := Result{URL: url}
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
++	if err != nil {
++		res.Err = fmt.Errorf("build request for %s: %w", url, err)
++		return res
++	}
++	start := c.clock.Now()
++	resp, err := c.client.Do(req)
++	res.Latency = c.clock.Now().Sub(start)
++	if err != nil {
++		res.Err = fmt.Errorf("get %s: %w", url, err)
++		return res
++	}
++	defer resp.Body.Close()
++	res.Status = resp.StatusCode
++	return res
++}
++
++// CheckAll checks every URL in parallel and returns results in input order.
++func (c *Checker) CheckAll(ctx context.Context, urls []string) []Result {
++	results := make([]Result, len(urls))
++	var wg sync.WaitGroup
++	for i, u := range urls {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			results[i] = c.Check(ctx, u)
++		}()
++	}
++	wg.Wait()
++	return results
++}
++
++// CountHealthy returns how many results are healthy.
++func CountHealthy(results []Result) int {
++	n := 0
++	for _, r := range results {
++		if r.Healthy() {
++			n++
++		}
++	}
++	return n
++}
+diff --git a/internal/health/health_test.go b/internal/health/health_test.go
+new file mode 100644
+index 0000000..fa4574f
+--- /dev/null
++++ b/internal/health/health_test.go
+@@ -0,0 +1,108 @@
++package health
++
++import (
++	"context"
++	"net/http"
++	"net/http/httptest"
++	"sync"
++	"testing"
++	"time"
++)
++
++// stepClock advances by step on every call, so latency is predictable.
++type stepClock struct {
++	mu   sync.Mutex
++	t    time.Time
++	step time.Duration
++}
++
++func (s *stepClock) Now() time.Time {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	s.t = s.t.Add(s.step)
++	return s.t
++}
++
++func TestCheck(t *testing.T) {
++	mux := http.NewServeMux()
++	mux.HandleFunc("GET /ok", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
++	mux.HandleFunc("GET /created", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusCreated) })
++	mux.HandleFunc("GET /down", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
++	mux.HandleFunc("GET /redirect", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotFound) })
++
++	cases := []struct {
++		name        string
++		path        string
++		wantStatus  int
++		wantHealthy bool
++	}{
++		{"ok", "/ok", http.StatusOK, true},
++		{"created is 2xx", "/created", http.StatusCreated, true},
++		{"unavailable", "/down", http.StatusServiceUnavailable, false},
++		{"not found", "/redirect", http.StatusNotFound, false},
++		{"unreachable", "", 0, false},
++		{"invalid url", "\x7f", 0, false},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			srv := httptest.NewServer(mux)
++			url := srv.URL + tc.path
++			switch tc.name {
++			case "unreachable":
++				srv.Close()
++			case "invalid url":
++				url = "http://bad\x7fhost"
++				defer srv.Close()
++			default:
++				defer srv.Close()
++			}
++			clk := &stepClock{step: 10 * time.Millisecond}
++			c := NewChecker(&http.Client{Timeout: 5 * time.Second}, clk)
++			got := c.Check(context.Background(), url)
++			if got.Status != tc.wantStatus || got.Healthy() != tc.wantHealthy {
++				t.Errorf("Check(%q) = status %d healthy %v (err %v), want status %d healthy %v",
++					url, got.Status, got.Healthy(), got.Err, tc.wantStatus, tc.wantHealthy)
++			}
++			if tc.wantStatus != 0 && got.Latency != 10*time.Millisecond {
++				t.Errorf("Check(%q) latency = %v, want %v", url, got.Latency, 10*time.Millisecond)
++			}
++		})
++	}
++}
++
++func TestCheckAll(t *testing.T) {
++	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
++	defer good.Close()
++	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.WriteHeader(http.StatusInternalServerError)
++	}))
++	defer bad.Close()
++
++	cases := []struct {
++		name        string
++		urls        []string
++		wantHealthy int
++	}{
++		{"empty", nil, 0},
++		{"all healthy", []string{good.URL, good.URL}, 2},
++		{"mixed keeps order", []string{good.URL, bad.URL, good.URL}, 2},
++		{"none healthy", []string{bad.URL}, 0},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			c := NewChecker(&http.Client{Timeout: 5 * time.Second}, &stepClock{step: time.Millisecond})
++			got := c.CheckAll(context.Background(), tc.urls)
++			if len(got) != len(tc.urls) {
++				t.Fatalf("CheckAll(%v) returned %d results, want %d", tc.urls, len(got), len(tc.urls))
++			}
++			for i, r := range got {
++				if r.URL != tc.urls[i] {
++					t.Errorf("CheckAll(%v)[%d].URL = %q, want %q", tc.urls, i, r.URL, tc.urls[i])
++				}
++			}
++			if n := CountHealthy(got); n != tc.wantHealthy {
++				t.Errorf("CountHealthy(CheckAll(%v)) = %d, want %d", tc.urls, n, tc.wantHealthy)
++			}
++		})
++	}
++}
