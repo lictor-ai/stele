@@ -181,8 +181,10 @@ func (r *Runner) Run(ctx context.Context, bin string, req []byte, max int, timeo
 	if err := cmd.Start(); err != nil {
 		// Start refuses a ctx already done and returns its error as is:
 		// cancelled or timed out before the plugin started is still that.
-		if cerr := ctxErr(ctx, timeout); cerr != nil {
-			return nil, cerr
+		// Start looks the program up first, so a missing one keeps its own
+		// error, whatever ctx says.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, ctxErr(ctx, timeout)
 		}
 		return nil, err
 	}

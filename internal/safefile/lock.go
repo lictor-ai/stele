@@ -22,7 +22,7 @@ import (
 // Creating a file exclusively works alike on every platform, which is why
 // this is a lock file rather than flock or LockFileEx.
 func Lock(name string, wait, stale time.Duration) (unlock func(), err error) {
-	return lock(name, wait, stale, false)
+	return lock(name, wait, wait, stale, false)
 }
 
 // LockInTurn is Lock waiting up to wait for each holder in turn, not for all
@@ -32,16 +32,27 @@ func Lock(name string, wait, stale time.Duration) (unlock func(), err error) {
 // no one holder held it that long (#135). A holder is told apart by the time
 // its lock file was written, so a lock taken with LockInTurn is never
 // Refreshed: each Refresh would start every waiter's wait again.
-func LockInTurn(name string, wait, stale time.Duration) (unlock func(), err error) {
-	return lock(name, wait, stale, true)
+//
+// However many holders come and go, it waits at most total in all: a caller
+// with a time limit of its own, such as the hook, gets an error inside it,
+// and a stream of new holders never starves a waiter for ever.
+func LockInTurn(name string, wait, total, stale time.Duration) (unlock func(), err error) {
+	return lock(name, wait, total, stale, true)
 }
 
-func lock(name string, wait, stale time.Duration, inTurn bool) (unlock func(), err error) {
+func lock(name string, wait, total, stale time.Duration, inTurn bool) (unlock func(), err error) {
 	token, err := newToken()
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(wait)
+	limit := time.Now().Add(total)
+	until := func() time.Time {
+		if d := time.Now().Add(wait); d.Before(limit) {
+			return d
+		}
+		return limit
+	}
+	deadline := until()
 	backoff := time.Millisecond
 	var holder time.Time // the lock file's time when last seen held
 	for {
@@ -62,10 +73,12 @@ func lock(name string, wait, stale time.Duration, inTurn bool) (unlock func(), e
 				continue
 			}
 		case lerr == nil:
-			// Held by a live process: wait, and wait afresh for a new one.
+			// Held by a live process: wait, and wait afresh for a new one,
+			// within total. One holder can restart the wait once: its file
+			// gets a new time when its token is written, just after create.
 			if m := info.ModTime(); inTurn && !m.Equal(holder) {
 				if !holder.IsZero() {
-					deadline = time.Now().Add(wait)
+					deadline = until()
 				}
 				holder = m
 			}

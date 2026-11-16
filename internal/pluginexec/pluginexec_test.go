@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -179,6 +180,21 @@ func TestRunCancelledBeforeStart(t *testing.T) {
 	defer cancel()
 	if _, err := New(t.TempDir(), nil).Run(ctx, bin, describeReq(t), plugin.SmallAnswer, 30*time.Second); !errors.Is(err, plugin.ErrTimeout) {
 		t.Errorf("past its deadline: Run = %v, want ErrTimeout", err)
+	}
+	// Start's own errors are not the context's. On Windows, Start looks up
+	// a program named without an extension before it checks ctx, so a
+	// missing one is reported as missing, cancelled or not. Elsewhere Start
+	// checks ctx first, and the call is cancelled.
+	missing := filepath.Join(outside(t), "stele-checker-missing")
+	ctx, cancel = context.WithCancel(context.Background())
+	cancel()
+	_, err := New(t.TempDir(), nil).Run(ctx, missing, describeReq(t), plugin.SmallAnswer, 30*time.Second)
+	var ee *exec.Error
+	if runtime.GOOS == "windows" && (!errors.As(err, &ee) || errors.Is(err, plugin.ErrCancelled)) {
+		t.Errorf("missing program, cancelled: Run = %v, want it not found", err)
+	}
+	if runtime.GOOS != "windows" && !errors.Is(err, plugin.ErrCancelled) {
+		t.Errorf("missing program, cancelled: Run = %v, want ErrCancelled", err)
 	}
 }
 

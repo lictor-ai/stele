@@ -123,7 +123,7 @@ func TestLockInTurn(t *testing.T) {
 	const wait = 2 * time.Second
 	inTurn, all := make(chan error, 1), make(chan error, 1)
 	go func() {
-		u, err := LockInTurn(name, wait, time.Hour)
+		u, err := LockInTurn(name, wait, time.Minute, time.Hour)
 		if err == nil {
 			u()
 		}
@@ -150,6 +150,44 @@ func TestLockInTurn(t *testing.T) {
 	unlock()
 	if err := <-inTurn; err != nil {
 		t.Errorf("LockInTurn behind holders each within the wait: %v", err)
+	}
+}
+
+// New holders without end never hold a LockInTurn waiter past its total: a
+// wait of an hour for each, 200 ms in all, and it gives up while they keep
+// coming.
+func TestLockInTurnTotal(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "x.lock")
+	unlock, err := Lock(name, time.Second, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	done := make(chan error, 1)
+	go func() {
+		u, err := LockInTurn(name, time.Hour, 200*time.Millisecond, time.Hour)
+		if err == nil {
+			u()
+		}
+		done <- err
+	}()
+	start := time.Now()
+	for i := 1; ; i++ {
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Error("LockInTurn got the lock while it was held all along")
+			}
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+		if time.Since(start) > time.Minute {
+			t.Fatal("LockInTurn still waiting after a minute, its total 200ms")
+		}
+		at := start.Add(time.Duration(i) * time.Millisecond)
+		if err := os.Chtimes(name, at, at); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
