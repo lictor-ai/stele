@@ -164,6 +164,24 @@ func TestRunCancelled(t *testing.T) {
 		t.Fatalf("Run = %v, want ErrCancelled", err)
 	}
 }
+
+// A call cancelled before the plugin starts is cancelled too, not the bare
+// context.Canceled exec.Cmd.Start returns: under load, the cancel above can
+// land before Start (#135). The same for a deadline already past.
+func TestRunCancelledBeforeStart(t *testing.T) {
+	bin := installPlugin(t, outside(t), "checker", "slow")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := New(t.TempDir(), nil).Run(ctx, bin, describeReq(t), plugin.SmallAnswer, 30*time.Second); !errors.Is(err, plugin.ErrCancelled) {
+		t.Errorf("cancelled: Run = %v, want ErrCancelled", err)
+	}
+	ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if _, err := New(t.TempDir(), nil).Run(ctx, bin, describeReq(t), plugin.SmallAnswer, 30*time.Second); !errors.Is(err, plugin.ErrTimeout) {
+		t.Errorf("past its deadline: Run = %v, want ErrTimeout", err)
+	}
+}
+
 func TestRunNonZeroExitKeepsStderrTail(t *testing.T) {
 	bin := installPlugin(t, outside(t), "checker", "crash")
 	var seen bytes.Buffer

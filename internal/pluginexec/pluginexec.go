@@ -179,6 +179,11 @@ func (r *Runner) Run(ctx context.Context, bin string, req []byte, max int, timeo
 	cmd.WaitDelay = waitDelay
 	group(cmd)
 	if err := cmd.Start(); err != nil {
+		// Start refuses a ctx already done and returns its error as is:
+		// cancelled or timed out before the plugin started is still that.
+		if cerr := ctxErr(ctx, timeout); cerr != nil {
+			return nil, cerr
+		}
 		return nil, err
 	}
 	stop := contain(cmd)
@@ -191,10 +196,8 @@ func (r *Runner) Run(ctx context.Context, bin string, req []byte, max int, timeo
 	// timeout did not exit 0.
 	case err != nil && cmd.ProcessState != nil && cmd.ProcessState.Success():
 		return nil, fmt.Errorf("%w: it left a process holding its output, which stele stopped", plugin.ErrProtocol)
-	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		return nil, plugin.Timeout(timeout)
 	case ctx.Err() != nil:
-		return nil, plugin.ErrCancelled
+		return nil, ctxErr(ctx, timeout)
 	case out.over:
 		return nil, fmt.Errorf("%w: answer over %d bytes", plugin.ErrProtocol, max)
 	}
@@ -206,6 +209,18 @@ func (r *Runner) Run(ctx context.Context, bin string, req []byte, max int, timeo
 		return nil, err
 	}
 	return out.buf.Bytes(), nil
+}
+
+// ctxErr is why ctx, a call's, is done: ErrTimeout past its deadline,
+// ErrCancelled when cancelled, nil while it is not done.
+func ctxErr(ctx context.Context, timeout time.Duration) error {
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return plugin.Timeout(timeout)
+	case ctx.Err() != nil:
+		return plugin.ErrCancelled
+	}
+	return nil
 }
 
 // capped keeps the first max bytes written to it, and notes there was more.

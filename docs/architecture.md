@@ -482,7 +482,10 @@ reconcile → write the lock → write the index" in `Compile` and `EnsureFresh`
 Without it two `stele mcp` processes, or one and `stele compile`, can each mint an
 id for the same new rule and leave the lock and the index disagreeing. External
 source reads stay outside the lock, so a slow one never holds it. `Plan` takes no lock: it writes nothing,
-and every file it reads is replaced whole.
+and every file it reads is replaced whole. A compile waits up to 5 s for each
+holder in turn (`safefile.LockInTurn`), not for all of them together: several
+processes queued behind short holds all get the lock, where the last in line
+would otherwise give up though no one held it that long.
 
 `compile` never resolves plugins itself. `cmd/` asks `internal/plugin` for the
 sources and passes them in, which keeps `compile` free of `PATH`, executables and

@@ -90,9 +90,9 @@ const (
 	// stele mcp. Without it two of them can each mint an id for the same new
 	// rule and leave stele.lock and the index disagreeing.
 	lockName = "compile.lock"
-	// lockWait is how long a compile waits for another. Only the lock and
-	// the index are written under it, and only built-in sources read, so it
-	// is short.
+	// lockWait is how long a compile waits for another, for each one in
+	// turn (safefile.LockInTurn). Only the lock and the index are written
+	// under it, and only built-in sources read, so it is short.
 	lockWait = 5 * time.Second
 	// lockStale is the age past which the lock was left by a crash.
 	lockStale = 30 * time.Second
@@ -535,12 +535,13 @@ func lockFile(root string) (lock.File, error) {
 	return f, nil
 }
 
-// lockCompile takes the compile lock under .stele/, waiting at most wait.
+// lockCompile takes the compile lock under .stele/, waiting at most wait for
+// each holder in turn.
 func lockCompile(root string, wait time.Duration) (func(), error) {
 	if err := index.EnsureDir(root); err != nil {
 		return nil, err
 	}
-	return safefile.Lock(filepath.Join(root, index.Dir, lockName), wait, lockStale)
+	return safefile.LockInTurn(filepath.Join(root, index.Dir, lockName), wait, lockStale)
 }
 
 // readAll reads every source, in order, and returns the pins of the pinned

@@ -109,6 +109,50 @@ func TestLockTimesOut(t *testing.T) {
 	}
 }
 
+// Holders in a queue, each holding the lock well within the wait and all of
+// them past it: LockInTurn waits for each in turn and gets the lock, Lock
+// gives up (#135). A new holder is a lock file written at a new time, which
+// the loop below gives the one file it keeps, so no waiter can slip in
+// between two holders.
+func TestLockInTurn(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "x.lock")
+	unlock, err := Lock(name, time.Second, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wait = 2 * time.Second
+	inTurn, all := make(chan error, 1), make(chan error, 1)
+	go func() {
+		u, err := LockInTurn(name, wait, time.Hour)
+		if err == nil {
+			u()
+		}
+		inTurn <- err
+	}()
+	go func() {
+		u, err := Lock(name, wait, time.Hour)
+		if err == nil {
+			u()
+		}
+		all <- err
+	}()
+	start := time.Now()
+	for i := 1; time.Since(start) < wait+time.Second; i++ {
+		time.Sleep(100 * time.Millisecond)
+		at := start.Add(time.Duration(i) * time.Millisecond)
+		if err := os.Chtimes(name, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := <-all; err == nil {
+		t.Error("Lock got the lock while it was held all along")
+	}
+	unlock()
+	if err := <-inTurn; err != nil {
+		t.Errorf("LockInTurn behind holders each within the wait: %v", err)
+	}
+}
+
 // A stale lock is taken over, and the old holder's unlock then leaves the new
 // holder's lock alone.
 // A lock dated well in the future was left before the clock moved back: it
