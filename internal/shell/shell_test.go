@@ -804,22 +804,31 @@ func globRun(command, dir string) *results {
 // segment at a time and cleaned at each, the first of these took 1m30s, and
 // on the step budget it still copies the path at each step. The cost is
 // counted in bytes allocated, not timed: a clock measures the machine's load
-// as well (#138). These take 10 to 21 bytes for each byte of the command.
+// as well (#138). These take 10 to 21 bytes for each byte of the command. In a
+// directory where * matches, the fixed segments after it are joined once for
+// each match, not copied at each one: a copy at each took 650 MB (#141).
 func TestTargetsLongPathsLinear(t *testing.T) {
 	long := strings.Repeat(strings.Repeat("a", 50)+"/", maxCommand/51-1)
-	for _, command := range []string{
-		"rm " + strings.Repeat("a/", maxCommand/2-3) + "*",
-		"rm " + long + "*",
-		"rm */" + strings.Repeat("a/", maxCommand/2-4) + "*",
-		"rm */" + long + "x",
-	} {
-		dir := t.TempDir()
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		Targets(command, dir)
-		runtime.ReadMemStats(&after)
-		if got, budget := after.TotalAlloc-before.TotalAlloc, 64*uint64(len(command)); got > budget {
-			t.Errorf("a path of %d bytes allocated %d MiB, budget %d MiB", len(command), got>>20, budget>>20)
+	for _, matches := range []int{0, 1, 2, 3} {
+		for _, command := range []string{
+			"rm " + strings.Repeat("a/", maxCommand/2-3) + "*",
+			"rm " + long + "*",
+			"rm */" + strings.Repeat("a/", maxCommand/2-4) + "*",
+			"rm */" + long + "x",
+		} {
+			dir := t.TempDir()
+			for i := range matches {
+				if err := os.Mkdir(filepath.Join(dir, fmt.Sprint("d", i)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			Targets(command, dir)
+			runtime.ReadMemStats(&after)
+			if got, budget := after.TotalAlloc-before.TotalAlloc, 64*uint64(len(command)); got > budget {
+				t.Errorf("a path of %d bytes, * matching %d, allocated %d MiB, budget %d MiB", len(command), matches, got>>20, budget>>20)
+			}
 		}
 	}
 }
@@ -950,5 +959,23 @@ func BenchmarkTargets(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		Targets(cmd, cwd)
+	}
+}
+
+// The common glob: one directory read, no fixed segment after it.
+func BenchmarkTargetsGlob(b *testing.B) {
+	dir := b.TempDir()
+	for i := range 20 {
+		name := filepath.Join(dir, "build", fmt.Sprint("f", i))
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(name, nil, 0o644); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportAllocs()
+	for range b.N {
+		Targets("rm -rf build/*", dir)
 	}
 }
