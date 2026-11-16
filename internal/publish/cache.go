@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +27,9 @@ var cacheDir = os.UserCacheDir
 // lockWait is how long stele publish waits for another one to finish with
 // the cache. Tests shorten it.
 var lockWait = 5 * time.Second
+
+// lockFile takes a lock file. Tests replace it.
+var lockFile = safefile.Lock
 
 // lockStale is the age at which a cache lock was left by a crash. It is
 // longer than the longest run: four git calls that talk to the remote, each
@@ -59,8 +61,8 @@ func lockCache(dir string) (unlock func(), err error) {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
 		return nil, err
 	}
-	unlock, err = safefile.Lock(dir+".lock", lockWait, lockStale)
-	if errors.Is(err, fs.ErrExist) {
+	unlock, err = lockFile(dir+".lock", lockWait, lockStale)
+	if errors.Is(err, safefile.ErrHeld) {
 		return nil, ErrBusy
 	}
 	return unlock, err

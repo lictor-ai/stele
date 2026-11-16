@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -326,5 +327,24 @@ func TestOne(t *testing.T) {
 	res := One(context.Background(), []Target{f.target()}, "p1", rec)
 	if res.Sinks[0].Sent != 1 || !reflect.DeepEqual(f.got, []json.RawMessage{rec}) {
 		t.Errorf("result = %+v, got %s", res.Sinks[0], f.got)
+	}
+}
+
+// stubLock makes Run's lock fail with err.
+func stubLock(t *testing.T, err error) {
+	t.Helper()
+	old := lockFile
+	lockFile = func(string, time.Duration, time.Duration) (func(), error) { return nil, err }
+	t.Cleanup(func() { lockFile = old })
+}
+
+// A lock failure other than another push holding it is passed through, not
+// reported as busy (#137).
+func TestPushLockOtherErrorIsNotBusy(t *testing.T) {
+	root := project(t)
+	stubLock(t, &fs.PathError{Op: "open", Path: LockName, Err: fs.ErrPermission})
+	_, err := Run(context.Background(), root, testKey, "p1", []Target{(&fake{name: "s"}).target()}, now)
+	if errors.Is(err, ErrBusy) || !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("err = %v, want fs.ErrPermission, not ErrBusy", err)
 	}
 }

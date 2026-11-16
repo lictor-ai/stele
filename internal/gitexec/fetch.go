@@ -31,14 +31,16 @@ var fetchFlags = []string{"-c", "transfer.fsckObjects=true"}
 // stele compile and stele check wait on it.
 const fetchNetTimeout = 5 * time.Minute
 
-const (
-	// cacheWait is how long a Fetcher waits for another stele using the same
-	// repository's cache.
-	cacheWait = 2 * time.Minute
-	// cacheStale is the age at which a cache lock was left by a crash: more
-	// than three network commands.
-	cacheStale = time.Hour
-)
+// cacheWait is how long a Fetcher waits for another stele using the same
+// repository's cache. Tests shorten it.
+var cacheWait = 2 * time.Minute
+
+// lockFile takes a lock file. Tests replace it.
+var lockFile = safefile.Lock
+
+// cacheStale is the age at which a cache lock was left by a crash: more
+// than three network commands.
+const cacheStale = time.Hour
 
 // Fetcher reads files of another repository at a commit, for the git source
 // (ADR-0011). It keeps one bare clone per repository in the user's cache
@@ -331,8 +333,8 @@ func (f *Fetcher) lock(repo string) (string, func(), error) {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
 		return "", nil, err
 	}
-	unlock, err := safefile.Lock(dir+".lock", cacheWait, cacheStale)
-	if errors.Is(err, fs.ErrExist) {
+	unlock, err := lockFile(dir+".lock", cacheWait, cacheStale)
+	if errors.Is(err, safefile.ErrHeld) {
 		return "", nil, fmt.Errorf("another stele is fetching %s; try again when it ends", repo)
 	}
 	if err != nil {

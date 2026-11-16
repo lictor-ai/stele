@@ -3,11 +3,15 @@ package gitexec
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/lictor-ai/stele/internal/safefile"
 )
 
 const testRepo = "git@example.com:acme/guidelines.git"
@@ -233,5 +237,56 @@ func TestRedact(t *testing.T) {
 	got := Message(in)
 	if strings.Contains(got, "ghp_secret") || !strings.Contains(got, "https://***@github.com/a/b.git/") {
 		t.Errorf("Message = %q, want the credentials hidden", got)
+	}
+}
+
+// A cache lock held by another stele is reported as another stele fetching.
+func TestFetcherLockHeld(t *testing.T) {
+	old := cacheWait
+	cacheWait = 50 * time.Millisecond
+	t.Cleanup(func() { cacheWait = old })
+	cache := t.TempDir()
+	f := &Fetcher{Root: t.TempDir(), CacheDir: func() (string, error) { return cache, nil }}
+	_, unlock, err := f.lock(testRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	_, _, err = f.lock(testRepo)
+	if err == nil || !strings.Contains(err.Error(), "another stele is fetching") {
+		t.Errorf("err = %v, want another stele fetching", err)
+	}
+}
+
+// stubLock makes the Fetcher's lock fail with err.
+func stubLock(t *testing.T, err error) {
+	t.Helper()
+	old := lockFile
+	lockFile = func(string, time.Duration, time.Duration) (func(), error) { return nil, err }
+	t.Cleanup(func() { lockFile = old })
+}
+
+// A lock still held when the wait is over is busy, whatever error is
+// underneath: on Windows a lock pending deletion times out with
+// fs.ErrPermission (#137).
+func TestFetcherLockHeldOverPermission(t *testing.T) {
+	stubLock(t, fmt.Errorf("x.lock is %w: %w", safefile.ErrHeld, fs.ErrPermission))
+	f := &Fetcher{Root: t.TempDir(), CacheDir: func() (string, error) { return t.TempDir(), nil }}
+	_, _, err := f.lock(testRepo)
+	if err == nil || !strings.Contains(err.Error(), "another stele is fetching") {
+		t.Errorf("err = %v, want another stele fetching", err)
+	}
+}
+
+// Any other lock failure is passed through, not reported as busy (#137).
+func TestFetcherLockOtherErrorIsNotBusy(t *testing.T) {
+	for _, under := range []error{fs.ErrExist, fs.ErrPermission} {
+		want := &fs.PathError{Op: "open", Path: "x.lock", Err: under}
+		stubLock(t, want)
+		f := &Fetcher{Root: t.TempDir(), CacheDir: func() (string, error) { return t.TempDir(), nil }}
+		_, _, err := f.lock(testRepo)
+		if !errors.Is(err, under) || strings.Contains(fmt.Sprint(err), "another stele") {
+			t.Errorf("%v: err = %v, want it passed through", under, err)
+		}
 	}
 }

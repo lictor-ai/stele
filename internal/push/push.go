@@ -27,6 +27,8 @@ var (
 	maxBatch      = 500
 	maxBatchBytes = 4 << 20
 	lockWait      = 2 * time.Second
+	// lockFile takes a lock file. Tests replace it.
+	lockFile = safefile.Lock
 )
 
 const (
@@ -180,9 +182,12 @@ func Run(ctx context.Context, root string, key sign.Key, project string, targets
 		return res, nil // stele never ran here: no log
 	}
 	lockPath := filepath.Join(dir, LockName)
-	unlock, err := safefile.Lock(lockPath, lockWait, lockStale)
-	if err != nil {
+	unlock, err := lockFile(lockPath, lockWait, lockStale)
+	if errors.Is(err, safefile.ErrHeld) {
 		return res, fmt.Errorf("%w (%v)", ErrBusy, err)
+	}
+	if err != nil {
+		return res, err
 	}
 	defer unlock()
 	held := func() { _ = safefile.Refresh(lockPath) }
