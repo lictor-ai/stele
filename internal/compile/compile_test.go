@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/lock"
+	"github.com/lictor-ai/stele/internal/safefile"
 	"github.com/lictor-ai/stele/internal/sign"
 	"github.com/lictor-ai/stele/internal/source"
 	"github.com/lictor-ai/stele/internal/source/stelemd"
@@ -410,8 +410,7 @@ func TestEnsureFreshConcurrent(t *testing.T) {
 		switch {
 		case err == nil:
 			ok++
-		case errors.Is(err, fs.ErrExist), errors.Is(err, fs.ErrPermission):
-			// safefile's "compile.lock is held by another stele process"
+		case errors.Is(err, safefile.ErrHeld):
 			t.Logf("lock busy: %v", err)
 		default:
 			t.Fatalf("EnsureFresh: %v", err)

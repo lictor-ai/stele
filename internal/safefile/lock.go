@@ -12,6 +12,10 @@ import (
 	"time"
 )
 
+// ErrHeld is the error of a lock still held by another process when the
+// wait is over.
+var ErrHeld = errors.New("held by another stele process")
+
 // Lock takes the lock file name, waiting up to wait for another holder. A
 // lock file older than stale was left by a crashed process and is taken over.
 //
@@ -94,7 +98,7 @@ func lock(name string, wait, total, stale time.Duration, inTurn bool) (unlock fu
 			return nil, err
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("%s is held by another stele process: %w", filepath.Base(name), err)
+			return nil, fmt.Errorf("%s is %w: %w", filepath.Base(name), ErrHeld, err)
 		}
 		time.Sleep(backoff)
 		if backoff < 50*time.Millisecond {

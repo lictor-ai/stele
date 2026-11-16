@@ -104,8 +104,8 @@ func TestLockTimesOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
-	if _, err := Lock(name, 50*time.Millisecond, time.Minute); err == nil {
-		t.Error("second Lock succeeded while the first is held")
+	if _, err := Lock(name, 50*time.Millisecond, time.Minute); !errors.Is(err, ErrHeld) {
+		t.Errorf("second Lock while the first is held: %v, want ErrHeld", err)
 	}
 }
 
