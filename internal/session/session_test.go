@@ -490,12 +490,10 @@ func TestCurrentNotAFile(t *testing.T) {
 	if err != nil || id != "" {
 		t.Errorf("Current = %q, %v; want no session", id, err)
 	}
-	start := time.Now()
+	// Without the move the write onto the directory fails: success is
+	// the move, with no clock to beat (#135).
 	if err := SetCurrent(root, "s1"); err != nil {
 		t.Fatalf("SetCurrent over a directory: %v", err)
-	}
-	if d := time.Since(start); d > 500*time.Millisecond {
-		t.Errorf("SetCurrent took %v, want no wait", d)
 	}
 	if id, err := Current(root); err != nil || id != "s1" {
 		t.Errorf("Current = %q, %v; want s1", id, err)

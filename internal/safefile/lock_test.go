@@ -104,8 +104,90 @@ func TestLockTimesOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
-	if _, err := Lock(name, 50*time.Millisecond, time.Minute); err == nil {
-		t.Error("second Lock succeeded while the first is held")
+	if _, err := Lock(name, 50*time.Millisecond, time.Minute); !errors.Is(err, ErrHeld) {
+		t.Errorf("second Lock while the first is held: %v, want ErrHeld", err)
+	}
+}
+
+// Holders in a queue, each holding the lock well within the wait and all of
+// them past it: LockInTurn waits for each in turn and gets the lock, Lock
+// gives up (#135). A new holder is a lock file written at a new time, which
+// the loop below gives the one file it keeps, so no waiter can slip in
+// between two holders.
+func TestLockInTurn(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "x.lock")
+	unlock, err := Lock(name, time.Second, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wait = 2 * time.Second
+	inTurn, all := make(chan error, 1), make(chan error, 1)
+	go func() {
+		u, err := LockInTurn(name, wait, time.Minute, time.Hour)
+		if err == nil {
+			u()
+		}
+		inTurn <- err
+	}()
+	go func() {
+		u, err := Lock(name, wait, time.Hour)
+		if err == nil {
+			u()
+		}
+		all <- err
+	}()
+	start := time.Now()
+	for i := 1; time.Since(start) < wait+time.Second; i++ {
+		time.Sleep(100 * time.Millisecond)
+		at := start.Add(time.Duration(i) * time.Millisecond)
+		if err := os.Chtimes(name, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := <-all; err == nil {
+		t.Error("Lock got the lock while it was held all along")
+	}
+	unlock()
+	if err := <-inTurn; err != nil {
+		t.Errorf("LockInTurn behind holders each within the wait: %v", err)
+	}
+}
+
+// New holders without end never hold a LockInTurn waiter past its total: a
+// wait of an hour for each, 200 ms in all, and it gives up while they keep
+// coming.
+func TestLockInTurnTotal(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "x.lock")
+	unlock, err := Lock(name, time.Second, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	done := make(chan error, 1)
+	go func() {
+		u, err := LockInTurn(name, time.Hour, 200*time.Millisecond, time.Hour)
+		if err == nil {
+			u()
+		}
+		done <- err
+	}()
+	start := time.Now()
+	for i := 1; ; i++ {
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Error("LockInTurn got the lock while it was held all along")
+			}
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+		if time.Since(start) > time.Minute {
+			t.Fatal("LockInTurn still waiting after a minute, its total 200ms")
+		}
+		at := start.Add(time.Duration(i) * time.Millisecond)
+		if err := os.Chtimes(name, at, at); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -173,21 +255,23 @@ func TestLockStaleTakeover(t *testing.T) {
 }
 
 // A lock that is not a plain file was committed by a cloned repository, not
-// made by stele, and is moved aside at once whatever its age.
+// made by stele, and is moved aside at once whatever its age. The directory
+// is new and stale is an hour, so only that takeover gets the lock: waiting
+// for it to go stale would hit the wait. The wait is a minute, past any
+// stall of a loaded runner, not a time this must beat (#135).
 func TestLockTakesOverNonFile(t *testing.T) {
 	t.Run("directory", func(t *testing.T) {
 		name := filepath.Join(t.TempDir(), "x.lock")
 		if err := os.MkdirAll(filepath.Join(name, "inside"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		start := time.Now()
-		unlock, err := Lock(name, time.Second, time.Hour)
+		unlock, err := Lock(name, time.Minute, time.Hour)
 		if err != nil {
 			t.Fatalf("Lock over a directory: %v", err)
 		}
 		defer unlock()
-		if d := time.Since(start); d > 500*time.Millisecond {
-			t.Errorf("took %v, want no wait", d)
+		if info, err := os.Lstat(name); err != nil || !info.Mode().IsRegular() {
+			t.Errorf("lock after taking over a directory: %v, %v; want a plain file", info, err)
 		}
 	})
 	t.Run("dangling symlink", func(t *testing.T) {
@@ -212,18 +296,16 @@ func TestLockMissingDir(t *testing.T) {
 }
 
 // A directory where the file belongs was committed by a clone, not written
-// by stele: Replace moves it aside at once and writes a real file.
+// by stele: Replace moves it aside and writes a real file. Without the move
+// the rename onto the directory fails, after its retries on Windows, so a
+// Replace that succeeds is one that moved it (#135).
 func TestReplaceOntoDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "current")
 	if err := os.MkdirAll(filepath.Join(path, "inside"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
 	if err := Replace(path, []byte("x")); err != nil {
 		t.Fatalf("Replace onto a directory: %v", err)
-	}
-	if d := time.Since(start); d > 500*time.Millisecond {
-		t.Errorf("took %v, want no wait", d)
 	}
 	got, err := ReadRegular(path, 10)
 	if err != nil || string(got) != "x" {

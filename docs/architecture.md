@@ -482,7 +482,16 @@ reconcile → write the lock → write the index" in `Compile` and `EnsureFresh`
 Without it two `stele mcp` processes, or one and `stele compile`, can each mint an
 id for the same new rule and leave the lock and the index disagreeing. External
 source reads stay outside the lock, so a slow one never holds it. `Plan` takes no lock: it writes nothing,
-and every file it reads is replaced whole.
+and every file it reads is replaced whole. A compile waits up to 5 s for each
+holder in turn (`safefile.LockInTurn`), not for all of them together: several
+processes queued behind short holds all get the lock, where the last in line
+would otherwise give up though no one held it that long. The wait is capped in
+all, whatever the number of holders. In `EnsureFresh` it is 5 s, the bound the
+hook always had: after the lock the hook still rebuilds, updates its session and
+runs the check, all within the 10 s timeout the agent adapters give it, past
+which the agent kills it and lets the write through unchecked. A lock still busy
+after 5 s is an error, and `block_on_error` decides. `stele compile` waits up to
+30 s, the lock's stale age.
 
 `compile` never resolves plugins itself. `cmd/` asks `internal/plugin` for the
 sources and passes them in, which keeps `compile` free of `PATH`, executables and
@@ -556,7 +565,9 @@ of several racing processes can do. A lock that is not a plain file — a direct
 or a symlink a cloned repository committed — is never one stele made, and is moved
 aside at once. On Windows, creating a lock file that was just removed while
 another process still has it open fails with access denied, so that also counts
-as held.
+as held. `LockInTurn` restarts the wait (within its total) when the lock
+file's mtime changes, i.e. a new holder; a lock taken with it is never
+Refreshed.
 
 After saving, `Update` removes session files not updated for 24 hours, each under
 that session's lock and only if it is still old once the lock is held. Lock, temp

@@ -90,10 +90,21 @@ const (
 	// stele mcp. Without it two of them can each mint an id for the same new
 	// rule and leave stele.lock and the index disagreeing.
 	lockName = "compile.lock"
-	// lockWait is how long a compile waits for another. Only the lock and
-	// the index are written under it, and only built-in sources read, so it
-	// is short.
+	// lockWait is how long a compile waits for another, for each one in
+	// turn (safefile.LockInTurn). Only the lock and the index are written
+	// under it, and only built-in sources read, so it is short.
 	lockWait = 5 * time.Second
+	// hookLockTotal caps EnsureFresh's wait for the lock over every holder
+	// in turn: 5 s, the bound the hook always had. EnsureFresh runs in
+	// stele hook, which the agent adapters install with a timeout of 10 s
+	// (internal/adapter/claudecode, codex), and after the lock the hook
+	// still rebuilds, updates its session and runs the check; past 10 s
+	// the agent kills it and the write goes through unchecked. A lock
+	// still busy after 5 s is an error, and block_on_error decides.
+	hookLockTotal = lockWait
+	// compileLockTotal caps stele compile's wait over every holder: as long
+	// as a lock may be held before it counts as left by a crash.
+	compileLockTotal = lockStale
 	// lockStale is the age past which the lock was left by a crash.
 	lockStale = 30 * time.Second
 )
@@ -134,7 +145,7 @@ func Compile(ctx context.Context, root string, srcs []source.Source, gens []Gene
 	if err != nil {
 		return Result{}, err
 	}
-	unlock, err := lockCompile(root, lockWait)
+	unlock, err := lockCompile(root, lockWait, compileLockTotal)
 	if err != nil {
 		return Result{}, err
 	}
@@ -311,11 +322,11 @@ func EnsureFresh(ctx context.Context, root string, builtins []source.Source, gen
 		return cur, false, nil
 	}
 
-	wait := lockWait
+	wait, total := lockWait, hookLockTotal
 	if lockOnly {
-		wait = 0
+		wait, total = 0, 0
 	}
-	unlock, err := lockCompile(root, wait)
+	unlock, err := lockCompile(root, wait, total)
 	if err != nil {
 		if lockOnly {
 			return cur, false, nil
@@ -474,7 +485,7 @@ func LockAgrees(root string, idx index.Index) bool {
 // at once: the compile lock taken without waiting, the file replaced without
 // waiting for a reader. Anything else is a skip.
 func refresh(ctx context.Context, root string, builtins []source.Source, gens []Generated, key sign.Key) {
-	unlock, err := lockCompile(root, 0)
+	unlock, err := lockCompile(root, 0, 0)
 	if err != nil {
 		return
 	}
@@ -535,12 +546,13 @@ func lockFile(root string) (lock.File, error) {
 	return f, nil
 }
 
-// lockCompile takes the compile lock under .stele/, waiting at most wait.
-func lockCompile(root string, wait time.Duration) (func(), error) {
+// lockCompile takes the compile lock under .stele/, waiting at most wait for
+// each holder in turn and total in all.
+func lockCompile(root string, wait, total time.Duration) (func(), error) {
 	if err := index.EnsureDir(root); err != nil {
 		return nil, err
 	}
-	return safefile.Lock(filepath.Join(root, index.Dir, lockName), wait, lockStale)
+	return safefile.LockInTurn(filepath.Join(root, index.Dir, lockName), wait, total, lockStale)
 }
 
 // readAll reads every source, in order, and returns the pins of the pinned

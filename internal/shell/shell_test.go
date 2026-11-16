@@ -646,7 +646,9 @@ func TestTargetsCopyIntoGitBashPath(t *testing.T) {
 }
 
 // A glob reads at most a budget of directory entries: past it, its target is
-// unknown, so a glob over a whole drive costs no more than a small one.
+// unknown, so a glob over a whole drive costs no more than a small one. The
+// cost is counted in entries read, the unit of the budget, not timed: a clock
+// measures the machine's load as well (#135).
 func TestTargetsGlobBudget(t *testing.T) {
 	old := maxGlobEntries
 	maxGlobEntries = 100
@@ -659,11 +661,14 @@ func TestTargetsGlobBudget(t *testing.T) {
 			}
 		}
 	}
-	start := time.Now()
-	got, unknown := Targets("rm -f */*/*.xyz; echo > */*/*/*.q", dir)
-	if d := time.Since(start); d > 50*time.Millisecond {
-		t.Errorf("globs over the budget took %v", d)
+	const command = "rm -f */*/*.xyz; echo > */*/*/*.q"
+	// The tree holds 15 + 225 entries: the first glob alone would read them all.
+	r := globRun(command, dir)
+	// One more than the budget: that is how a read finds it spent.
+	if r.entries > maxGlobEntries+1 {
+		t.Errorf("globs over the budget read %d entries, budget %d", r.entries, maxGlobEntries)
 	}
+	got, unknown := Targets(command, dir)
 	if len(got) != 0 || unknown != 2 {
 		t.Errorf("over the budget: %v, unknown %d; want none, 2 unknown", got, unknown)
 	}

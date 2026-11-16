@@ -697,7 +697,7 @@ func TestEnsureFreshPulledLockNeverHoldsUpTheHook(t *testing.T) {
 
 	t.Run("another compile holds the lock", func(t *testing.T) {
 		root := setup(t)
-		unlock, err := lockCompile(root, 0)
+		unlock, err := lockCompile(root, 0, 0)
 		if err != nil {
 			t.Fatal(err)
 		}

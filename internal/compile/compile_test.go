@@ -15,6 +15,7 @@ import (
 
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/lock"
+	"github.com/lictor-ai/stele/internal/safefile"
 	"github.com/lictor-ai/stele/internal/sign"
 	"github.com/lictor-ai/stele/internal/source"
 	"github.com/lictor-ai/stele/internal/source/stelemd"
@@ -379,7 +380,9 @@ func TestEnsureFreshKeepsExternalIDs(t *testing.T) {
 }
 
 // Concurrent rebuilds after a new rule agree: the lock and the index name the
-// same ids, whichever process minted them.
+// same ids, whichever process minted them. A rebuild that finds the lock busy
+// past its wait, as one may under load, is the hook's allowed outcome
+// (block_on_error decides), not a failure; at least one must get through.
 func TestEnsureFreshConcurrent(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -402,10 +405,19 @@ func TestEnsureFreshConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 	close(errs)
+	ok := 0
 	for err := range errs {
-		if err != nil {
+		switch {
+		case err == nil:
+			ok++
+		case errors.Is(err, safefile.ErrHeld):
+			t.Logf("lock busy: %v", err)
+		default:
 			t.Fatalf("EnsureFresh: %v", err)
 		}
+	}
+	if ok == 0 {
+		t.Fatal("no EnsureFresh got the compile lock")
 	}
 
 	idx, err := index.Load(root, testKey)
