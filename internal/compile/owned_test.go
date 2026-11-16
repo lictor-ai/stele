@@ -106,7 +106,9 @@ func TestEnsureFreshRefreshIsBestEffort(t *testing.T) {
 		if _, _, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, gens, ids(), testKey); err != nil {
 			t.Errorf("EnsureFresh with the lock held = %v, want a skip", err)
 		}
-		if d := time.Since(start); d > 200*time.Millisecond {
+		// A wait would be lockWait: under it is no wait, whatever the
+		// machine's load (#135).
+		if d := time.Since(start); d >= lockWait {
 			t.Errorf("EnsureFresh waited %v for the lock", d)
 		}
 	})
@@ -127,7 +129,9 @@ func TestEnsureFreshRefreshIsBestEffort(t *testing.T) {
 		if _, _, err := EnsureFresh(ctx, root, []source.Source{stelemd.New()}, gens, ids(), testKey); err != nil {
 			t.Errorf("EnsureFresh = %v, want a skip", err)
 		}
-		if d := time.Since(start); d > 200*time.Millisecond {
+		// Waiting for the file would retry for safefile's 2 s: under it
+		// is no wait, whatever the machine's load (#135).
+		if d := time.Since(start); d >= 2*time.Second {
 			t.Errorf("EnsureFresh took %v on a read-only file", d)
 		}
 	})

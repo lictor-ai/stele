@@ -255,21 +255,23 @@ func TestLockStaleTakeover(t *testing.T) {
 }
 
 // A lock that is not a plain file was committed by a cloned repository, not
-// made by stele, and is moved aside at once whatever its age.
+// made by stele, and is moved aside at once whatever its age. The directory
+// is new and stale is an hour, so only that takeover gets the lock: waiting
+// for it to go stale would hit the wait. The wait is a minute, past any
+// stall of a loaded runner, not a time this must beat (#135).
 func TestLockTakesOverNonFile(t *testing.T) {
 	t.Run("directory", func(t *testing.T) {
 		name := filepath.Join(t.TempDir(), "x.lock")
 		if err := os.MkdirAll(filepath.Join(name, "inside"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		start := time.Now()
-		unlock, err := Lock(name, time.Second, time.Hour)
+		unlock, err := Lock(name, time.Minute, time.Hour)
 		if err != nil {
 			t.Fatalf("Lock over a directory: %v", err)
 		}
 		defer unlock()
-		if d := time.Since(start); d > 500*time.Millisecond {
-			t.Errorf("took %v, want no wait", d)
+		if info, err := os.Lstat(name); err != nil || !info.Mode().IsRegular() {
+			t.Errorf("lock after taking over a directory: %v, %v; want a plain file", info, err)
 		}
 	})
 	t.Run("dangling symlink", func(t *testing.T) {
@@ -294,18 +296,16 @@ func TestLockMissingDir(t *testing.T) {
 }
 
 // A directory where the file belongs was committed by a clone, not written
-// by stele: Replace moves it aside at once and writes a real file.
+// by stele: Replace moves it aside and writes a real file. Without the move
+// the rename onto the directory fails, after its retries on Windows, so a
+// Replace that succeeds is one that moved it (#135).
 func TestReplaceOntoDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "current")
 	if err := os.MkdirAll(filepath.Join(path, "inside"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
 	if err := Replace(path, []byte("x")); err != nil {
 		t.Fatalf("Replace onto a directory: %v", err)
-	}
-	if d := time.Since(start); d > 500*time.Millisecond {
-		t.Errorf("took %v, want no wait", d)
 	}
 	got, err := ReadRegular(path, 10)
 	if err != nil || string(got) != "x" {

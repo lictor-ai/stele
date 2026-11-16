@@ -101,7 +101,9 @@ func TestHookRefreshIsBestEffort(t *testing.T) {
 		if o.SystemMessage != "" {
 			t.Errorf("warning %q with the compile lock held", o.SystemMessage)
 		}
-		if d := time.Since(start); d > time.Second {
+		// Waiting for the lock would take the compile lock's 5 s: under
+		// it is no wait, whatever the machine's load (#135).
+		if d := time.Since(start); d >= 5*time.Second {
 			t.Errorf("the hook took %v", d)
 		}
 	})
@@ -122,7 +124,9 @@ func TestHookRefreshIsBestEffort(t *testing.T) {
 		if o.SystemMessage != "" {
 			t.Errorf("warning %q on a read-only file", o.SystemMessage)
 		}
-		if d := time.Since(start); d > 200*time.Millisecond {
+		// Waiting for the file would retry for safefile's 2 s: under it
+		// is no wait, whatever the machine's load (#135).
+		if d := time.Since(start); d >= 2*time.Second {
 			t.Errorf("the hook took %v on a read-only stale file", d)
 		}
 	})
