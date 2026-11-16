@@ -72,10 +72,11 @@ func spansRead(content []byte, fragments []Fragment) (_ []Span, read int) {
 	}
 	sort.Ints(offsets)
 	lineAt := make(map[int]int, len(offsets))
+	// What is counted is what is read: the two cannot drift apart.
+	countNL := func(b []byte) int { read += len(b); return bytes.Count(b, []byte("\n")) }
 	line, pos := 1, 0
 	for _, off := range offsets {
-		line += bytes.Count(content[pos:off], []byte("\n"))
-		read += off - pos
+		line += countNL(content[pos:off])
 		pos = off
 		lineAt[off] = line
 	}

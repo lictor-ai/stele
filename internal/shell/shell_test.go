@@ -804,7 +804,7 @@ func globRun(command, dir string) *results {
 // segment at a time and cleaned at each, the first of these took 1m30s, and
 // on the step budget it still copies the path at each step. The cost is
 // counted in bytes allocated, not timed: a clock measures the machine's load
-// as well (#138). These take 10 to 25 bytes for each byte of the command.
+// as well (#138). These take 10 to 21 bytes for each byte of the command.
 func TestTargetsLongPathsLinear(t *testing.T) {
 	long := strings.Repeat(strings.Repeat("a", 50)+"/", maxCommand/51-1)
 	for _, command := range []string{
