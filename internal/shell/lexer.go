@@ -1296,16 +1296,25 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 	return bases, true
 }
 
-// maxName is past the longest a file name can be: 255 bytes on Linux and macOS,
-// 255 UTF-16 units on Windows, which are up to 765 bytes of UTF-8. Kept well
-// above both, a name is never taken for too long.
+// maxName is the longest a file name can be anywhere stele runs: FUSE's
+// FUSE_NAME_MAX, the largest limit on Linux, where most file systems allow 255
+// bytes. macOS allows 255 UTF-16 units and Windows 255 per name or stream,
+// which are up to 765 bytes of UTF-8 each.
 const maxName = 1024
 
 // tooLong reports whether seg, a segment of a clean path, is longer than any
-// name can be. Windows drops a last segment's trailing dots and spaces, so
-// they are not counted.
+// name can be. On Windows a segment can be file:stream[:$DATA], each part a
+// name of its own, and a last segment's trailing dots and spaces are dropped,
+// so they don't count: such a segment, with a long tail of them, still takes
+// the whole walk.
 func tooLong(seg string) bool {
-	return len(seg) > maxName && len(strings.TrimRight(seg, ". ")) > maxName
+	if len(seg) <= maxName {
+		return false
+	}
+	if !windows {
+		return true
+	}
+	return slices.ContainsFunc(strings.Split(strings.TrimRight(seg, ". "), ":"), func(s string) bool { return len(s) > maxName })
 }
 
 // child is name in dir, a clean path: unlike filepath.Join it does not clean
