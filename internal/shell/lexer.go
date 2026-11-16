@@ -1225,6 +1225,22 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 			for j < len(segs) && !strings.ContainsAny(segs[j], "*?[") {
 				j++
 			}
+			if slices.ContainsFunc(segs[i:j], tooLong) {
+				// No such path exists: the last part's Lstat or the next
+				// glob's Open fails on each base, a step each for the
+				// Open. Count those steps, as the walk would, without a
+				// path per base: a long segment joined to each of 2,000
+				// matches took 1.5 GB (#143).
+				n := j - i
+				if j < len(segs) {
+					n++
+				}
+				if p.res.steps += n * len(bases); p.res.steps > maxGlobSteps {
+					p.res.steps = maxGlobSteps + 1 // where a step at a time stops
+					return nil, false
+				}
+				return nil, true
+			}
 			run := strings.Join(segs[i:j], sep)
 			for _, b := range bases {
 				if p.res.steps += j - i; p.res.steps > maxGlobSteps {
@@ -1278,6 +1294,27 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 	}
 	p.res.globbed += len(bases)
 	return bases, true
+}
+
+// maxName is the longest a file name can be anywhere stele runs: FUSE's
+// FUSE_NAME_MAX, the largest limit on Linux, where most file systems allow 255
+// bytes. macOS allows 255 UTF-16 units and Windows 255 per name or stream,
+// which are up to 765 bytes of UTF-8 each.
+const maxName = 1024
+
+// tooLong reports whether seg, a segment of a clean path, is longer than any
+// name can be. On Windows a segment can be file:stream[:$DATA], each part a
+// name of its own, and a last segment's trailing dots and spaces are dropped,
+// so they don't count: such a segment, with a long tail of them, still takes
+// the whole walk.
+func tooLong(seg string) bool {
+	if len(seg) <= maxName {
+		return false
+	}
+	if !windows {
+		return true
+	}
+	return slices.ContainsFunc(strings.Split(strings.TrimRight(seg, ". "), ":"), func(s string) bool { return len(s) > maxName })
 }
 
 // child is name in dir, a clean path: unlike filepath.Join it does not clean

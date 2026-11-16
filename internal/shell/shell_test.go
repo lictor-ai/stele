@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -806,21 +807,31 @@ func globRun(command, dir string) *results {
 // counted in bytes allocated, not timed: a clock measures the machine's load
 // as well (#138). These take 10 to 21 bytes for each byte of the command. In a
 // directory where * matches, the fixed segments after it are joined once for
-// each match, not copied at each one: a copy at each took 650 MB (#141).
+// each match, not copied at each one: a copy at each took 650 MB (#141). A
+// segment too long to be a name is not joined to any: after the 1,999 matches
+// * may read, joined to each, it took 1.5 GB (#143).
 func TestTargetsLongPathsLinear(t *testing.T) {
 	long := strings.Repeat(strings.Repeat("a", 50)+"/", maxCommand/51-1)
-	for _, matches := range []int{0, 1, 2, 3} {
+	name := strings.Repeat("a", maxCommand-16)
+	for _, matches := range []int{0, 1, 2, 3, maxGlobEntries - 1} {
+		dir := t.TempDir()
+		for i := range matches {
+			if err := os.Mkdir(filepath.Join(dir, fmt.Sprint("d", i)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
 		for _, command := range []string{
 			"rm " + strings.Repeat("a/", maxCommand/2-3) + "*",
 			"rm " + long + "*",
 			"rm */" + strings.Repeat("a/", maxCommand/2-4) + "*",
 			"rm */" + long + "x",
+			"rm */" + name,
+			"rm */" + name + "/*",
+			// Only Windows drops trailing dots: elsewhere this is too long.
+			"rm */" + name[:1000] + strings.Repeat(".", len(name)-1000),
 		} {
-			dir := t.TempDir()
-			for i := range matches {
-				if err := os.Mkdir(filepath.Join(dir, fmt.Sprint("d", i)), 0o755); err != nil {
-					t.Fatal(err)
-				}
+			if windows && strings.HasSuffix(command, ".") {
+				continue
 			}
 			var before, after runtime.MemStats
 			runtime.ReadMemStats(&before)
@@ -830,6 +841,139 @@ func TestTargetsLongPathsLinear(t *testing.T) {
 				t.Errorf("a path of %d bytes, * matching %d, allocated %d MiB, budget %d MiB", len(command), matches, got>>20, budget>>20)
 			}
 		}
+	}
+}
+
+// A segment too long to be a name gives what the walk gave when it built each
+// path and found none: the word as written, the same unknowns, and the same
+// steps, a step for each segment of the run and each Open of a glob after it
+// (#143). These ran on the walk before it, with the same results.
+func TestTargetsGlobTooLong(t *testing.T) {
+	oldEntries, oldSteps, oldWindows := maxGlobEntries, maxGlobSteps, windows
+	t.Cleanup(func() { maxGlobEntries, maxGlobSteps, windows = oldEntries, oldSteps, oldWindows })
+	long := strings.Repeat("a", maxName+1)
+	cjk := strings.Repeat("名", 255) // 255 UTF-16 units, 765 bytes
+	for _, tt := range []struct {
+		windows bool
+		seg     string
+		want    bool
+	}{
+		{false, strings.Repeat("a", maxName), false},
+		{true, strings.Repeat("a", maxName), false},
+		{false, long, true},
+		{true, long, true},
+		{false, "a" + strings.Repeat(".", 2*maxName), true},
+		{false, "a" + strings.Repeat(" ", 2*maxName), true},
+		{true, "a" + strings.Repeat(".", 2*maxName), false},
+		{true, "a" + strings.Repeat(" ", 2*maxName), false},
+		{false, cjk + ":" + cjk, true},
+		{true, cjk + ":" + cjk, false},
+		{true, cjk + ":" + cjk + ":$DATA", false},
+		{true, long + ":s", true},
+		{true, "f:" + long, true},
+	} {
+		windows = tt.windows
+		if got := tooLong(tt.seg); got != tt.want {
+			t.Errorf("windows %v, a segment of %d bytes: too long %v, want %v", tt.windows, len(tt.seg), got, tt.want)
+		}
+	}
+	windows = oldWindows
+
+	dir := t.TempDir()
+	for _, d := range []string{"d0", "d1"} {
+		if err := os.MkdirAll(filepath.Join(dir, d, "a"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A file among the matches, a base no path goes under.
+	mixed := t.TempDir()
+	if err := os.Mkdir(filepath.Join(mixed, "d0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mixed, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	depth := strings.Count(dir[len(filepath.VolumeName(dir)):], string(filepath.Separator))
+	if strings.Count(mixed[len(filepath.VolumeName(mixed)):], string(filepath.Separator)) != depth {
+		t.Fatal("two temporary directories at different depths")
+	}
+	for _, tt := range []struct {
+		name, command string
+		targets       []string
+		unknown       int
+		steps         int  // beyond the directory's own path
+		budget        int  // steps beyond the directory's own path; 0 is the default
+		entries       int  // the entries budget; 0 is the default
+		mixed         bool // in the directory with a file among the matches
+	}{
+		{name: "last", command: "rm */" + long, targets: []string{"*/" + long}, steps: 3},
+		{name: "then a glob", command: "rm */" + long + "/*", targets: []string{"*/" + long + "/*"}, steps: 5},
+		{name: "after a fixed one", command: "rm */a/" + long, targets: []string{"*/a/" + long}, steps: 5},
+		{name: "then a fixed one", command: "rm */" + long + "/a", targets: []string{"*/" + long + "/a"}, steps: 5},
+		{name: "then a glob and more", command: "rm */" + long + "/*/x", targets: []string{"*/" + long + "/*/x"}, steps: 5},
+		{name: "in a run, then a glob", command: "rm */a/" + long + "/b/*", targets: []string{"*/a/" + long + "/b/*"}, steps: 9},
+		{name: "no match before it", command: "rm x*/" + long, targets: []string{"x*/" + long}, steps: 1},
+		{name: "no such directory", command: "rm no/*/" + long, targets: []string{"no/*/" + long}, steps: 2},
+		{name: "a file among the bases", command: "rm */" + long, targets: []string{"*/" + long}, steps: 3, mixed: true},
+		{name: "a file among the bases, then a glob", command: "rm */" + long + "/*", targets: []string{"*/" + long + "/*"}, steps: 5, mixed: true},
+		{name: "the run over the budget", command: "rm */" + long, unknown: 1, steps: 2, budget: 1},
+		{name: "the glob after over the budget", command: "rm */" + long + "/*", unknown: 1, steps: 4, budget: 3},
+		{name: "and every glob after", command: "rm */" + long + " *", unknown: 2, steps: 2, budget: 1},
+		{name: "over the entries budget", command: "rm */" + long, unknown: 1, steps: 1, entries: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			maxGlobSteps, maxGlobEntries = oldSteps, oldEntries
+			if tt.budget > 0 {
+				maxGlobSteps = depth + tt.budget
+			}
+			if tt.entries > 0 {
+				maxGlobEntries = tt.entries
+			}
+			d := dir
+			if tt.mixed {
+				d = mixed
+			}
+			r := globRun(tt.command, d)
+			var got []string
+			for _, target := range r.out {
+				rel, err := filepath.Rel(d, target.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, filepath.ToSlash(rel))
+			}
+			if !slices.Equal(got, tt.targets) || r.unknown != tt.unknown || r.steps != depth+tt.steps {
+				t.Errorf("targets %q, unknown %d, %d steps; want %q, %d, %d",
+					got, r.unknown, r.steps-depth, tt.targets, tt.unknown, tt.steps)
+			}
+		})
+	}
+}
+
+// On Windows a segment can name a file's stream, 255 UTF-16 units each for the
+// name and the stream: 1,531 bytes of UTF-8 that exist (#143).
+func TestTargetsGlobStream(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("streams are NTFS's")
+	}
+	dir := t.TempDir()
+	name, stream := strings.Repeat("名", 255), strings.Repeat("流", 255)
+	if err := os.Mkdir(filepath.Join(dir, "d0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "d0", name), nil, 0o644); err != nil {
+		t.Skipf("no name of 255 units here: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "d0", name+":"+stream), []byte("x"), 0o644); err != nil {
+		t.Skipf("no stream here: %v", err)
+	}
+	if len(name+":"+stream) <= maxName {
+		t.Fatalf("a segment of %d bytes is not past maxName", len(name+":"+stream))
+	}
+	got, unknown := Targets("rm */"+name+":"+stream, dir)
+	want := filepath.Join(dir, "d0", name+":"+stream)
+	if len(got) != 1 || got[0].Path != want || unknown != 0 {
+		t.Errorf("targets %v, unknown %d; want the stream in d0", got, unknown)
 	}
 }
 
