@@ -116,13 +116,15 @@ func match(pattern, file string) bool {
 		ok, err := path.Match(pattern, path.Base(file))
 		return err == nil && ok
 	}
-	return segments(strings.Split(pattern, "/"), strings.Split(file, "/"))
+	ok, _ := segments(strings.Split(pattern, "/"), strings.Split(file, "/"))
+	return ok
 }
 
 // segments matches pattern segments against path segments, ** spanning any
 // number of path segments. Each (pattern, path) position is computed once,
-// so many ** cannot make it backtrack exponentially.
-func segments(pat, file []string) bool {
+// so many ** cannot make it backtrack exponentially: computed counts them, at
+// most (len(pat)+1)·(len(file)+1).
+func segments(pat, file []string) (ok bool, computed int) {
 	n, m := len(pat), len(file)
 	const (
 		unknown = iota
@@ -136,6 +138,7 @@ func segments(pat, file []string) bool {
 		if memo[k] != unknown {
 			return memo[k] == yes
 		}
+		computed++
 		var r bool
 		switch {
 		case i == n:
@@ -154,7 +157,8 @@ func segments(pat, file []string) bool {
 		}
 		return r
 	}
-	return at(0, 0)
+	ok = at(0, 0)
+	return ok, computed
 }
 
 // expand returns the pattern with every {a,b} group expanded, nested groups

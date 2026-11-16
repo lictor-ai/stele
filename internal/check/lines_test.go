@@ -1,9 +1,9 @@
 package check
 
 import (
+	"math/bits"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -73,19 +73,30 @@ func TestContain(t *testing.T) {
 }
 
 // Spans and Contain stay linear, or close: a large file with many edits
-// must not slow every write.
+// must not slow every write. The work is counted, not timed, as a clock
+// measures the machine's load as well (#138): Spans reads the file a bounded
+// number of times, however many occurrences there are, and Contain is a
+// binary search.
 func TestSpansLargeFile(t *testing.T) {
-	start := time.Now()
-	var b strings.Builder
-	for b.Len() < 1<<20 {
-		b.WriteString("MARK x := 1\n")
-		for range 100 {
-			b.WriteString("y\n")
+	for _, eol := range []string{"\n", "\r\n"} {
+		var b strings.Builder
+		for b.Len() < 1<<20 {
+			b.WriteString("MARK x := 1" + eol)
+			for range 100 {
+				b.WriteString("y" + eol)
+			}
 		}
-	}
-	got := Spans([]byte(b.String()), []Fragment{{Text: "MARK", ReplaceAll: true}, {Text: "\ny\ny\n", ReplaceAll: true}})
-	if len(got) == 0 {
-		t.Fatal("no spans")
+		content := []byte(b.String())
+		fragments := []Fragment{{Text: "MARK", ReplaceAll: true}, {Text: "\ny\ny\n", ReplaceAll: true}}
+		got, read := spansRead(content, fragments)
+		if len(got) == 0 {
+			t.Fatalf("%q line ends: no spans", eol)
+		}
+		// Numbering each occurrence's line from the top of the file reads
+		// some 200 times the file here.
+		if bound := (2*len(fragments) + 2) * len(content); read > bound {
+			t.Errorf("%q line ends: read %d bytes of a %d-byte file, bound %d", eol, read, len(content), bound)
+		}
 	}
 
 	many := make([]Span, 100_000)
@@ -93,17 +104,20 @@ func TestSpansLargeFile(t *testing.T) {
 		many[i] = Span{3*i + 1, 3*i + 2}
 	}
 	many = Merge(many)
+	bound := bits.Len(uint(len(many)))
 	n := 0
 	for line := 1; line <= 300_000; line++ {
-		if Contain(many, line) {
+		in, probes := containProbes(many, line)
+		if in {
 			n++
+		}
+		// A scan from the first span looks at up to 100,000 of them.
+		if probes > bound {
+			t.Fatalf("Contain(%d) looked at %d of %d spans, bound %d", line, probes, len(many), bound)
 		}
 	}
 	if n != 200_000 {
 		t.Errorf("Contain found %d lines, want 200000", n)
-	}
-	if d := time.Since(start); d > time.Second {
-		t.Errorf("took %v, want well under a second", d)
 	}
 }
 

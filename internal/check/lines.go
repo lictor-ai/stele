@@ -30,15 +30,27 @@ const maxOccurrences = 1000
 // stele check still sees the file. With ReplaceAll, the first maxOccurrences
 // count.
 func Spans(content []byte, fragments []Fragment) []Span {
+	spans, _ := spansRead(content, fragments)
+	return spans
+}
+
+// spansRead is Spans, and how many bytes of content it read: the file once to
+// tell its line ends, each fragment searched for once, or twice in a CRLF
+// file, and the lines numbered in one pass. That is at most
+// (2·len(fragments)+2)·len(content), however many occurrences there are.
+func spansRead(content []byte, fragments []Fragment) (_ []Span, read int) {
 	type occurrence struct{ first, last int } // byte offsets, inclusive
 	var occs []occurrence
 	crlf := bytes.Contains(content, []byte("\r\n"))
+	read += len(content)
 	for _, f := range fragments {
 		text := f.Text
-		found := find(content, text, f.ReplaceAll)
+		found, n := find(content, text, f.ReplaceAll)
+		read += n
 		if len(found) == 0 && crlf && strings.Contains(text, "\n") && !strings.Contains(text, "\r\n") {
 			text = strings.ReplaceAll(text, "\n", "\r\n")
-			found = find(content, text, f.ReplaceAll)
+			found, n = find(content, text, f.ReplaceAll)
+			read += n
 		}
 		lead := len(text) - len(strings.TrimLeft(text, "\r\n"))
 		trail := len(text) - len(strings.TrimRight(text, "\r\n"))
@@ -50,7 +62,7 @@ func Spans(content []byte, fragments []Fragment) []Span {
 		}
 	}
 	if len(occs) == 0 {
-		return nil
+		return nil, read
 	}
 
 	// Number the lines in one pass over the offsets, in order.
@@ -63,6 +75,7 @@ func Spans(content []byte, fragments []Fragment) []Span {
 	line, pos := 1, 0
 	for _, off := range offsets {
 		line += bytes.Count(content[pos:off], []byte("\n"))
+		read += off - pos
 		pos = off
 		lineAt[off] = line
 	}
@@ -70,29 +83,32 @@ func Spans(content []byte, fragments []Fragment) []Span {
 	for i, o := range occs {
 		spans[i] = Span{lineAt[o.first], lineAt[o.last]}
 	}
-	return Merge(spans)
+	return Merge(spans), read
 }
 
 // find returns the start of each non-overlapping occurrence of text, at most
-// maxOccurrences. Without all, it returns nil unless there is exactly one.
-func find(content []byte, text string, all bool) []int {
+// maxOccurrences, and how many bytes of content it read: each search starts
+// where the last match ended. Without all, it returns nil unless there is
+// exactly one.
+func find(content []byte, text string, all bool) (starts []int, read int) {
 	if text == "" {
-		return nil
+		return nil, 0
 	}
 	frag := []byte(text)
-	var starts []int
 	for off := 0; len(starts) < maxOccurrences; {
 		i := bytes.Index(content[off:], frag)
 		if i < 0 {
+			read += len(content) - off
 			break
 		}
+		read += i + len(frag)
 		starts = append(starts, off+i)
 		if !all && len(starts) > 1 {
-			return nil // ambiguous
+			return nil, read // ambiguous
 		}
 		off += i + len(frag)
 	}
-	return starts
+	return starts, read
 }
 
 // Merge sorts spans and joins those that overlap or touch, as Contain needs.
@@ -115,6 +131,13 @@ func Merge(spans []Span) []Span {
 
 // Contain reports whether line is in one of spans, which are merged.
 func Contain(spans []Span, line int) bool {
-	i := sort.Search(len(spans), func(i int) bool { return spans[i].Last >= line })
-	return i < len(spans) && spans[i].First <= line
+	in, _ := containProbes(spans, line)
+	return in
+}
+
+// containProbes is Contain, and how many spans it looked at: a binary search
+// looks at no more than bits.Len(len(spans)) of them.
+func containProbes(spans []Span, line int) (in bool, probes int) {
+	i := sort.Search(len(spans), func(i int) bool { probes++; return spans[i].Last >= line })
+	return i < len(spans) && spans[i].First <= line, probes
 }

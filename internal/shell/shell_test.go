@@ -800,8 +800,11 @@ func globRun(command, dir string) *results {
 	return r
 }
 
-// A path as long as a command can be costs no more than its length: quadratic,
-// the first of these takes over a minute.
+// A path as long as a command can be costs no more than its length: walked a
+// segment at a time and cleaned at each, the first of these took 1m30s, and
+// on the step budget it still copies the path at each step. The cost is
+// counted in bytes allocated, not timed: a clock measures the machine's load
+// as well (#138). These take 10 to 25 bytes for each byte of the command.
 func TestTargetsLongPathsLinear(t *testing.T) {
 	long := strings.Repeat(strings.Repeat("a", 50)+"/", maxCommand/51-1)
 	for _, command := range []string{
@@ -810,36 +813,32 @@ func TestTargetsLongPathsLinear(t *testing.T) {
 		"rm */" + strings.Repeat("a/", maxCommand/2-4) + "*",
 		"rm */" + long + "x",
 	} {
-		start := time.Now()
-		Targets(command, t.TempDir())
-		if d := time.Since(start); d > 2*time.Second {
-			t.Errorf("a path of %d bytes took %v", len(command), d)
+		dir := t.TempDir()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		Targets(command, dir)
+		runtime.ReadMemStats(&after)
+		if got, budget := after.TotalAlloc-before.TotalAlloc, 64*uint64(len(command)); got > budget {
+			t.Errorf("a path of %d bytes allocated %d MiB, budget %d MiB", len(command), got>>20, budget>>20)
 		}
-	}
-
-	// Copying the path at each of its segments would stay under that bound, on
-	// the step budget, but not this one.
-	dir := t.TempDir()
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	Targets("rm "+long+"*", dir)
-	runtime.ReadMemStats(&after)
-	if got := after.TotalAlloc - before.TotalAlloc; got > 32<<20 {
-		t.Errorf("a path of %d bytes allocated %d MiB", len(long), got>>20)
 	}
 }
 
-// Linear in the command: quadratic, this takes seconds at the size cap.
+// Linear in the command. This one keeps a clock: there is no count to read
+// back, as the slow algorithm rescanned the command's words for every array.
+// It runs on four times the size cap, the parser called directly: linear, that
+// takes about 0.1 s; quadratic, it took 1m48s (4.4 s at the cap). The 30 s
+// limit is far above any stall of a loaded machine and well under that (#138).
 func TestTargetsArraysLinear(t *testing.T) {
 	for _, command := range []string{
-		strings.Repeat("a=() ", maxCommand/5),
-		"declare " + strings.Repeat("a=() ", (maxCommand-8)/5),
+		strings.Repeat("a=() ", 4*maxCommand/5),
+		"declare " + strings.Repeat("a=() ", 4*(maxCommand-8)/5),
 	} {
 		start := time.Now()
-		if got, _ := Targets(command, cwd); len(got) != 0 {
-			t.Errorf("%d targets", len(got))
+		if r := globRun(command, cwd); len(r.out) != 0 {
+			t.Errorf("%d targets", len(r.out))
 		}
-		if d := time.Since(start); d > 2*time.Second {
+		if d := time.Since(start); d > 30*time.Second {
 			t.Errorf("%d bytes of arrays took %v", len(command), d)
 		}
 	}
@@ -895,26 +894,48 @@ func TestAbs(t *testing.T) {
 	}
 }
 
-// Targets never panics, and its time grows with the command, not faster.
+// Targets never panics, and its work grows with the command, not faster.
 func FuzzTargets(f *testing.F) {
 	for _, s := range []string{
 		"cat > a.go <<'EOF'\nx > y\nEOF", "echo $(echo `a > b` > c) > d", "[[ a > b ]] && (( 1 > 2 ))",
 		"sed -i -e s/a/b/ f", "perl -0777 -pi -e x f", "cd a; (cd b && tee c) | tee d", "${", "$((", "<(", "'",
 		"a=(", "a[", "a[b]+=(1) x", "f() (", "function f (", "time -p", "time -p --", "cp a/* b/",
-		"rm [!", "rm [!]", "rm [!]]x", "rm []", "rm []]*", "rm a/b/[!c]/d",
+		"rm [!", "rm [!]", "rm [!]]x", "rm []", "rm []]*", "rm a/b/[!c]/d", "rm * */*",
 	} {
 		f.Add(s)
 	}
-	// A glob reads the real disk, from ~ or /, and that is not the time this
-	// measures: TestTargetsGlobBudgetHolds holds the budgets.
+	// The commands run in a directory of 21 entries, one a directory of 20,
+	// and a glob may also read from ~ or /. What globs read is counted against
+	// the budget, kept small here, rather than timed (#138): a read stops one
+	// entry past it. TestTargetsGlobBudgetHolds holds the steps. The clock
+	// only catches a blow-up in parsing: these inputs parse in microseconds,
+	// so 30 s is far above any stall.
+	dir := f.TempDir()
+	for i := range 20 {
+		for _, name := range []string{fmt.Sprint("f", i), filepath.Join("a", fmt.Sprint("g", i))} {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+				f.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+				f.Fatal(err)
+			}
+		}
+	}
 	old, oldSteps := maxGlobEntries, maxGlobSteps
 	maxGlobEntries, maxGlobSteps = 16, 64
 	f.Cleanup(func() { maxGlobEntries, maxGlobSteps = old, oldSteps })
 	f.Fuzz(func(t *testing.T, s string) {
+		if len(s) > maxCommand {
+			Targets(s, dir)
+			return
+		}
 		start := time.Now()
-		Targets(s, cwd)
-		if d := time.Since(start); d > time.Second {
+		r := globRun(s, dir)
+		if d := time.Since(start); d > 30*time.Second {
 			t.Errorf("Targets took %v on %d bytes", d, len(s))
+		}
+		if r.entries > maxGlobEntries+1 {
+			t.Errorf("globs read %d entries, budget %d", r.entries, maxGlobEntries)
 		}
 	})
 }
