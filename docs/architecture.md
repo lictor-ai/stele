@@ -486,11 +486,12 @@ and every file it reads is replaced whole. A compile waits up to 5 s for each
 holder in turn (`safefile.LockInTurn`), not for all of them together: several
 processes queued behind short holds all get the lock, where the last in line
 would otherwise give up though no one held it that long. The wait is capped in
-all, whatever the number of holders: 8 s in `EnsureFresh`, below the 10 s
-timeout the agent adapters give the hook, so a hook queued behind several holds
-answers with an error (and `block_on_error` applies) before the agent kills it
-and lets the write through unchecked; 30 s, the lock's stale age, in `stele
-compile`.
+all, whatever the number of holders. In `EnsureFresh` it is 5 s, the bound the
+hook always had: after the lock the hook still rebuilds, updates its session and
+runs the check, all within the 10 s timeout the agent adapters give it, past
+which the agent kills it and lets the write through unchecked. A lock still busy
+after 5 s is an error, and `block_on_error` decides. `stele compile` waits up to
+30 s, the lock's stale age.
 
 `compile` never resolves plugins itself. `cmd/` asks `internal/plugin` for the
 sources and passes them in, which keeps `compile` free of `PATH`, executables and

@@ -95,12 +95,13 @@ const (
 	// under it, and only built-in sources read, so it is short.
 	lockWait = 5 * time.Second
 	// hookLockTotal caps EnsureFresh's wait for the lock over every holder
-	// in turn. EnsureFresh runs in stele hook, which the agent adapters
-	// install with a timeout of 10 s (internal/adapter/claudecode, codex):
-	// past it the agent kills the hook and the write goes through
-	// unchecked, never reaching block_on_error. 8 s leaves the hook time to
-	// answer with an error instead.
-	hookLockTotal = 8 * time.Second
+	// in turn: 5 s, the bound the hook always had. EnsureFresh runs in
+	// stele hook, which the agent adapters install with a timeout of 10 s
+	// (internal/adapter/claudecode, codex), and after the lock the hook
+	// still rebuilds, updates its session and runs the check; past 10 s
+	// the agent kills it and the write goes through unchecked. A lock
+	// still busy after 5 s is an error, and block_on_error decides.
+	hookLockTotal = lockWait
 	// compileLockTotal caps stele compile's wait over every holder: as long
 	// as a lock may be held before it counts as left by a crash.
 	compileLockTotal = lockStale
