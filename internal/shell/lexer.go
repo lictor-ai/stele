@@ -1215,23 +1215,40 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 	bases := []string{base}
 	for i := first; i < len(segs); i++ {
 		seg := segs[i]
-		fixed := !strings.ContainsAny(seg, "*?[")
-		match := matchPattern(seg)
 		var next []string
-		for _, b := range bases {
-			if p.res.steps++; p.res.steps > maxGlobSteps {
-				return nil, false
+		if !strings.ContainsAny(seg, "*?[") {
+			// A run of fixed segments is joined once and added to each base
+			// whole, still a step per segment: a copy of the path at each
+			// one made a long path quadratic (#141). Only the last part of
+			// the pattern is checked, so the run is one child.
+			j := i + 1
+			for j < len(segs) && !strings.ContainsAny(segs[j], "*?[") {
+				j++
 			}
-			if fixed {
-				c := child(b, seg)
+			run := strings.Join(segs[i:j], sep)
+			for _, b := range bases {
+				if p.res.steps += j - i; p.res.steps > maxGlobSteps {
+					p.res.steps = maxGlobSteps + 1 // where a step at a time stops
+					return nil, false
+				}
+				c := child(b, run)
 				// A fixed last part must exist, as filepath.Glob has it.
-				if i == len(segs)-1 {
+				if j == len(segs) {
 					if _, err := os.Lstat(c); err != nil {
 						continue
 					}
 				}
 				next = append(next, c)
-				continue
+			}
+			if bases, i = next, j-1; len(bases) == 0 {
+				return nil, true
+			}
+			continue
+		}
+		match := matchPattern(seg)
+		for _, b := range bases {
+			if p.res.steps++; p.res.steps > maxGlobSteps {
+				return nil, false
 			}
 			f, err := os.Open(b)
 			if err != nil {
