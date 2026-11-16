@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -806,22 +807,27 @@ func globRun(command, dir string) *results {
 // counted in bytes allocated, not timed: a clock measures the machine's load
 // as well (#138). These take 10 to 21 bytes for each byte of the command. In a
 // directory where * matches, the fixed segments after it are joined once for
-// each match, not copied at each one: a copy at each took 650 MB (#141).
+// each match, not copied at each one: a copy at each took 650 MB (#141). A
+// segment too long to be a name is not joined to any: after the 1,999 matches
+// * may read, joined to each, it took 1.5 GB (#143).
 func TestTargetsLongPathsLinear(t *testing.T) {
 	long := strings.Repeat(strings.Repeat("a", 50)+"/", maxCommand/51-1)
-	for _, matches := range []int{0, 1, 2, 3} {
+	name := strings.Repeat("a", maxCommand-16)
+	for _, matches := range []int{0, 1, 2, 3, maxGlobEntries - 1} {
+		dir := t.TempDir()
+		for i := range matches {
+			if err := os.Mkdir(filepath.Join(dir, fmt.Sprint("d", i)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
 		for _, command := range []string{
 			"rm " + strings.Repeat("a/", maxCommand/2-3) + "*",
 			"rm " + long + "*",
 			"rm */" + strings.Repeat("a/", maxCommand/2-4) + "*",
 			"rm */" + long + "x",
+			"rm */" + name,
+			"rm */" + name + "/*",
 		} {
-			dir := t.TempDir()
-			for i := range matches {
-				if err := os.Mkdir(filepath.Join(dir, fmt.Sprint("d", i)), 0o755); err != nil {
-					t.Fatal(err)
-				}
-			}
 			var before, after runtime.MemStats
 			runtime.ReadMemStats(&before)
 			Targets(command, dir)
@@ -830,6 +836,65 @@ func TestTargetsLongPathsLinear(t *testing.T) {
 				t.Errorf("a path of %d bytes, * matching %d, allocated %d MiB, budget %d MiB", len(command), matches, got>>20, budget>>20)
 			}
 		}
+	}
+}
+
+// A segment too long to be a name gives what the walk gave when it built each
+// path and found none: the word as written, the same unknowns, and the same
+// steps, a step for each segment of the run and each Open of a glob after it
+// (#143). These ran on the walk before it, with the same results.
+func TestTargetsGlobTooLong(t *testing.T) {
+	oldSteps := maxGlobSteps
+	t.Cleanup(func() { maxGlobSteps = oldSteps })
+	for _, seg := range []string{strings.Repeat("a", maxName), "a" + strings.Repeat(" ", 2*maxName)} {
+		if tooLong(seg) {
+			t.Errorf("a segment of %d bytes, %d of them trailing spaces, taken for too long", len(seg), len(seg)-len(strings.TrimRight(seg, " ")))
+		}
+	}
+	dir := t.TempDir()
+	for _, d := range []string{"d0", "d1"} {
+		if err := os.MkdirAll(filepath.Join(dir, d, "a"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	depth := strings.Count(dir[len(filepath.VolumeName(dir)):], string(filepath.Separator))
+	long := strings.Repeat("a", maxName+1)
+	for _, tt := range []struct {
+		name, command string
+		budget        int // steps beyond the directory's own path; 0 is the default
+		targets       []string
+		unknown       int
+		steps         int // beyond the directory's own path
+	}{
+		{"last", "rm */" + long, 0, []string{"*/" + long}, 0, 3},
+		{"then a glob", "rm */" + long + "/*", 0, []string{"*/" + long + "/*"}, 0, 5},
+		{"after a fixed one", "rm */a/" + long, 0, []string{"*/a/" + long}, 0, 5},
+		{"then a fixed one", "rm */" + long + "/a", 0, []string{"*/" + long + "/a"}, 0, 5},
+		{"then a glob and more", "rm */" + long + "/*/x", 0, []string{"*/" + long + "/*/x"}, 0, 5},
+		{"in a run, then a glob", "rm */a/" + long + "/b/*", 0, []string{"*/a/" + long + "/b/*"}, 0, 9},
+		{"the run over the budget", "rm */" + long, 1, nil, 1, 2},
+		{"the glob after over the budget", "rm */" + long + "/*", 3, nil, 1, 4},
+		{"and every glob after", "rm */" + long + " *", 1, nil, 2, 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			maxGlobSteps = oldSteps
+			if tt.budget > 0 {
+				maxGlobSteps = depth + tt.budget
+			}
+			r := globRun(tt.command, dir)
+			var got []string
+			for _, target := range r.out {
+				rel, err := filepath.Rel(dir, target.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, filepath.ToSlash(rel))
+			}
+			if !slices.Equal(got, tt.targets) || r.unknown != tt.unknown || r.steps != depth+tt.steps {
+				t.Errorf("targets %q, unknown %d, %d steps; want %q, %d, %d",
+					got, r.unknown, r.steps-depth, tt.targets, tt.unknown, tt.steps)
+			}
+		})
 	}
 }
 

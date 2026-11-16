@@ -1225,6 +1225,22 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 			for j < len(segs) && !strings.ContainsAny(segs[j], "*?[") {
 				j++
 			}
+			if slices.ContainsFunc(segs[i:j], tooLong) {
+				// No such path exists: the last part's Lstat or the next
+				// glob's Open fails on each base, a step each for the
+				// Open. Count those steps, as the walk would, without a
+				// path per base: a long segment joined to each of 2,000
+				// matches took 1.5 GB (#143).
+				n := j - i
+				if j < len(segs) {
+					n++
+				}
+				if p.res.steps += n * len(bases); p.res.steps > maxGlobSteps {
+					p.res.steps = maxGlobSteps + 1 // where a step at a time stops
+					return nil, false
+				}
+				return nil, true
+			}
 			run := strings.Join(segs[i:j], sep)
 			for _, b := range bases {
 				if p.res.steps += j - i; p.res.steps > maxGlobSteps {
@@ -1278,6 +1294,18 @@ func (p *parser) glob(pattern string) (matches []string, ok bool) {
 	}
 	p.res.globbed += len(bases)
 	return bases, true
+}
+
+// maxName is past the longest a file name can be: 255 bytes on Linux and macOS,
+// 255 UTF-16 units on Windows, which are up to 765 bytes of UTF-8. Kept well
+// above both, a name is never taken for too long.
+const maxName = 1024
+
+// tooLong reports whether seg, a segment of a clean path, is longer than any
+// name can be. Windows drops a last segment's trailing dots and spaces, so
+// they are not counted.
+func tooLong(seg string) bool {
+	return len(seg) > maxName && len(strings.TrimRight(seg, ". ")) > maxName
 }
 
 // child is name in dir, a clean path: unlike filepath.Join it does not clean
