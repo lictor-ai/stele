@@ -93,7 +93,7 @@ On the evaluation's 9 tasks, with Sonnet 5.5:
 
 No rules: 18 runs, in experiment 3. `CLAUDE.md` and stele: 18 runs each in experiment 3, and 9 each in the v1.5.0 pilot. On these tasks, `CLAUDE.md` is enough, and stele matches it.
 
-Where a task pulls against a rule, `CLAUDE.md` can slip. In the probe `probe-cli-marks`, testing an HTTP client wants `httptest.NewServer`, which the rules forbid. With Sonnet, 8 runs each: `CLAUDE.md` 5/8, stele 8/8 (experiment 6).
+Where a task pulls against a rule, `CLAUDE.md` can slip. In the probe `probe-cli-marks`, testing an HTTP client wants `httptest.NewServer`, which the rules forbid. With Sonnet, 8 runs each: `CLAUDE.md` 5/8, stele 8/8 (experiment 6). In the [v1.5.0 probes](docs/eval.md#probes-v150), 4 probes × 3 runs: 11/12 and 12/12.
 
 How we measure it, and how to rerun it: [docs/eval.md](docs/eval.md).
 

@@ -64,6 +64,7 @@ func main() {
 		out       = flag.String("out", "", "a folder under results/ for this eval's files (default: results/ itself)")
 		regradeIn = flag.String("regrade", "", "a results/<out>/<time> folder: grade its saved runs again from their diffs, with no agent, and print the grades")
 		regradeW  = flag.Bool("regrade-write", false, "with -regrade: also write <time>.regraded.md and <time>.regraded.jsonl beside the folder")
+		rescrubIn = flag.String("rescrub", "", "a results/<out>/<time> folder: scrub its files and the summaries beside it again, in place, with the current scrubber, then check them for private data")
 		cfg       config
 	)
 	flag.StringVar(&cfg.claude, "claude", "", "claude binary (default: newest VS Code extension's, else claude on PATH)")
@@ -76,6 +77,17 @@ func main() {
 	flag.BoolVar(&cfg.keep, "keep", false, "keep each run's temporary tree (default: only its diff, beside the stream)")
 	flag.BoolVar(&cfg.rtk, "rtk", false, "add the rtk hook from the user's settings (only it) to every arm")
 	flag.Parse()
+	if *rescrubIn != "" {
+		changed, err := rescrub(*rescrubIn)
+		fmt.Fprintf(os.Stderr, "rescrub: %d files changed\n", len(changed))
+		for _, f := range changed {
+			fmt.Fprintf(os.Stderr, "  %s\n", f)
+		}
+		if err != nil {
+			fail(err)
+		}
+		return
+	}
 
 	here, err := sourceDir()
 	if err != nil {

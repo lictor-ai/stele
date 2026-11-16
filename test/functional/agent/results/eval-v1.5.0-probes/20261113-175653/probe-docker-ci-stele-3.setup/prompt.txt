@@ -1,0 +1,5 @@
+Containerise cmd/server and add CI.
+
+1. A Dockerfile at the repository root: a multi-stage build that compiles cmd/server with Go 1.27 and produces a small runtime image that runs the server on port 8080.
+2. A GitHub Actions workflow in .github/workflows/ci.yml that, on pull requests and pushes to main, sets up Go, runs go vet ./... and go test ./..., and builds the Docker image.
+3. A short "Docker" section in README.md saying how to build and run the image.

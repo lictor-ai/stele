@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -192,5 +193,123 @@ func TestWithoutLeaks(t *testing.T) {
 	}
 	if !strings.HasPrefix(got.Error, "boom; its result still held the account name") {
 		t.Errorf("error = %q", got.Error)
+	}
+}
+
+func TestScrubPATH(t *testing.T) {
+	env := fakeEnv(t)
+	base := t.TempDir()
+	homeBin := filepath.Join(env.home, "bin")
+	tool := filepath.Join(env.home, "Local", "FakeTool", "bin")
+	vendor := filepath.Join(base, "FakeVendor", "bin")
+	spaced := filepath.Join(base, "Other Vendor", "bin")
+	third := filepath.Join(base, "ToolC", "bin")
+	// System dirs a Linux or macOS PATH holds are not the user's own.
+	raw := strings.Join([]string{homeBin, "/usr/bin", tool, vendor, spaced, "/bin", third,
+		"/usr/local/go/bin", "/snap/bin", "/usr/games", "/opt/homebrew/bin"}, string(os.PathListSeparator))
+	t.Setenv("PATH", raw)
+	env.path = filepath.SplitList(os.Getenv("PATH"))
+	s := newScrubberFor(env)
+
+	// As Git Bash prints it: MSYS drives, the home as ~, and its own dirs.
+	msys := func(p string) string {
+		if m := drivePath.FindStringSubmatch(p); m != nil {
+			return "/" + strings.ToLower(m[1]) + "/" + filepath.ToSlash(m[2])
+		}
+		return p
+	}
+	tilde := func(p string) string { return "~" + filepath.ToSlash(strings.TrimPrefix(p, env.home)) }
+	bash := strings.Join([]string{tilde(homeBin), "/mingw64/bin", "/usr/bin", tilde(tool), msys(vendor), msys(spaced), "/tmp/stele-eval-bin-1", msys(third)}, ":")
+
+	for in, want := range map[string]string{
+		"which: no docker in (" + bash + ")\n": "which: no docker in (<PATH>)\n",
+		"which: no docker in (/a (x86)/b:/c)":  "which: no docker in (<PATH>)",
+		"PATH=" + raw + "\nnext":               "PATH=<PATH>\nnext",
+		"echo: " + bash + " done":              "echo: <PATH> done",
+		// Lists that are not the machine's PATH stay.
+		"ENV PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin":     "ENV PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+		"PATH=/opt/homebrew/bin:/snap/bin:/usr/games:/usr/bin":        "PATH=/opt/homebrew/bin:/snap/bin:/usr/games:/usr/bin",
+		"at 10:30:45, a:b:c and /x:/y:/z":                             "at 10:30:45, a:b:c and /x:/y:/z",
+		"two: " + tilde(homeBin) + ":/usr/bin":                        "two: ~/bin:/usr/bin",
+		"github.com/a/b:github.com/c/d:golang.org/x/tools":            "github.com/a/b:github.com/c/d:golang.org/x/tools",
+		"https://a.example/x;https://b.example/y;https://c.example/z": "https://a.example/x;https://b.example/y;https://c.example/z",
+		// which's output cut short: the text after it stays.
+		"which: no docker in (/usr/bin:/bin\nlater text (with parens) and more)": "which: no docker in (/usr/bin:/bin\nlater text (with parens) and more)",
+		"which: no docker in (/usr/bin:/bin\" then \"x)":                         "which: no docker in (/usr/bin:/bin\" then \"x)",
+	} {
+		if got := string(s.paths([]byte(in))); got != want {
+			t.Errorf("paths(%q)\n = %q\nwant %q", in, got, want)
+		}
+	}
+
+	// In a transcript, escaped in JSON.
+	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"content": "PATH is " + raw + "\nok"}})
+	out := s.jsonl(line)
+	var ev map[string]any
+	if err := json.Unmarshal(out, &ev); err != nil {
+		t.Fatalf("scrubbed line is not JSON: %v\n%s", err, out)
+	}
+	if got := ev["message"].(map[string]any)["content"]; got != "PATH is <PATH>\nok" {
+		t.Errorf("transcript content = %q", got)
+	}
+
+	// which cut short in a transcript, its ) in another field.
+	line, _ = json.Marshal(map[string]any{"type": "user", "a": "which: no docker in (/usr/bin:/c/x", "b": "ok)"})
+	out = s.jsonl(line)
+	ev = nil
+	if err := json.Unmarshal(out, &ev); err != nil {
+		t.Fatalf("scrubbed line is not JSON: %v\n%s", err, out)
+	}
+	if ev["a"] != "which: no docker in (/usr/bin:/c/x" || ev["b"] != "ok)" {
+		t.Errorf("cut-short which in JSON = %s", out)
+	}
+
+	// leak: 2 of the machine's own entries, anywhere.
+	if what := s.leak([]byte("see " + vendor + " and " + spaced)); what != "the machine's PATH" {
+		t.Errorf("leak = %q, want the machine's PATH", what)
+	}
+	if what := s.leak([]byte("see " + vendor + " and /usr/bin, /usr/local/go/bin, /opt/homebrew/bin")); what != "" {
+		t.Errorf("leak = %q on one own entry, want none", what)
+	}
+	if what := s.leak(s.text([]byte("PATH=" + raw))); what != "" {
+		t.Errorf("leak = %q after scrubbing", what)
+	}
+}
+
+// TestScrubWindowsPATH is a Windows PATH, as cmd and PowerShell print it.
+func TestScrubWindowsPATH(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("drive-letter paths")
+	}
+	home := `C:\Users\Someone`
+	entries := []string{
+		home + `\bin`,
+		`C:\Program Files\Git\cmd`,
+		`C:\Program Files\Go\bin`,
+		`C:\Windows\system32`,
+		`C:\Windows`,
+		home + `\Local\Programs\Tool\bin`,
+		`D:\tools\fakecli`,
+	}
+	win := strings.Join(entries, ";")
+	t.Setenv("PATH", win)
+	t.Setenv("SystemRoot", `C:\Windows`)
+	s := newScrubberFor(scrubEnv{home: home, path: filepath.SplitList(os.Getenv("PATH"))})
+	for in, want := range map[string]string{
+		"Path=" + win + "\r\n":                       "Path=<PATH>\r\n",
+		"Path=" + strings.ReplaceAll(win, `\`, `\\`): "Path=<PATH>",
+		// An entry not on PATH, with a space, does not split the list.
+		"Path=" + entries[0] + `;C:\Some Unknown Dir\x;` + strings.Join(entries[1:], ";"):                              "Path=<PATH>",
+		"Path=" + strings.Join(entries[:2], ";") + `;C:\Unknown Space\y;` + entries[6]:                                 "Path=<PATH>",
+		"/c/Users/Someone/bin:/c/Program Files/Git/cmd:/mingw64/bin:/usr/bin:/c/Program Files/Go/bin:/d/tools/fakecli": "<PATH>",
+		// 2 own entries are enough.
+		`C:\Program Files\Git\cmd;C:\Program Files\Go\bin`:       "<PATH>",
+		`C:\Windows\system32;C:\Windows;C:\Program Files\Go\bin`: "<PATH>",
+		// System dirs only stay.
+		`C:\Windows\system32;C:\Windows`: `C:\Windows\system32;C:\Windows`,
+	} {
+		if got := string(s.paths([]byte(in))); got != want {
+			t.Errorf("paths(%q)\n = %q\nwant %q", in, got, want)
+		}
 	}
 }

@@ -31,6 +31,7 @@ go run ./test/functional/agent -eval -out eval-v1.5.0-pilot   # the published ev
 | `-out` | none: the files go in `results/`; with a name, in `results/<name>/` |
 | `-regrade` | none: a `results/<out>/<time>` folder whose saved runs are graded again from their diffs, with no agent; it prints the grades |
 | `-regrade-write` | off: with `-regrade`, also write `<time>.regraded.md` and `<time>.regraded.jsonl` beside the folder |
+| `-rescrub` | none: a `results/<out>/<time>` folder whose files, and the summaries beside it, are scrubbed again in place with the current scrubber, then searched for private data; no agent |
 | `-keep` | off: each run's temporary tree is deleted after grading, and its diff kept in `results/<time>/` |
 
 ## Arms
@@ -115,7 +116,7 @@ Every arm is graded the same way. The final tree is copied without its rule file
 
 A finding the grade does not count is still listed in the run's notes: a line the fixture already had (each old line excuses one finding per rule), a non-blocking rule, a file `stele check` did not check (binary, too large, or ignored by a `.gitignore`), findings past its limit of 100 per rule and file, and the rule files and agent setup the agent changed, which the grader leaves out.
 
-Everything written under `results/` is scrubbed first ([scrub.go](scrub.go)): local paths become `<run>`, `<tmp>` and `~`, your account name `<user>`, the account details in Claude Code's transcript and its `api-request-blob` lines are dropped, and emails other than example ones become `<email>`. Then the run's files are searched for the home directory, your account name, the account's ids and emails (`.claude.json`, git's `user.email`) and any organization id seen. A file that still holds one is replaced by a one-line marker, and the run gets an error. A results line that still holds one has those texts replaced and the run gets an error; a summary that does stops the eval. An account name that is a common one (`root`, `admin`, `user`, `runner`, `dev`, `test`) is not replaced. A transcript or Codex rollout that cannot be found is an error as well: the post-write flags were not counted.
+Everything written under `results/` is scrubbed first ([scrub.go](scrub.go)): local paths become `<run>`, `<tmp>` and `~`, your account name `<user>`, the account details in Claude Code's transcript and its `api-request-blob` lines are dropped, emails other than example ones become `<email>`, and a printed `PATH` (what `which: no x in (...)` lists, or a `:` or `;` list holding 2 of your own `PATH` entries, or 3 entries one of them your own; your own is under home or outside `/usr`, `/opt`, `/snap`, `/bin`, `/sbin` and the Windows folder) becomes `<PATH>`. Then the run's files are searched for the home directory, your account name, the account's ids and emails (`.claude.json`, git's `user.email`), any organization id seen, and 2 or more of your own `PATH` entries. A file that still holds one is replaced by a one-line marker, and the run gets an error. A results line that still holds one has those texts replaced and the run gets an error; a summary that does stops the eval. An account name that is a common one (`root`, `admin`, `user`, `runner`, `dev`, `test`) is not replaced. A transcript or Codex rollout that cannot be found is an error as well: the post-write flags were not counted.
 
 The reported counts:
 
