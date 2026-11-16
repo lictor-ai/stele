@@ -86,7 +86,13 @@ Guideline enforcement for coding agents. Go, single binary.
     of its own, in stele's tap and bucket; a plugin's package installs
     neither stele nor its scanner. It amends ADR-0019. The spec carries it
     as D91.
-21. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+21. `docs/adr/0021-a-sink-can-defer-a-push.md` — a sink may answer a push
+    `"deferred": true` with `accepted: 0` and a reason: the cursor stays,
+    `stele push` and `stele check --push` say `nothing sent (deferred: …)`
+    and exit 0 for it, and `stele status` shows the reason. Any other
+    `accepted` with `deferred` is a protocol error. It amends ADR-0014, and
+    D82–D85. The spec carries it as D92.
+22. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.

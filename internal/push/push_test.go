@@ -49,22 +49,26 @@ type fake struct {
 	name   string
 	accept int // per call; 0 is all
 	err    error
+	defer_ string // when set, the sink defers, for this reason
 	got    []json.RawMessage
 	calls  int
 }
 
 func (f *fake) target() Target {
-	return Target{Name: f.name, Push: func(_ context.Context, project string, recs []json.RawMessage) (int, error) {
+	return Target{Name: f.name, Push: func(_ context.Context, project string, recs []json.RawMessage) (Answer, error) {
 		f.calls++
 		if f.err != nil {
-			return 0, f.err
+			return Answer{}, f.err
+		}
+		if f.defer_ != "" {
+			return Answer{Deferred: true, Reason: f.defer_}, nil
 		}
 		n := len(recs)
 		if f.accept > 0 && f.accept < n {
 			n = f.accept
 		}
 		f.got = append(f.got, recs[:n]...)
-		return n, nil
+		return Answer{Accepted: n}, nil
 	}}
 }
 
@@ -237,7 +241,7 @@ func TestPushRefreshesTheLock(t *testing.T) {
 	lockPath := filepath.Join(root, index.Dir, LockName)
 	long := time.Now().Add(-time.Hour)
 	calls := 0
-	target := Target{Name: "s", Push: func(context.Context, string, []json.RawMessage) (int, error) {
+	target := Target{Name: "s", Push: func(context.Context, string, []json.RawMessage) (Answer, error) {
 		calls++
 		info, err := os.Stat(lockPath)
 		if err != nil {
@@ -248,7 +252,7 @@ func TestPushRefreshesTheLock(t *testing.T) {
 		}
 		// The call takes "an hour".
 		os.Chtimes(lockPath, long, long)
-		return 1, nil
+		return Answer{Accepted: 1}, nil
 	}}
 	if _, err := Run(context.Background(), root, testKey, "p1", []Target{target}, now); err != nil {
 		t.Fatal(err)
@@ -312,12 +316,97 @@ func TestPushGapSaidOnce(t *testing.T) {
 func TestPending(t *testing.T) {
 	root := project(t)
 	log(t, root, "p1", "a", "b")
-	if n, last, err := Pending(root, testKey, "p1", "s"); n != 2 || !last.IsZero() || err != nil {
-		t.Errorf("before = %d, %v, %v", n, last, err)
+	if w, err := Pending(root, testKey, "p1", "s"); w.Lines != 2 || !w.LastPush.IsZero() || w.Deferred || err != nil {
+		t.Errorf("before = %+v, %v", w, err)
 	}
 	run(t, root, &fake{name: "s", accept: 1})
-	if n, last, err := Pending(root, testKey, "p1", "s"); n != 1 || !last.Equal(at) || err != nil {
-		t.Errorf("after = %d, %v, %v", n, last, err)
+	if w, err := Pending(root, testKey, "p1", "s"); w.Lines != 1 || !w.LastPush.Equal(at) || w.Deferred || err != nil {
+		t.Errorf("after = %+v, %v", w, err)
+	}
+}
+
+// A sink that defers takes nothing and is not partial: the cursor stays, its
+// reason is kept for stele status, and a later push sends the lines and
+// forgets the reason (ADR-0021).
+func TestPushDeferredKeepsLinesForLater(t *testing.T) {
+	root := project(t)
+	log(t, root, "p1", "a", "b", "c")
+	off := &fake{name: "s", defer_: "sending is off in this folder"}
+	res := run(t, root, off)
+	if s := res.Sinks[0]; !s.Deferred || s.Reason != "sending is off in this folder" || s.Sent != 0 || s.Pending != 3 || s.Partial || s.Err != nil {
+		t.Fatalf("deferred push = %+v", s)
+	}
+	w, err := Pending(root, testKey, "p1", "s")
+	if err != nil || w.Lines != 3 || !w.Deferred || w.Reason != "sending is off in this folder" || !w.LastPush.IsZero() {
+		t.Errorf("pending after a deferral = %+v, %v", w, err)
+	}
+	// Deferred again: still nothing moved.
+	if res := run(t, root, off); res.Sinks[0].Pending != 3 || off.calls != 2 {
+		t.Errorf("second deferral = %+v, %d calls", res.Sinks[0], off.calls)
+	}
+	on := &fake{name: "s"}
+	if res := run(t, root, on); res.Sinks[0].Sent != 3 || res.Sinks[0].Deferred {
+		t.Fatalf("push once on = %+v", res.Sinks[0])
+	}
+	if got := on.sessions(t); strings.Join(got, ",") != "a,b,c" {
+		t.Errorf("sink got %v, want a,b,c", got)
+	}
+	if w, err := Pending(root, testKey, "p1", "s"); err != nil || w.Lines != 0 || w.Deferred || w.Reason != "" {
+		t.Errorf("pending once sent = %+v, %v", w, err)
+	}
+}
+
+// A deferral after a batch was taken keeps what was taken and defers the
+// rest.
+func TestPushDeferredAfterABatch(t *testing.T) {
+	root := project(t)
+	old := maxBatch
+	maxBatch = 1
+	t.Cleanup(func() { maxBatch = old })
+	log(t, root, "p1", "a", "b")
+	calls := 0
+	target := Target{Name: "s", Push: func(context.Context, string, []json.RawMessage) (Answer, error) {
+		calls++
+		if calls == 1 {
+			return Answer{Accepted: 1}, nil
+		}
+		return Answer{Deferred: true}, nil
+	}}
+	res, err := Run(context.Background(), root, testKey, "p1", []Target{target}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := res.Sinks[0]; s.Sent != 1 || !s.Deferred || s.Pending != 1 || s.Partial {
+		t.Errorf("result = %+v", s)
+	}
+	if w, _ := Pending(root, testKey, "p1", "s"); w.Lines != 1 || !w.Deferred || !w.LastPush.Equal(at) {
+		t.Errorf("pending = %+v", w)
+	}
+}
+
+// A sink that answers a partial push after deferring no longer shows the
+// old reason: the reason is its last answer's.
+func TestPushPartialClearsDeferral(t *testing.T) {
+	root := project(t)
+	log(t, root, "p1", "a", "b")
+	run(t, root, &fake{name: "s", defer_: "off"})
+	target := Target{Name: "s", Push: func(context.Context, string, []json.RawMessage) (Answer, error) {
+		return Answer{}, nil
+	}}
+	res, err := Run(context.Background(), root, testKey, "p1", []Target{target}, now)
+	if err != nil || !res.Sinks[0].Partial {
+		t.Fatalf("partial = %+v, %v", res, err)
+	}
+	if w, _ := Pending(root, testKey, "p1", "s"); w.Lines != 2 || w.Deferred {
+		t.Errorf("pending = %+v, want the deferral forgotten", w)
+	}
+}
+
+func TestOneDeferred(t *testing.T) {
+	f := &fake{name: "s", defer_: "off"}
+	res := One(context.Background(), []Target{f.target()}, "p1", json.RawMessage(`{"v":1,"kind":"check"}`))
+	if s := res.Sinks[0]; !s.Deferred || s.Reason != "off" || s.Partial || s.Sent != 0 || s.Err != nil {
+		t.Errorf("result = %+v", s)
 	}
 }
 

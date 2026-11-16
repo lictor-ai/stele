@@ -56,7 +56,8 @@ func parse(exe string) (kind, mode string, ok bool) {
 // config, in a good answer: "rules", "fingerprint", "problems",
 // "violations", "skipped" are copied into the answer for the ops that have
 // them. A push accepts at most "accept" records, when set, and appends those
-// it accepts, one per line, to the file "out".
+// it accepts, one per line, to the file "out". With "defer" set, a push
+// takes nothing and answers deferred, with "defer" as its reason.
 
 // Serve answers the one request on stdin as exe's mode says, and returns the
 // exit status.
@@ -96,6 +97,11 @@ func Serve(exe string, stdin io.Reader, stdout, stderr io.Writer) int {
 			}
 		}
 		if op == "push" {
+			var reason string
+			if json.Unmarshal(config["defer"], &reason) == nil && reason != "" {
+				answer["accepted"], answer["deferred"], answer["reason"] = 0, true, reason
+				return
+			}
 			var recs []json.RawMessage
 			_ = json.Unmarshal(req["records"], &recs)
 			n := len(recs)

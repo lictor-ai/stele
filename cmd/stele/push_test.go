@@ -89,6 +89,44 @@ func TestPushPartialIsExit1(t *testing.T) {
 	}
 }
 
+// A sink that defers: nothing sent, the lines wait, exit 0, and stele
+// status says why; once it takes them, the next push sends them
+// (ADR-0021).
+func TestPushDeferredWaitsExit0(t *testing.T) {
+	installPlugin(t, filepath.Join(t.TempDir(), "bin"), "sink", "good")
+	root := pushProject(t)
+	out := filepath.Join(t.TempDir(), "received.jsonl")
+	withSink(t, root, "good", out, `, "defer": "sending is off in this folder"`)
+	code, stdout, errOut := runCmd("push")
+	want := "good: nothing sent (deferred: sending is off in this folder), 3 lines waiting\n"
+	if code != exitOK || stdout != want || errOut != "" {
+		t.Fatalf("deferred push = %d, %q, %q; want %q", code, stdout, errOut, want)
+	}
+	if got := received(t, out); len(got) != 0 {
+		t.Errorf("the sink kept %d records", len(got))
+	}
+	st := statusJSON(t, "--offline")
+	if len(st.Sinks) != 1 || st.Sinks[0].Pending != 3 || !st.Sinks[0].Deferred || st.Sinks[0].DeferReason != "sending is off in this folder" || st.Sinks[0].LastPush != "" {
+		t.Errorf("status sinks = %+v", st.Sinks)
+	}
+	if code, text, _ := runCmd("status", "--offline"); code != exitOK || !strings.Contains(text, "3 lines to send (deferred: sending is off in this folder)") {
+		t.Errorf("status = %d, %q", code, text)
+	}
+
+	withSink(t, root, "good", out, "")
+	code, stdout, errOut = runCmd("push")
+	if code != exitOK || !strings.Contains(stdout, "good: sent 3 lines") {
+		t.Fatalf("push once on = %d, %q, %q", code, stdout, errOut)
+	}
+	logData, _ := os.ReadFile(filepath.Join(root, ".stele", journal.FileName))
+	if got := strings.Join(received(t, out), "\n") + "\n"; got != string(logData) {
+		t.Errorf("the sink got\n%s\nwant the log\n%s", got, logData)
+	}
+	if st := statusJSON(t, "--offline"); st.Sinks[0].Pending != 0 || st.Sinks[0].Deferred || st.Sinks[0].DeferReason != "" {
+		t.Errorf("status once sent = %+v", st.Sinks)
+	}
+}
+
 func TestPushExitCodes(t *testing.T) {
 	installPlugin(t, filepath.Join(t.TempDir(), "bin"), "sink", "errors")
 	root := pushProject(t)

@@ -139,6 +139,9 @@ func printStatus(w io.Writer, root string, st status.Status) {
 		fmt.Fprintln(w, "\nsinks")
 		for _, s := range st.Sinks {
 			line := plural(s.Pending, "line") + " to send"
+			if s.Deferred {
+				line += " (" + deferredText(s.DeferReason) + ")"
+			}
 			if s.Error != "" {
 				line = s.Error
 			}
@@ -175,13 +178,13 @@ func statusSinks(root string, key sign.Key) []status.Sink {
 		case key == nil:
 			s.Error = "no log on this machine"
 		default:
-			n, last, err := push.Pending(root, key, f.Project, name)
-			s.Pending = n
+			w, err := push.Pending(root, key, f.Project, name)
+			s.Pending, s.Deferred, s.DeferReason = w.Lines, w.Deferred, w.Reason
 			if err != nil {
 				s.Error = err.Error()
 			}
-			if !last.IsZero() {
-				s.LastPush = last.Format(time.RFC3339)
+			if !w.LastPush.IsZero() {
+				s.LastPush = w.LastPush.Format(time.RFC3339)
 			}
 		}
 		out = append(out, s)

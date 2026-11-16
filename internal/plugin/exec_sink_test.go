@@ -83,9 +83,9 @@ func sink(t *testing.T, answer string) (*Sink, *fakeRunner) {
 
 func TestSinkPushAccepted(t *testing.T) {
 	s, r := sink(t, `{"protocol":1,"accepted":2}`)
-	n, err := s.Push(context.Background(), "p1", records(3))
-	if err != nil || n != 2 {
-		t.Fatalf("Push = %d, %v", n, err)
+	a, err := s.Push(context.Background(), "p1", records(3))
+	if err != nil || a != (PushAnswer{Accepted: 2}) {
+		t.Fatalf("Push = %+v, %v", a, err)
 	}
 	req := r.got[len(r.got)-1]
 	for _, want := range []string{`"op":"push"`, `"project":"p1"`, `"config":{"path":"x"}`, `"records":[{"v":1,"kind":"wrote"}`} {
@@ -97,6 +97,46 @@ func TestSinkPushAccepted(t *testing.T) {
 
 func TestSinkPushAcceptedOutOfRange(t *testing.T) {
 	for _, answer := range []string{`{"protocol":1,"accepted":4}`, `{"protocol":1,"accepted":-1}`, `{"protocol":1}`} {
+		s, _ := sink(t, answer)
+		if _, err := s.Push(context.Background(), "p1", records(3)); !errors.Is(err, ErrProtocol) {
+			t.Errorf("%s: err = %v, want a protocol error", answer, err)
+		}
+	}
+}
+
+// A sink defers with "deferred": true and "accepted": 0; its reason is made
+// one printable line (ADR-0021).
+func TestSinkPushDeferred(t *testing.T) {
+	for answer, want := range map[string]PushAnswer{
+		`{"protocol":1,"accepted":0,"deferred":true,"reason":"sending is off in this folder"}`: {Deferred: true, Reason: "sending is off in this folder"},
+		`{"protocol":1,"accepted":0,"deferred":true}`:                                          {Deferred: true},
+		`{"protocol":1,"accepted":0,"deferred":true,"reason":"off\n\u001b[31mred"}`:            {Deferred: true, Reason: "off red"},
+		// "deferred": false is no deferral, and "reason" alone is ignored.
+		`{"protocol":1,"accepted":2,"deferred":false}`: {Accepted: 2},
+		`{"protocol":1,"accepted":1,"reason":"x"}`:     {Accepted: 1},
+	} {
+		s, _ := sink(t, answer)
+		a, err := s.Push(context.Background(), "p1", records(3))
+		if err != nil || a != want {
+			t.Errorf("%s: Push = %+v, %v; want %+v", answer, a, err, want)
+		}
+	}
+	s, _ := sink(t, `{"protocol":1,"accepted":0,"deferred":true,"reason":"`+strings.Repeat("é", 300)+`"}`)
+	if a, err := s.Push(context.Background(), "p1", records(1)); err != nil || len(a.Reason) > maxReason+len("…") {
+		t.Errorf("a long reason = %d bytes, %v", len(a.Reason), err)
+	}
+}
+
+// "deferred" is valid only with "accepted": 0: a sink that defers takes
+// nothing. Anything else is a protocol error, as is a reason that is not a
+// string (ADR-0021).
+func TestSinkPushDeferredInvalid(t *testing.T) {
+	for _, answer := range []string{
+		`{"protocol":1,"accepted":2,"deferred":true}`,
+		`{"protocol":1,"deferred":true}`,
+		`{"protocol":1,"accepted":0,"deferred":"yes"}`,
+		`{"protocol":1,"accepted":0,"deferred":true,"reason":5}`,
+	} {
 		s, _ := sink(t, answer)
 		if _, err := s.Push(context.Background(), "p1", records(3)); !errors.Is(err, ErrProtocol) {
 			t.Errorf("%s: err = %v, want a protocol error", answer, err)

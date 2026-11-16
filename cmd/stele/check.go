@@ -229,8 +229,8 @@ func checkPush(ctx context.Context, root, project string, run *journal.CheckRunR
 }
 
 // printPushOne says what each sink did with this run's record, and returns
-// the exit code: 0 all took it, 1 a sink did not, 2 a sink failed. Nothing
-// is kept to send again.
+// the exit code: 0 all took it or deferred (ADR-0021), 1 a sink did not, 2
+// a sink failed. Nothing is kept to send again.
 func printPushOne(stdout, stderr io.Writer, res push.Result) int {
 	code := exitOK
 	for _, r := range res.Sinks {
@@ -238,6 +238,8 @@ func printPushOne(stdout, stderr io.Writer, res push.Result) int {
 		case r.Err != nil:
 			fmt.Fprintf(stderr, "stele check --push: %s: %v; this run's record was not sent\n", r.Name, r.Err)
 			code = exitCantRun
+		case r.Deferred:
+			fmt.Fprintf(stdout, "%s: nothing sent (%s); with no log here, this run's record is not kept for later\n", r.Name, deferredText(r.Reason))
 		case r.Partial:
 			fmt.Fprintf(stdout, "%s: did not take this run's record; it was not sent\n", r.Name)
 			code = max(code, exitFailed)

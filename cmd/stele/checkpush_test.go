@@ -153,3 +153,30 @@ func TestCheckPushNoSink(t *testing.T) {
 		t.Errorf("check --push = %d, %q", code, stdout)
 	}
 }
+
+// A sink that defers is no failure for check --push: on a dev machine the
+// lines wait for the next push, in CI the record is not kept; the exit is
+// the check's (ADR-0021).
+func TestCheckPushDeferredIsExit0(t *testing.T) {
+	t.Run("dev machine", func(t *testing.T) {
+		installPlugin(t, filepath.Join(t.TempDir(), "bin"), "sink", "good")
+		root := gitProject(t, checkRules)
+		withSink(t, root, "good", filepath.Join(t.TempDir(), "x"), `, "defer": "off here"`)
+		code, stdout, errOut := runCmd("check", "--push")
+		if code != exitOK || !strings.Contains(stdout, "good: nothing sent (deferred: off here), ") || !strings.Contains(stdout, " waiting") {
+			t.Errorf("= %d, %q, %q", code, stdout, errOut)
+		}
+		if st := statusJSON(t, "--offline"); st.Sinks[0].Pending == 0 || st.Sinks[0].DeferReason != "off here" {
+			t.Errorf("status sinks = %+v", st.Sinks)
+		}
+	})
+	t.Run("CI", func(t *testing.T) {
+		installPlugin(t, filepath.Join(t.TempDir(), "bin"), "sink", "good")
+		root := ciProject(t)
+		withSink(t, root, "good", filepath.Join(t.TempDir(), "x"), `, "defer": "off here"`)
+		code, stdout, errOut := runCmd("check", "--push")
+		if code != exitOK || !strings.Contains(stdout, "good: nothing sent (deferred: off here); with no log here, this run's record is not kept for later") {
+			t.Errorf("= %d, %q, %q", code, stdout, errOut)
+		}
+	})
+}
