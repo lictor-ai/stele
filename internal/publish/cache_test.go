@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -199,5 +200,39 @@ func TestLockCacheBusy(t *testing.T) {
 	defer unlock()
 	if _, err := lockCache(dir); !errors.Is(err, ErrBusy) {
 		t.Errorf("err = %v, want ErrBusy", err)
+	}
+}
+
+// stubLock makes lockCache's lock fail with err.
+func stubLock(t *testing.T, err error) {
+	t.Helper()
+	old := lockFile
+	lockFile = func(string, time.Duration, time.Duration) (func(), error) { return nil, err }
+	t.Cleanup(func() { lockFile = old })
+}
+
+// A lock still held when the wait is over is busy, whatever error is
+// underneath: on Windows a lock pending deletion times out with
+// fs.ErrPermission (#137).
+func TestLockCacheHeldIsBusy(t *testing.T) {
+	setCacheDir(t)
+	stubLock(t, fmt.Errorf("x.lock is %w: %w", safefile.ErrHeld, fs.ErrPermission))
+	dir, _ := cachePath("https://example.invalid/me/rules.git")
+	if _, err := lockCache(dir); !errors.Is(err, ErrBusy) {
+		t.Errorf("err = %v, want ErrBusy", err)
+	}
+}
+
+// Any other lock failure is passed through, not reported as busy (#137).
+func TestLockCacheOtherErrorIsNotBusy(t *testing.T) {
+	for _, under := range []error{fs.ErrExist, fs.ErrPermission} {
+		setCacheDir(t)
+		want := &fs.PathError{Op: "open", Path: "x.lock", Err: under}
+		stubLock(t, want)
+		dir, _ := cachePath("https://example.invalid/me/rules.git")
+		_, err := lockCache(dir)
+		if errors.Is(err, ErrBusy) || !errors.Is(err, under) {
+			t.Errorf("%v: err = %v, want it passed through", under, err)
+		}
 	}
 }
