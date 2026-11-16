@@ -1,10 +1,10 @@
 package scope
 
 import (
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 // caseSensitive runs a test with case folding off, so results do not depend on
@@ -150,25 +150,66 @@ func TestExpandCapped(t *testing.T) {
 }
 
 // stele.md comes from the repository and the hook runs on every write, so no
-// pattern may make matching slow.
-func TestMatchStaysFast(t *testing.T) {
+// pattern may make matching slow. The work is counted, not timed, as a clock
+// measures the machine's load as well (#138): a pattern over maxPattern is
+// refused before any work, brace expansion stops at maxAlternatives, and each
+// (pattern, path) position is computed once.
+func TestMatchBounded(t *testing.T) {
+	caseSensitive(t)
 	deep := strings.TrimSuffix(strings.Repeat("a/", 40), "/")
-	patterns := []string{
-		strings.Repeat("{a,b}", 30),       // brace bomb
-		strings.Repeat("**/a/", 20) + "b", // backtracking bomb
-		"{" + strings.Repeat("x,", 200) + "x}/" + strings.Repeat("**/a/", 10) + "b",
+
+	for _, p := range []string{
 		strings.Repeat("{", 80000) + strings.Repeat("}", 80000),           // deep nesting
 		strings.Repeat("{a,b}", 8) + strings.Repeat("x", 500000),          // long literal × 256
 		"{" + strings.Repeat(strings.Repeat("{a,b}", 8)+",", 20000) + "}", // many wide branches
 		strings.Repeat("{a,b}", 8) + strings.Repeat("/**", 20000) + "/z",  // long ** run × 256
+	} {
+		if allocs := testing.AllocsPerRun(1, func() { Match(p, deep) }); allocs != 0 {
+			t.Errorf("Match(%.30q...), %d bytes, allocated %v times, want none", p, len(p), allocs)
+		}
 	}
-	for _, p := range patterns {
-		start := time.Now()
-		Match(p, deep)
-		// A blow-up takes seconds or more; a loaded CI machine can take a few
-		// hundred milliseconds on a linear pattern.
-		if d := time.Since(start); d > 2*time.Second {
-			t.Errorf("Match(%.30q...) took %v", p, d)
+
+	// Smallest first: expanded in full, {a,b}×18 allocates some 20 MiB, and
+	// the test stops there, before {a,b}×30 runs out of memory. Within the
+	// caps the most these take is about 0.65 MiB, under a budget of 2 MiB.
+	const budget = 8 * maxPattern * maxAlternatives
+	for _, p := range []string{
+		strings.Repeat("{a,b}", 9),                                                     // brace bomb
+		strings.Repeat("{a,b}", 18),                                                    // brace bomb
+		strings.Repeat("{a,b}", 30),                                                    // brace bomb
+		strings.Repeat("{a,b}", 8) + strings.Repeat("x", maxPattern-40),                // long literal × 256
+		"{" + strings.Repeat(strings.Repeat("{a,b}", 8)+",", (maxPattern-2)/41) + "}",  // many wide branches
+		strings.Repeat("{a}", maxPattern/3),                                            // many groups
+		"{" + strings.Repeat("x,", 200) + "x}/" + strings.Repeat("**/a/", 10) + "b",    // wide, then backtracking
+		strings.Repeat("{a,b}", 8) + strings.Repeat("/**", (maxPattern-40-2)/3) + "/z", // long ** run × 256
+	} {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		expand(p)
+		runtime.ReadMemStats(&after)
+		if got := after.TotalAlloc - before.TotalAlloc; got > budget {
+			t.Fatalf("expanding %.30q..., %d bytes, allocated %d bytes, budget %d", p, len(p), got, budget)
+		}
+	}
+
+	// Smallest first: without memoisation **/a/×5 computes 2.4 million
+	// positions, and the test stops there, before **/a/×20 runs for ever.
+	file := strings.Split(deep, "/")
+	for _, p := range []string{
+		strings.Repeat("**/a/", 5) + "b",  // backtracking bomb
+		strings.Repeat("**/a/", 20) + "b", // backtracking bomb
+		"{" + strings.Repeat("x,", 200) + "x}/" + strings.Repeat("**/a/", 10) + "b",
+		strings.Repeat("{a,b}", 8) + strings.Repeat("/**", (maxPattern-40-2)/3) + "/z",
+	} {
+		alts, ok := expand(p)
+		if !ok {
+			t.Fatalf("%.30q... refused", p)
+		}
+		for _, alt := range alts {
+			pat := strings.Split(alt, "/")
+			if _, got := segments(pat, file); got > (len(pat)+1)*(len(file)+1) {
+				t.Fatalf("%.30q... computed %d positions of %d", alt, got, (len(pat)+1)*(len(file)+1))
+			}
 		}
 	}
 }
