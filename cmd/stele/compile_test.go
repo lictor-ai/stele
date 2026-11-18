@@ -120,8 +120,8 @@ func TestCompileInvalidRule(t *testing.T) {
 
 func TestCompileInvalidRuleKinds(t *testing.T) {
 	for name, meta := range map[string]string{
-		"unknown checker": "check: eslint\n",
-		"bad blocking":    "check: regex\npattern: x+\nblocking: maybe\n",
+		"unknown checker":   "check: eslint\n",
+		"bad blocking":      "check: regex\npattern: x+\nblocking: maybe\n",
 		"pattern, no check": "pattern: x+\n",    // #148
 		"message, no check": "message: use y\n", // #148
 	} {
