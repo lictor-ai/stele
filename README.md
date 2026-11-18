@@ -355,7 +355,20 @@ Optional, committed next to `stele.md`. This is the default:
 | `sinks` | Programs you install that `stele push` sends the log to: see [stele push](#send-the-log-somewhere-stele-push). |
 | `publish` | Where `stele publish` sends `stele.md`: see [stele publish](#publish-the-rules-stele-publish). |
 | `$schema` | The schema's address, for your editor. stele ignores it. |
-| `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.json` invalid, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. It applies only to a part of the hook that is on: with `--remind=off` or `--check=off`, that part's failures only warn. |
+| `block_on_error` | What happens when stele itself fails (the signing key can't be read, `stele.md` never parsed). `false`: the write goes through and you get a warning. `true`: before a write, the write is blocked and the agent is told why; after a write, the agent is told it was saved but not checked. It applies only to a part of the hook that is on: with `--remind=off` or `--check=off`, that part's failures only warn. |
+
+A `stele.json` that isn't valid JSON, say with a trailing comma, stops every command that reads it, with the line and column:
+
+```
+$ stele compile
+stele compile: stele.json: invalid JSON at line 3, column 1: invalid character '}' looking for beginning of object key string
+```
+
+The hook still applies the rules from the compiled index (built from `stele.md`). It can't read `block_on_error`, so it takes it as `false`, and warns you on each write:
+
+```
+stele: stele.json: invalid JSON at line 3, column 1: invalid character '}' looking for beginning of object key string. The rules still apply; block_on_error is off until stele.json is fixed.
+```
 
 `backstop` is no longer read: use `stele init --remind=off`. `stele init` says so when `stele.json` still sets it, and leaves the file as it is:
 
@@ -969,6 +982,8 @@ stele makes the rules hard to miss. It doesn't make them impossible to break. Kn
 ### Enforcement
 
 **If `stele` is missing from `PATH`, or the hook crashes or times out, writes go through.** `block_on_error` only acts when stele runs and fails, so it can't prevent this.
+
+**A `stele.json` stele can't read turns `block_on_error` off.** Until you fix it, the hook still applies the rules but warns on every write, and a failure of stele itself lets the write through.
 
 **The agent can ignore the rules.** It is shown them and told about violations, but it can still choose not to follow them.
 

@@ -85,6 +85,15 @@ func TestLoadConfigInvalid(t *testing.T) {
 	}
 }
 
+// A syntax error is stele.json's, at its line and column, as every command
+// reports it (#150).
+func TestLoadConfigSyntaxError(t *testing.T) {
+	_, err := LoadConfig(writeJSON(t, "{\n  \"publish\": {\"repo\": \"git@github.com:me/g.git\"},\n}\n"))
+	if err == nil || !strings.HasPrefix(err.Error(), "stele.json: invalid JSON at line 3, column 1: ") {
+		t.Errorf("err = %v, want stele.json's syntax error at line 3, column 1", err)
+	}
+}
+
 func TestValidateRepo(t *testing.T) {
 	good := []string{
 		"https://github.com/me/g.git",

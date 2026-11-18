@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/lictor-ai/stele/internal/jsonedit"
 	"github.com/lictor-ai/stele/internal/safefile"
 )
 
@@ -53,8 +54,8 @@ func UnknownKeys(root string) []string {
 	if err != nil {
 		return nil
 	}
-	var m map[string]json.RawMessage
-	if json.Unmarshal(data, &m) != nil {
+	m, err := Parse(data)
+	if err != nil {
 		return nil
 	}
 	var out []string
@@ -105,6 +106,11 @@ func Load(root string) (Policy, error) {
 		BlockOnError *bool `json:"block_on_error"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
+		// A file that is not a JSON object says so, as every command
+		// says it; only a bad value is block_on_error's.
+		if _, perr := Parse(data); perr != nil {
+			return Default(), perr
+		}
 		return Default(), fmt.Errorf("%s: %w", FileName, err)
 	}
 	p := Default()
@@ -128,6 +134,38 @@ func SetsBackstop(root string) bool {
 	}
 	_, ok := keys[KeyBackstop]
 	return ok
+}
+
+// Parse returns the top-level keys of stele.json's content, data as Text
+// returns it. A syntax error, such as a trailing comma, is reported as one,
+// at its line and column, and so is a file that holds JSON but not an
+// object: every command says the same, whichever key it came to read
+// (#150). null is no keys, as encoding/json reads it.
+func Parse(data []byte) (map[string]json.RawMessage, error) {
+	var m map[string]json.RawMessage
+	err := json.Unmarshal(data, &m)
+	var se *json.SyntaxError
+	var te *json.UnmarshalTypeError
+	switch {
+	case errors.As(err, &se):
+		return nil, fmt.Errorf("%s: %w", FileName, jsonedit.Doc{Body: data}.Valid())
+	case errors.As(err, &te):
+		return nil, fmt.Errorf("%s: the file is %s; it must be an object, such as {}", FileName, describe(te.Value))
+	case err != nil:
+		return nil, fmt.Errorf("%s: %w", FileName, err)
+	}
+	return m, nil
+}
+
+// describe names a JSON value's kind, as UnmarshalTypeError.Value gives it.
+func describe(kind string) string {
+	switch kind {
+	case "array", "object":
+		return "an " + kind
+	case "bool":
+		return "a boolean (true or false)"
+	}
+	return "a " + kind
 }
 
 // Read returns stele.json under root as Text returns it, for the keys other

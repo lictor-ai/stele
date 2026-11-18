@@ -114,3 +114,27 @@ func TestSourcesNamesTheEntry(t *testing.T) {
 		t.Errorf("err = %v, want ErrSources", err)
 	}
 }
+
+// A stele.json that is not valid JSON is reported as stele.json's syntax
+// error, at its line and column, whichever list a command came to read: not
+// as bad sources, checkers or sinks (#150).
+func TestListsReportASyntaxErrorOnce(t *testing.T) {
+	root := steleJSON(t, "{\n  \"block_on_error\": false,\n}\n")
+	const want = "stele.json: invalid JSON at line 3, column 1: "
+	_, srcErr := Sources(root, noGit{t}, gitrepo.Pinned, &fakeRunner{})
+	_, chkErr := Checkers(root, &fakeRunner{})
+	_, sinkErr := Sinks(root, &fakeRunner{})
+	_, invErr := Inventory(root, noGit{t}, &fakeRunner{})
+	for name, err := range map[string]error{"Sources": srcErr, "Checkers": chkErr, "Sinks": sinkErr, "Inventory": invErr} {
+		if err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", name, err, want)
+		}
+		if errors.Is(err, ErrSources) || errors.Is(err, ErrCheckers) || errors.Is(err, ErrSinks) {
+			t.Errorf("%s: err = %v, reported as a bad entry", name, err)
+		}
+	}
+	// A bad entry in valid JSON is still one.
+	if _, err := Sources(steleJSON(t, `{"sources": 1}`), noGit{t}, gitrepo.Pinned, &fakeRunner{}); !errors.Is(err, ErrSources) {
+		t.Errorf("Sources = %v, want ErrSources", err)
+	}
+}
