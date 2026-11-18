@@ -115,7 +115,9 @@ enterprise idea. Do not implement it or use it as a v1 format.
   plugin, and only `cmd/stele/sources.go` hands it to `internal/plugin`
   (D79). `internal/extcheck` starts the scanners (opengrep, trivy), only
   from the checker plugin binaries `cmd/stele-checker-*`; stele itself
-  never imports it (ADR-0019).
+  never imports it (ADR-0019). `cmd/stele/agentversion.go` starts the
+  agent's version probe for `stele init` only, from a new folder outside
+  the project.
 - Only `internal/adapter/<agent>`, `cmd/stele/agents.go` and
   `internal/install/agent_test.go` (the install tests, which check the real
   adapter's output) import an agent adapter; nothing else names Claude Code's

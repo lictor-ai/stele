@@ -1165,7 +1165,8 @@ it holds every rule's text, so it is never checked against them.
 `--relative` keeps a `stele.md` in a subdirectory of the repository to its own
 files. Names are taken exactly as git gives them. Files in a nested project — a
 directory below the root with a regular file named `stele.md` or `stele.json`, or
-with its own `.git` (a worktree or submodule) — are left out: the hook gives them
+with its own `.git` git recognises (a worktree or submodule, §6) — are left
+out: the hook gives them
 that project's rules (ADR-0004, §6), so its own `stele check` does. Each such
 subproject is reported (`sub/: skipped N files`,
 and in JSON a `Skip` per file), so adding a `stele.json` cannot hide a directory
@@ -1183,7 +1184,11 @@ func Match(pattern *regexp.Regexp, content []byte) []Location // pure
 Reads `pattern` from `Meta` and compiles it with Go's `regexp` (RE2). `Validate`
 reports a missing or invalid pattern, and one that matches empty text, which
 would match at every position. The pattern runs over the whole content, so `^`
-and `$` match per line only with `(?m)`. `Check` reads each file once through
+and `$` match per line only with `(?m)`. `Compile` makes each `(?m)` `$` also
+match before the `\r` of `\r\n`, as if written `\r?$`, so a CRLF file gives the
+matches, lines and columns of its LF copy; only a match's end can take in the
+`\r`, which is still text that a pattern can match. `Check` reads each file
+once through
 `safefile.ReadRegular`, runs every rule that applies to it, and turns each match
 offset into a line and a column in characters (a leading UTF-8 byte order
 mark is dropped first, so patterns do not see it); a missing, non-regular or over-32 MiB file is
@@ -1271,7 +1276,12 @@ is by name and by file identity: `safefile.Resolve` follows links and
 junctions, then `os.SameFile` walks the parents, so other spellings of a path
 count. Only the repository nearest to where the root leads counts, and not
 one at the home directory or a filesystem root: `~/.git` must not take `~/bin`
-into every project, nor `/.git` take `/usr/bin`. The package imports no
+into every project, nor `/.git` take `/usr/bin`. On Windows, `toolpath.Env`
+and `toolpath.PluginEnv` also set `NoDefaultCurrentDirectoryInExePath=1`,
+unless it is already set, so the programs stele starts (git, `gh`, `glab`,
+the browser opener, plugins, scanners, the agent version probe) find the
+programs they start by bare name on `PATH`, not in their working directory.
+The package imports no
 `os/exec`. `cmd/stele/check.go` uses it and does not import this package,
 though the one binary links both, through `cmd/stele/publish.go`.
 
@@ -1653,7 +1663,10 @@ Verified against the Claude Code documentation rather than assumed.
 and symlinks and junctions on the way are followed, from inside a project or
 outside every project. A hard link or an 8.3 short name, which only a same-file
 test tells, is caught for the root's `stele.md`, `stele.json`, `stele.lock` and
-`.stele/` only. The ask comes before `stele.json`
+`.stele/` only. A write to a `.git` below the root, or into
+one, asks the same way (D94), under an 8.3 short name too: a `.git` git
+recognises ends a project (§6). Files inside the root's own `.git/`, such as
+`.git/index.lock`, do not ask. The ask comes before `stele.json`
 is read, so `block_on_error` and the switches change nothing. Claude Code shows
 `permissionDecisionReason` to the user in the prompt; with no one to answer
 (`claude -p`) the call is refused. A deny from another hook wins over it. The
@@ -1925,7 +1938,15 @@ no `stele.md`.
 The nearest wins, so in a monorepo a subproject with its own rules uses them
 rather than the root's. A `.git` — a directory in a repository, the file a git
 worktree or submodule has — ends the search: rules never cross into another
-checkout (#43). A worktree on a branch without `stele.md` gets no rules, as CI
+checkout (#43). It counts only when git would recognise it (`holdsGit`, D94):
+a directory with a `HEAD` git accepts (a link into `refs/`, `ref: refs/…` or
+an object id) and `objects/` and `refs/`, in it or in the directory its
+`commondir` names, as a worktree's has; or a file `gitdir: <path>` leading to
+such a directory. Any other `.git`, a dangling link included, ends nothing:
+git lists the files beside it as the outer repository's. The test reads
+files only, size-capped, never a fifo, and starts no process, so the hook can
+make it; a `gitdir` or `commondir` naming a network share is not followed.
+A worktree on a branch without `stele.md` gets no rules, as CI
 on that branch would check none; otherwise its paths would start with
 `.claude/worktrees/<id>/` and miss every scope written for the project. A
 submodule is another repository, whose files the outer `stele check` never
@@ -2189,6 +2210,12 @@ they could not run. The version is set at release with `-ldflags "-X
 main.version=..."`, else read from the build info, else `devel`; `init`
 stamps `devel` for any version that is not a release.
 
+`init` runs an agent's version probe (`VersionProbe`, `codex --version`) in
+`cmd/stele/agentversion.go`: the program is found on `PATH` outside the
+project and runs, with `PATH` cut by `toolpath.Env`, from a new empty folder
+under the temp directory, checked to be outside the project and removed
+afterwards, never the project root, as plugins do (D80).
+
 Standard-library `flag` and a switch on `os.Args[1]`. Eleven subcommands with a
 handful of flags does not justify a CLI framework.
 
@@ -2208,9 +2235,8 @@ rule is read. `--push` then pushes the log's pending lines where the key and
 `.stele/` exist, or in CI one record of the run's counts (D84); its exit is the larger of the check's and
 the push's.
 
-**Dependencies: two.** `github.com/modelcontextprotocol/go-sdk` and
-`github.com/google/uuid`, plus `go-cmp` in tests. Config is JSON rather than TOML
-specifically to avoid a third.
+**Dependencies: one.** `github.com/google/uuid`, plus `go-cmp` in tests.
+Config is JSON rather than TOML specifically to avoid a second.
 
 `mcp` and `hook` are machine-facing and never print anything friendly to stdout —
 stdout is the protocol on one and the decision on the other.

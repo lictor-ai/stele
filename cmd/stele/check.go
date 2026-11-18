@@ -375,9 +375,9 @@ func ownedFiles(root string, files []string) ([]string, []subproject) {
 // ownProject names what makes dir a project of its own, or "": a stele.md or
 // stele.json, or a .git. Unlike usesStele, a rule file counts only as a
 // regular file: a directory or a symlink named stele.json cannot hide files
-// from CI. A .git counts in any form: git never checks out a path named
-// .git, so a clone cannot plant one, and the outer git lists none of a
-// submodule's files anyway.
+// from CI. A .git counts only when git would recognise it (holdsGit): the
+// outer git lists none of a nested repository's or a submodule's files
+// anyway, and lists the files beside any other .git as its own.
 func ownProject(dir string) string {
 	var found []string
 	for _, name := range []string{"stele.md", enforce.FileName} {

@@ -342,6 +342,9 @@ out of the rules (§6) (D56).
 * a code block or an HTML comment that never closes
 * a `scope` item that is `!` with no pattern after it, has whitespace after the
   `!`, or starts with `!!` (D59)
+* a `scope` without brackets with a comma outside quotes and braces, such as
+  `scope: *.go, *.ts`: as a list of one item it would be one glob that
+  matches nothing, so the error says to write `[*.go, *.ts]`
 
 A missing `stele.md` is not an error. It gives no rules.
 
@@ -356,7 +359,10 @@ A missing `stele.md` is not an error. It gives no rules.
 | `blocking` | `true` or `false`: whether a violation fails `stele check`. Default `true` when `check` is set. |
 
 **Unknown keys are kept, not rejected** (D46). They travel with the rule into the
-index, and the rule's checker receives them. That is how checker settings work:
+index, and the rule's checker receives them. One exception (D93): a rule with
+`pattern` or `message`, the `regex` checker's keys, but no `check` is an
+invalid rule, because nothing would check it; `blocking` without `check` gets a
+note from `stele compile`. Every other key is kept without a word. That is how checker settings work:
 
 ```markdown
 tags: [security]
@@ -749,7 +755,8 @@ and writes nothing. It fails when:
 - a rule's `check` names a checker that is neither built in nor listed in
   `stele.json`;
 - a checker rejects a rule's settings, such as a `regex` rule with no `pattern`
-  or a pattern that does not compile.
+  or a pattern that does not compile;
+- a rule has `pattern` or `message` but no `check` (D93).
 
 A stale lock is an error and not a warning: CI would otherwise report violations
 against ids that exist on nobody's machine.
@@ -853,7 +860,7 @@ From ADR-0002, `docs/adr/0002-engine-and-extension-points.md`:
 | D43 | Only plugins listed in `stele.json` and found on `PATH` run. Never an executable inside the repository. | — |
 | D44 | Agent adapters are compiled into the binary and are always free. | — |
 | D45 | External plugins never run on the hot path. `request` refreshes built-in sources only. *Amended by D71: the built-in sources the hook refreshes are `plugin.Builtins()`; the `git` source, which starts git, is never one of them.* | — |
-| D46 | Unknown metadata keys are kept and passed to checkers. `check` and `blocking` are the keys stele itself reads. The other keys' values are kept as written, without unquoting (#40). | — |
+| D46 | Unknown metadata keys are kept and passed to checkers. `check` and `blocking` are the keys stele itself reads. The other keys' values are kept as written, without unquoting (#40). *Amended by D93: `pattern` or `message` without `check` makes the rule invalid.* | — |
 | D47 | `stele check` validates the rules and runs checkers on changed files, failing CI on invalid rules and blocking violations. | design doc §8.2, rules checked by running a command |
 | D48 | Free if a single developer would want it. Paid only for needs that only an organization has. | — |
 
@@ -905,6 +912,8 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D90 | **ADR-0019.** Two checker plugins ship with stele, `cmd/stele-checker-opengrep` and `cmd/stele-checker-trivy`, built and archived with each release; they are external checkers like any other (D78–D80) and run only in `stele check`. `check: opengrep` takes `rules` (required: a rules file in the project, relative, no `..`, inside the project once links are followed; no registry name or URL) and optional `ids` (the Opengrep rule ids that count, each one in the file). `check: trivy` takes `scanners` (required: `vuln`, `secret`, `misconfig`) and optional `severity` (`UNKNOWN` … `CRITICAL`). Both take an optional `message`; any other key is invalid. The scanner is found on `PATH` outside the project and run with no shell, outside the project; missing, failing or unreadable output is a plugin error. An Opengrep rule that counts and that Opengrep didn't run, or an error about the rules file, fails the check; Opengrep runs with `--disable-nosem` and `--disable-version-check`. A vulnerable package goes on the first line of its file that names it with its version, else the first that names it, else line 1. The plugins send nothing; Trivy runs with `--offline-scan` and downloads its own database, its misconfiguration checks and, for Java archives, its Java database. | #119 |
 | D91 | **Amends D90 (ADR-0020).** The checker plugins also ship as a Homebrew cask and a Scoop manifest each, in stele's tap and bucket; a plugin's package installs neither stele nor its scanner. | #131 |
 | D92 | **Amends D82–D85 (ADR-0021).** A sink may defer a push: `{"accepted": 0, "deferred": true, "reason": "…"}`, `reason` optional, made one printable line of at most 200 bytes. `"deferred": true` with any other `accepted`, or none, a `deferred` neither boolean nor `null`, a `reason` neither string nor `null`, or `"deferred"` in another case or given twice is a protocol error; `"deferred": false` or `null`, or a `reason` alone, is no deferral. A deferral leaves the cursor where it is, stops that sink for the run, and is kept with its reason in the sealed cursor until the sink's next answer that is neither an error nor a deferral. `stele push` prints `<sink>: nothing sent (deferred: <reason>), n lines waiting` and exits 0 for it; `stele check --push` likewise, and in CI says the run's record is not kept. `stele status` shows the reason beside the lines waiting (`deferred`, `deferred_reason` in JSON). | #145 |
+| D93 | **Amends D46.** A rule with `pattern` or `message`, the built-in `regex` checker's keys, and no `check` is an invalid rule (`pattern without check`): `stele compile` and `stele check` report it and exit 1, and the post-write hook doesn't check it; it is still shown as guidance. `blocking` without `check` gets a note on stderr from `stele compile`, exit 0. Every other key a rule without `check` has is kept without a word: a source or a later version may add its own. | #148 |
+| D94 | **Amends D76.** A `.git` ends a project only when git would recognise it: a directory with a `HEAD` git accepts and `objects/` and `refs/` (in it, or in the directory its `commondir` names), or a file `gitdir: <path>` leading to such a directory. The test reads files only and starts no process, so the hook can make it. A write to a `.git` below the project's top, or into one, asks like a write to stele's own files; files inside the project's own `.git/` are left alone. | #170 |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 
