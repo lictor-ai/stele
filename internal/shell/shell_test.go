@@ -309,6 +309,7 @@ func TestTargets(t *testing.T) {
 		{command: "bash -c 'echo > a; echo \"x > b'", want: []Target{at("a", R)}, unknown: 1},
 		{command: "bash script.sh; bash -c; bash -- -c x", want: nil},
 		{command: "bash -o -c x", want: nil},
+		{command: "bash -cx 'echo > a'", want: []Target{at("a", R)}},
 
 		// eval reads its arguments as commands run here.
 		{command: "eval 'echo > a'", want: []Target{at("a", R)}},
@@ -1062,8 +1063,17 @@ func TestTargetsCaps(t *testing.T) {
 	// A variable that holds itself, evaluated four times a level, stops at
 	// the budget of nested script read, well before the depth would.
 	start := time.Now()
-	if _, unknown := Targets("X='eval $X;eval $X;eval $X;eval $X'; eval $X", cwd); unknown == 0 {
-		t.Error("eval past the nested budget: not counted as unknown")
+	for _, cmd := range []string{
+		"X='eval $X;eval $X;eval $X;eval $X'; eval $X",
+		`X='eval $X; bash -c "eval x"; sh -c "echo > a"; eval $X'; eval $X`,
+	} {
+		r := globRun(cmd, cwd)
+		if r.unknown == 0 || r.nested <= maxNested {
+			t.Errorf("%s: unknown %d, nested %d: the nested budget %d was not hit", cmd, r.unknown, r.nested, maxNested)
+		}
+		if limit := maxNested + readCost + len(cmd); r.nested > limit {
+			t.Errorf("%s: nested %d, past the budget's bound %d", cmd, r.nested, limit)
+		}
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("eval of itself took %v", d)

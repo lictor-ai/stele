@@ -489,7 +489,7 @@ var psCommands = map[string]string{
 	"new-object": "object",
 	"powershell": "pwsh", "powershell.exe": "pwsh", "pwsh": "pwsh", "pwsh.exe": "pwsh",
 	"cmd": "cmd", "cmd.exe": "cmd",
-	"bash": "bash", "bash.exe": "bash", "sh": "bash", "zsh": "bash", "dash": "bash", "ksh": "bash", "wsl": "bash", "wsl.exe": "bash",
+	"bash": "bash", "bash.exe": "bash", "sh": "bash", "zsh": "bash", "dash": "bash", "ksh": "bash", "wsl": "wsl", "wsl.exe": "wsl",
 	"invoke-expression": "iex", "iex": "iex", "start-process": "opaque", "saps": "opaque", "start": "opaque",
 	"invoke-command": "opaque", "icm": "opaque",
 }
@@ -617,7 +617,7 @@ func (p *psReader) statement(st psStmt) {
 	kind, ok := psCommands[strings.ToLower(name)]
 	if !ok {
 		// A program run by its path, such as C:\Windows\System32\cmd.exe.
-		if k, ok2 := psCommands[strings.ToLower(filepath.Base(strings.ReplaceAll(name, `\`, "/")))]; ok2 && (k == "pwsh" || k == "cmd" || k == "bash") {
+		if k, ok2 := psCommands[strings.ToLower(filepath.Base(strings.ReplaceAll(name, `\`, "/")))]; ok2 && (k == "pwsh" || k == "cmd" || k == "bash" || k == "wsl") {
 			kind, ok = k, true
 		}
 	}
@@ -649,26 +649,29 @@ func (p *psReader) groups(g psTok, depth int) {
 
 // cmdlet reads a cmdlet's arguments: named ones, then positional.
 func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
-	if (kind == "iex" || kind == "pwsh" || kind == "bash" || kind == "cmd") && p.res.nested > maxNested {
+	if (kind == "iex" || kind == "pwsh" || kind == "bash" || kind == "wsl" || kind == "cmd") && p.res.nested > maxNested {
 		p.res.unknown++ // past the budget of nested scripts: not read
 		return
 	}
-	if kind == "bash" {
+	if kind == "bash" || kind == "wsl" {
 		// bash -c '…', sh -lc '…', wsl -e sh -c '…': read the script as bash.
 		ws := make([]word, len(args))
 		for i, a := range args {
 			v, ok := p.value(a)
 			ws[i] = word{text: v, dynamic: !ok}
 		}
+		if kind == "wsl" {
+			// wsl's own options, then the shell it runs and its arguments.
+			n := wslShell(ws)
+			if n < 0 {
+				p.res.unknown++
+				return
+			}
+			args, ws = args[n:], ws[n:]
+		}
 		if i, ok := shellScript(ws); ok {
 			p.nested(args[i:i+1], true)
 			return
-		}
-		for i, a := range args {
-			if a.text == "-c" && i+1 < len(args) {
-				p.nested(args[i+1:i+2], true)
-				return
-			}
 		}
 		p.res.unknown++
 		return
@@ -969,6 +972,10 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 		p.depth++
 		l := &psLexer{s: v}
 		for _, inner := range l.statements(false) {
+			if p.res.nested > maxNested {
+				p.res.unknown++ // past the budget: the rest is not read
+				break
+			}
 			inner.depth += st.depth
 			p.statement(inner)
 		}
@@ -988,7 +995,36 @@ func decodeCommand(s string) (string, bool) {
 	for i := range u {
 		u[i] = uint16(b[2*i]) | uint16(b[2*i+1])<<8
 	}
-	return string(utf16.Decode(u)), true
+	// A byte order mark before the script is no part of it.
+	return strings.TrimPrefix(string(utf16.Decode(u)), "\uFEFF"), true
+}
+
+// wslOptions are the options of wsl that take a value.
+var wslOptions = map[string]bool{"-d": true, "--distribution": true, "-u": true, "--user": true, "--cd": true, "--shell-type": true}
+
+// wslShell skips wsl's options, up to -e, --exec or --, and returns the index
+// of the arguments after the shell wsl runs, or -1 when that is no shell
+// whose -c stele reads.
+func wslShell(ws []word) int {
+	i := 0
+	for i < len(ws) && !ws[i].dynamic && strings.HasPrefix(ws[i].text, "-") {
+		t := ws[i].text
+		i++
+		if t == "-e" || t == "--exec" || t == "--" {
+			break
+		}
+		if wslOptions[t] {
+			i++
+		}
+	}
+	if i >= len(ws) || ws[i].dynamic {
+		return -1
+	}
+	switch name(ws[i]) {
+	case "bash", "sh", "zsh", "dash", "ksh":
+		return i + 1
+	}
+	return -1
 }
 
 // nested reads a nested shell's script, given as a literal.

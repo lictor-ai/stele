@@ -84,14 +84,22 @@ type results struct {
 	globbed int // files matched by globs
 	entries int // directory entries globs read
 	steps   int // directories globs opened and fixed path segments they walked
-	nested  int // bytes of nested scripts read, each counted one more
+	nested  int // bytes of nested scripts read, each read counted readCost more
 }
+
+// readCost is what reading a nested script costs beyond its bytes: a parser
+// set up, its words and statements. It keeps many tiny reads, as of a
+// variable that holds itself, to about a thousand.
+const readCost = 256
 
 // reread counts a nested script of n bytes about to be read: a variable
 // expanded into eval or iex can hold itself, so the depth alone does not
 // bound the work. It reports whether the script is within the budget.
 func (r *results) reread(n int) bool {
-	r.nested += n + 1
+	if r.nested > maxNested {
+		return false
+	}
+	r.nested += n + readCost
 	return r.nested <= maxNested
 }
 

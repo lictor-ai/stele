@@ -882,6 +882,10 @@ func readBash(res *results, script, dir string, dirOK bool, depth int, dyn map[s
 // and assignments carry on, unless eval is in a pipeline. An argument stele
 // cannot know is unknown, as is a string it cannot read whole.
 func (p *parser) eval(args []word, inPipe bool) {
+	if p.res.nested > maxNested {
+		p.res.unknown++ // past the budget of nested scripts: not read
+		return
+	}
 	var b strings.Builder
 	for i, a := range args {
 		if a.dynamic || a.glob {
