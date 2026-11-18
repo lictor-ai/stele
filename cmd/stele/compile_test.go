@@ -122,6 +122,7 @@ func TestCompileInvalidRuleKinds(t *testing.T) {
 	for name, meta := range map[string]string{
 		"unknown checker": "check: eslint\n",
 		"bad blocking":    "check: regex\npattern: x+\nblocking: maybe\n",
+		"no check":        "pattern: x+\n", // #148
 	} {
 		t.Run(name, func(t *testing.T) {
 			project(t, meta+"\nA rule.\n")
@@ -129,6 +130,16 @@ func TestCompileInvalidRuleKinds(t *testing.T) {
 				t.Errorf("compile = %d, stdout %q, want exit %d and the problem", code, out, exitFailed)
 			}
 		})
+	}
+}
+
+// A scope with a comma and no brackets would read as one glob that matches
+// nothing (#146): stele.md does not parse, as for any bad list.
+func TestCompileBareCommaScope(t *testing.T) {
+	project(t, "scope: *.go, *.ts\n\nA rule.\n")
+	code, _, errOut := runCmd("compile")
+	if code == exitOK || !strings.Contains(errOut, `stele.md:1: scope: "*.go, *.ts" has a comma outside [...]: write a list as [*.go, *.ts]`) {
+		t.Errorf("compile = %d, stderr %q, want the bad scope named", code, errOut)
 	}
 }
 

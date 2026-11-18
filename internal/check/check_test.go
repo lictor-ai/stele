@@ -168,6 +168,9 @@ func TestRunRuleProblems(t *testing.T) {
 		entry("yes", "Blocking yes.", nil, map[string]string{"check": "fake", "blocking": "yes"}),
 		entry("bad", "Fails validation.", nil, map[string]string{"check": "fake"}),
 		entry("good", "Still runs.", nil, map[string]string{"check": "fake"}),
+		entry("nocheck", "Pattern only.", nil, map[string]string{"pattern": "foo"}),
+		entry("nocheck2", "Two keys.", nil, map[string]string{"pattern": "foo", "message": "m"}),
+		entry("guide", "Guidance only.", nil, nil),
 	}}
 	f := &fake{name: "fake", problems: []Problem{{RuleID: "bad", Message: "fake: no pattern"}}}
 	r, err := Run(context.Background(), "root", idx, []string{"x.go"}, map[string]Checker{"fake": f})
@@ -181,6 +184,8 @@ func TestRunRuleProblems(t *testing.T) {
 		{RuleID: "unknown", Excerpt: "Use semgrep.", Message: `check: "semgrep" is not a checker; the only one is the built-in fake; list an external checker under "checkers" in stele.json`},
 		{RuleID: "empty", Excerpt: "Empty check.", Message: "check is empty"},
 		{RuleID: "yes", Excerpt: "Blocking yes.", Message: `blocking: "yes" is not true or false`},
+		{RuleID: "nocheck", Excerpt: "Pattern only.", Message: "pattern without check: no checker reads it; add a check, such as check: regex, or remove it"},
+		{RuleID: "nocheck2", Excerpt: "Two keys.", Message: "message, pattern without check: no checker reads them; add a check, such as check: regex, or remove them"},
 		{RuleID: "bad", Excerpt: "Fails validation.", Message: "fake: no pattern"},
 	}
 	if diff := cmp.Diff(want, r.Problems); diff != "" {

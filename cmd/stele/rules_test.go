@@ -75,6 +75,20 @@ func TestRulesText(t *testing.T) {
 	}
 }
 
+// A glob holding a comma is quoted, so it never reads as a list (#146).
+// Braces are part of a glob and stay as they are.
+func TestRulesTextQuotesCommaGlob(t *testing.T) {
+	root := compiled(t, "scope: [\"a, b.go\", \"*.{go,ts}\"]\n\nOne rule.\n")
+	code, out, errOut := runCmd("rules")
+	if code != exitOK {
+		t.Fatalf("rules = %d: %s", code, errOut)
+	}
+	want := ruleID(t, root, 0) + "  stele.md  \"a, b.go\", *.{go,ts}\n  One rule.\n1 rule\n"
+	if out != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", out, want)
+	}
+}
+
 // With no index yet, stele rules compiles the built-in sources, as the hook
 // does, and the ids it prints are the ones stele.lock keeps.
 func TestRulesCompilesWhenStale(t *testing.T) {

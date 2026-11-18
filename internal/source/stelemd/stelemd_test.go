@@ -188,6 +188,21 @@ Never put credentials in source code.
 			want: []source.Rule{rule(0, 1, source.Rule{Scope: []string{"!**/*_test.go"}, Body: "Body."})},
 		},
 		{
+			name: "a bare glob with braces",
+			src:  "scope: src/**/*.{go,ts}\n\nBody.\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Scope: []string{"src/**/*.{go,ts}"}, Body: "Body."})},
+		},
+		{
+			name: "a quoted glob with a comma is one glob",
+			src:  "scope: \"a, b/*\"\n\nBody.\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Scope: []string{"a, b/*"}, Body: "Body."})},
+		},
+		{
+			name: "a bare tag with a comma is one tag",
+			src:  "tags: a, b\n\nBody.\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Tags: []string{"a, b"}, Body: "Body."})},
+		},
+		{
 			name: "empty list",
 			src:  "tags: []\n\nBody.\n",
 			want: []source.Rule{rule(0, 1, source.Rule{Body: "Body."})},
@@ -280,6 +295,8 @@ func TestParseErrors(t *testing.T) {
 		{name: "unclosed quote in a list", src: "tags: [\"a, b]\n\nBody.\n", wantMsg: "stele.md:1: tags: unclosed quote"},
 		{name: "exclusion with no pattern", src: "One.\n---\nscope: [a, \"!\"]\n\nBody.\n", wantMsg: `stele.md:3: scope: "!" has no pattern after the !`},
 		{name: "bare exclusion", src: "scope: !\n\nBody.\n", wantMsg: `stele.md:1: scope: "!" has no pattern after the !`},
+		{name: "bare comma scope", src: "One.\n---\nscope: *.go, *.ts\n\nBody.\n", wantMsg: `stele.md:3: scope: "*.go, *.ts" has a comma outside [...]: write a list as [*.go, *.ts]`},
+		{name: "bare comma scope after braces", src: "scope: *.{go,ts},*.md\n\nBody.\n", wantMsg: `stele.md:1: scope: "*.{go,ts},*.md" has a comma outside [...]: write a list as [*.{go,ts},*.md]`},
 		{name: "double exclusion", src: "scope: [\"!!x\"]\n\nBody.\n", wantMsg: `stele.md:1: scope: "!!x": one ! only`},
 	}
 	for _, tt := range tests {

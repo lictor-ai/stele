@@ -343,11 +343,16 @@ func prepare(ctx context.Context, idx index.Index, cs map[string]Checker, conten
 
 	byChecker := map[string][]rule{}
 	for _, e := range idx.Rules {
+		r := rule{Rule: Rule{ID: e.ID, Body: e.Body, Scope: e.Scope, Meta: e.Meta}, blocking: true, excerpt: Excerpt(e.Body)}
 		name, ok := e.Meta["check"]
 		if !ok {
-			continue // guidance only
+			// Guidance only. A key no checker will read, such as a pattern
+			// with no check, would be dropped without a word (#148).
+			if len(e.Meta) > 0 {
+				problem(r, unread(e.Meta))
+			}
+			continue
 		}
-		r := rule{Rule: Rule{ID: e.ID, Body: e.Body, Scope: e.Scope, Meta: e.Meta}, blocking: true, excerpt: Excerpt(e.Body)}
 		switch b, set := e.Meta["blocking"]; {
 		case !set || b == "true":
 		case b == "false":
@@ -408,6 +413,20 @@ func prepare(ctx context.Context, idx index.Index, cs map[string]Checker, conten
 		}
 	}
 	return p, nil
+}
+
+// unread says which keys of a rule with no check no checker reads.
+func unread(meta map[string]string) string {
+	keys := make([]string, 0, len(meta))
+	for k := range meta {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	it := "it"
+	if len(keys) > 1 {
+		it = "them"
+	}
+	return fmt.Sprintf("%s without check: no checker reads %s; add a check, such as check: regex, or remove %[2]s", strings.Join(keys, ", "), it)
 }
 
 // known names the checkers a rule can use.
