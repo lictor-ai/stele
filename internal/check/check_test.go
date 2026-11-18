@@ -171,6 +171,9 @@ func TestRunRuleProblems(t *testing.T) {
 		entry("nocheck", "Pattern only.", nil, map[string]string{"pattern": "foo"}),
 		entry("nocheck2", "Two keys.", nil, map[string]string{"pattern": "foo", "message": "m"}),
 		entry("guide", "Guidance only.", nil, nil),
+		// Other keys with no check are kept without a word (D46), blocking
+		// included: Notes mentions it.
+		entry("owned", "Owned guidance.", nil, map[string]string{"owner": "alice", "blocking": "false"}),
 	}}
 	f := &fake{name: "fake", problems: []Problem{{RuleID: "bad", Message: "fake: no pattern"}}}
 	r, err := Run(context.Background(), "root", idx, []string{"x.go"}, map[string]Checker{"fake": f})
@@ -184,8 +187,8 @@ func TestRunRuleProblems(t *testing.T) {
 		{RuleID: "unknown", Excerpt: "Use semgrep.", Message: `check: "semgrep" is not a checker; the only one is the built-in fake; list an external checker under "checkers" in stele.json`},
 		{RuleID: "empty", Excerpt: "Empty check.", Message: "check is empty"},
 		{RuleID: "yes", Excerpt: "Blocking yes.", Message: `blocking: "yes" is not true or false`},
-		{RuleID: "nocheck", Excerpt: "Pattern only.", Message: "pattern without check: no checker reads it; add a check, such as check: regex, or remove it"},
-		{RuleID: "nocheck2", Excerpt: "Two keys.", Message: "message, pattern without check: no checker reads them; add a check, such as check: regex, or remove them"},
+		{RuleID: "nocheck", Excerpt: "Pattern only.", Message: "pattern without check: the rule is guidance only and nothing checks pattern; add check: regex or remove pattern"},
+		{RuleID: "nocheck2", Excerpt: "Two keys.", Message: "message and pattern without check: the rule is guidance only and nothing reads them; add check: regex or remove them"},
 		{RuleID: "bad", Excerpt: "Fails validation.", Message: "fake: no pattern"},
 	}
 	if diff := cmp.Diff(want, r.Problems); diff != "" {
@@ -193,6 +196,11 @@ func TestRunRuleProblems(t *testing.T) {
 	}
 	if r.ExitCode() != 1 {
 		t.Errorf("ExitCode = %d, want 1 for an invalid rule", r.ExitCode())
+	}
+
+	wantNotes := []Problem{{RuleID: "owned", Excerpt: "Owned guidance.", Message: "blocking without check: the rule is guidance only, so blocking does nothing"}}
+	if diff := cmp.Diff(wantNotes, Notes(idx)); diff != "" {
+		t.Errorf("notes (-want +got):\n%s", diff)
 	}
 }
 

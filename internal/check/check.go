@@ -346,10 +346,11 @@ func prepare(ctx context.Context, idx index.Index, cs map[string]Checker, conten
 		r := rule{Rule: Rule{ID: e.ID, Body: e.Body, Scope: e.Scope, Meta: e.Meta}, blocking: true, excerpt: Excerpt(e.Body)}
 		name, ok := e.Meta["check"]
 		if !ok {
-			// Guidance only. A key no checker will read, such as a pattern
-			// with no check, would be dropped without a word (#148).
-			if len(e.Meta) > 0 {
-				problem(r, unread(e.Meta))
+			// Guidance only. The regex checker's own keys with no check
+			// mean a check was meant and forgotten (#148). Other keys are
+			// kept without a word (D46): a source may add its own.
+			if msg := unread(e.Meta); msg != "" {
+				problem(r, msg)
 			}
 			continue
 		}
@@ -415,18 +416,36 @@ func prepare(ctx context.Context, idx index.Index, cs map[string]Checker, conten
 	return p, nil
 }
 
-// unread says which keys of a rule with no check no checker reads.
+// unread says which keys of the built-in regex checker a rule with no check
+// has, which nothing reads, or "" for none.
 func unread(meta map[string]string) string {
-	keys := make([]string, 0, len(meta))
-	for k := range meta {
-		keys = append(keys, k)
+	var keys []string
+	for _, k := range []string{"message", "pattern"} {
+		if _, ok := meta[k]; ok {
+			keys = append(keys, k)
+		}
 	}
-	sort.Strings(keys)
-	it := "it"
-	if len(keys) > 1 {
-		it = "them"
+	switch len(keys) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("%s without check: the rule is guidance only and nothing checks %[1]s; add check: regex or remove %[1]s", keys[0])
 	}
-	return fmt.Sprintf("%s without check: no checker reads %s; add a check, such as check: regex, or remove %[2]s", strings.Join(keys, ", "), it)
+	return fmt.Sprintf("%s without check: the rule is guidance only and nothing reads them; add check: regex or remove them", strings.Join(keys, " and "))
+}
+
+// Notes are what is worth saying about idx's rules that does not make them
+// invalid: blocking on a rule with no check, which does nothing. Each note
+// is a Problem the caller shows, not one that fails anything.
+func Notes(idx index.Index) []Problem {
+	var notes []Problem
+	for _, e := range idx.Rules {
+		_, checked := e.Meta["check"]
+		if _, ok := e.Meta["blocking"]; ok && !checked {
+			notes = append(notes, Problem{RuleID: e.ID, Excerpt: Excerpt(e.Body), Message: "blocking without check: the rule is guidance only, so blocking does nothing"})
+		}
+	}
+	return notes
 }
 
 // known names the checkers a rule can use.
