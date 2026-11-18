@@ -441,18 +441,34 @@ func (p *psReader) value(t psTok) (string, bool) {
 	if !strings.Contains(t.text, "\x00") {
 		return t.text, true
 	}
+	// The length first: the values are counted against the budget before
+	// the string is built, so many copies of a long variable are not (#171).
 	parts := strings.Split(t.text, "\x00")
-	var b strings.Builder
+	n, grown := 0, 0
 	for i, part := range parts {
 		if i%2 == 0 {
-			b.WriteString(part)
+			n += len(part)
 			continue
 		}
 		v, ok := p.vars[strings.ToLower(part)]
 		if !ok {
 			return "", false
 		}
-		b.WriteString(v)
+		if grown <= maxExpand {
+			grown += len(v)
+		}
+	}
+	if !p.res.expand(grown) {
+		return "", false
+	}
+	var b strings.Builder
+	b.Grow(n + grown)
+	for i, part := range parts {
+		if i%2 == 0 {
+			b.WriteString(part)
+		} else {
+			b.WriteString(p.vars[strings.ToLower(part)])
+		}
 	}
 	return b.String(), true
 }

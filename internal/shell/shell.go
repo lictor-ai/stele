@@ -53,6 +53,7 @@ const (
 	maxTargets = 64         // after duplicates are merged
 	maxGlob    = 1000       // files a command's globs may match, in all
 	maxNested  = maxCommand // bytes of nested scripts read, in all: eval, bash -c, iex
+	maxExpand  = 1 << 20    // bytes variables expand to, in all
 )
 
 // windows is whether paths follow Windows rules; getenv reads the
@@ -85,6 +86,7 @@ type results struct {
 	entries int // directory entries globs read
 	steps   int // directories globs opened and fixed path segments they walked
 	nested  int // bytes of nested scripts read, each read counted readCost more
+	grown   int // bytes variables expanded to; maxExpand+1 once spent
 }
 
 // readCost is what reading a nested script costs beyond its bytes: a parser
@@ -101,6 +103,28 @@ func (r *results) reread(n int) bool {
 	}
 	r.nested += n + readCost
 	return r.nested <= maxNested
+}
+
+// expand counts n bytes of a variable's value about to be written into a
+// word: a command under maxCommand can name a long variable many times, or
+// double it again and again, and expand to gigabytes (#171). It reports
+// whether they are within the budget. The first expansion past it counts as
+// one unknown; it and every expansion after it are not written, so their
+// words are unknown, and the count stops one past the budget. The budget is
+// four times the longest command: paths and short values, expanded as often
+// as a command written by hand or an agent does, stay far below it, and a
+// value as long as the command still expands four times.
+func (r *results) expand(n int) bool {
+	if r.grown > maxExpand {
+		return false
+	}
+	if n > maxExpand-r.grown {
+		r.grown = maxExpand + 1 // spent
+		r.unknown++
+		return false
+	}
+	r.grown += n
+	return true
 }
 
 // add adds one target, merging a duplicate. A content write wins over a

@@ -1095,6 +1095,43 @@ func TestTargetsCaps(t *testing.T) {
 	}
 }
 
+// What variables expand to has a budget per command (#171): a long variable
+// named many times, or doubled again and again, stops at it and is unknown
+// past it, so a command under the cap does not expand to gigabytes. The cost
+// is counted in bytes expanded and allocated, not timed (#138).
+func TestTargetsExpandBudget(t *testing.T) {
+	cwd := t.TempDir()
+	big := strings.Repeat("a", 50<<10)
+	for _, cmd := range []string{
+		"X='" + big + "'; echo" + strings.Repeat(" $X", 20000) + " > f",
+		"X='" + big + "'; echo" + strings.Repeat(` "${X}"`, 20000) + " > f",
+		"X='" + big + "'; " + strings.Repeat("X=$X$X; ", 30) + "echo > $X",
+		"cd '" + big + "'; echo" + strings.Repeat(" $PWD", 20000) + " > f",
+	} {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		r := globRun(cmd, cwd)
+		runtime.ReadMemStats(&after)
+		if r.unknown == 0 || r.grown != maxExpand+1 {
+			t.Errorf("%.40s…: unknown %d, expanded %d: the budget %d was not hit", cmd, r.unknown, r.grown, maxExpand)
+		}
+		if got, limit := after.TotalAlloc-before.TotalAlloc, uint64(64<<20); got > limit {
+			t.Errorf("%.40s…: allocated %d MiB, limit %d MiB", cmd, got>>20, limit>>20)
+		}
+	}
+	// Past the budget, a target that expands is unknown; one written out is
+	// still seen.
+	over := "X='" + big + "'; echo" + strings.Repeat(" $X", 30) + " > $X.go > b.go"
+	if got, unknown := Targets(over, cwd); len(got) != 1 || filepath.Base(got[0].Path) != "b.go" || unknown != 2 {
+		t.Errorf("past the budget: %v, unknown %d; want b.go and 2 unknown", got, unknown)
+	}
+	// Within it, a long value named a few times is still read.
+	within := "X='" + strings.Repeat("a", 100<<10) + "'; echo" + strings.Repeat(" $X", 9) + " > $X.go"
+	if got, unknown := Targets(within, cwd); len(got) != 1 || unknown != 0 {
+		t.Errorf("within the budget: %d targets, unknown %d; want 1 and none", len(got), unknown)
+	}
+}
+
 func TestAbs(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		for word, want := range map[string]string{

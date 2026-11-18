@@ -554,7 +554,7 @@ func (p *parser) readWord() word {
 	}
 	// ~ or ~/… is the home directory; ~user/… is not known.
 	if strings.HasPrefix(w.raw, "~") {
-		if home := p.home(); home != "" && (w.raw == "~" || w.raw[1] == '/') {
+		if home := p.home(); home != "" && (w.raw == "~" || w.raw[1] == '/') && p.res.expand(len(home)) {
 			w.text = home + w.text[1:]
 		} else {
 			w.dynamic = true
@@ -664,11 +664,15 @@ func (p *parser) expand(b *strings.Builder, w *word, name string) {
 			w.dynamic = true
 			return
 		}
-		if v, ok := p.vars[name]; ok {
-			b.WriteString(v)
+		v, ok := p.vars[name]
+		if !ok {
+			v = p.dir
+		}
+		if !p.res.expand(len(v)) {
+			w.dynamic = true
 			return
 		}
-		b.WriteString(p.dir)
+		b.WriteString(v)
 		return
 	case "OLDPWD":
 		w.dynamic = true
@@ -683,7 +687,7 @@ func (p *parser) expand(b *strings.Builder, w *word, name string) {
 		v = getenv(name)
 		ok = v != ""
 	}
-	if !ok {
+	if !ok || !p.res.expand(len(v)) {
 		w.dynamic = true
 		return
 	}
