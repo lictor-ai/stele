@@ -1,10 +1,13 @@
-name: Go modules
+name: govulncheck
 
-# Checks the Go code and modules: govulncheck for known vulnerabilities that
-# the code can reach (in the dependencies and in the Go toolchain go.mod
-# pins), and go mod tidy for a go.mod and go.sum with nothing missing or
-# unused. Linux only, and only when Go code, the modules or this workflow
-# change: the paths filter keeps it from starting at all otherwise.
+# govulncheck looks for known vulnerabilities that the code can reach, in the
+# dependencies and in the Go toolchain go.mod pins. go mod tidy -diff checks
+# that go.mod and go.sum have nothing missing or unused. One Linux job.
+#
+# On a pull request it runs only when Go code, the modules or this workflow
+# change: the paths filter keeps it from starting at all otherwise. New
+# vulnerabilities are published against code that has not changed, so it
+# also runs weekly on main, and can be started by hand.
 #
 # govulncheck is pinned, as the actions are.
 on:
@@ -14,20 +17,17 @@ on:
       - go.mod
       - go.sum
       - .github/workflows/govulncheck.yml
-  push:
-    branches: [main]
-    paths:
-      - "**.go"
-      - go.mod
-      - go.sum
-      - .github/workflows/govulncheck.yml
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  modules:
+  govulncheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:

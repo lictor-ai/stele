@@ -131,7 +131,7 @@ scoop install stele
 
 Or download the archive for your system from [Releases](https://github.com/lictor-ai/stele/releases) (`checksums.txt` lists their SHA-256) and put `stele` on your `PATH`. The binaries are not signed.
 
-With Go 1.27 or later:
+With Go 1.27 or later (1.27.4 or later recommended, for its security fixes; `go install` builds with your own Go):
 
 ```sh
 go install github.com/lictor-ai/stele/cmd/stele@latest
