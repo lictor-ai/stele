@@ -6,7 +6,9 @@
 // It understands the forms an agent uses to write a file: redirections
 // (heredoc bodies skipped), tee, sed -i and perl -i, plus rm, mv, cp, ln and
 // truncate for stele's own files. It follows cd, simple NAME=value variables
-// and globs. Scripts, generators, xargs, find -exec and targets it cannot
+// and globs, and reads the literal string of bash -c, sh -c, zsh -c, dash -c,
+// ksh -c and eval as commands: one it cannot read whole counts as unknown.
+// Scripts, generators, xargs, find -exec and targets it cannot
 // resolve are not seen: Targets counts the last kind as unknown. A command it
 // cannot parse is read up to the error: nothing after it runs when bash agrees,
 // and it hides only what follows a form stele does not know when bash does not.
@@ -46,10 +48,11 @@ type Target struct {
 
 // The caps bound what one command can cost.
 const (
-	maxCommand = 256 << 10 // longer: nothing is read, one unknown
-	maxDepth   = 16        // subshells and substitutions
-	maxTargets = 64        // after duplicates are merged
-	maxGlob    = 1000      // files a command's globs may match, in all
+	maxCommand = 256 << 10  // longer: nothing is read, one unknown
+	maxDepth   = 16         // subshells and substitutions
+	maxTargets = 64         // after duplicates are merged
+	maxGlob    = 1000       // files a command's globs may match, in all
+	maxNested  = maxCommand // bytes of nested scripts read, in all: eval, bash -c, iex
 )
 
 // windows is whether paths follow Windows rules; getenv reads the
@@ -81,6 +84,23 @@ type results struct {
 	globbed int // files matched by globs
 	entries int // directory entries globs read
 	steps   int // directories globs opened and fixed path segments they walked
+	nested  int // bytes of nested scripts read, each read counted readCost more
+}
+
+// readCost is what reading a nested script costs beyond its bytes: a parser
+// set up, its words and statements. It keeps many tiny reads, as of a
+// variable that holds itself, to about a thousand.
+const readCost = 256
+
+// reread counts a nested script of n bytes about to be read: a variable
+// expanded into eval or iex can hold itself, so the depth alone does not
+// bound the work. It reports whether the script is within the budget.
+func (r *results) reread(n int) bool {
+	if r.nested > maxNested {
+		return false
+	}
+	r.nested += n + readCost
+	return r.nested <= maxNested
 }
 
 // add adds one target, merging a duplicate. A content write wins over a

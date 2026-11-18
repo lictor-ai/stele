@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPowerShellTargets(t *testing.T) {
@@ -122,6 +123,27 @@ func TestPowerShellTargetsCaps(t *testing.T) {
 	}
 	if got, _ := PowerShellTargets(b.String(), t.TempDir()); len(got) != maxTargets {
 		t.Errorf("%d targets, want the cap %d", len(got), maxTargets)
+	}
+	// A variable that holds itself, run four times a level, stops at the
+	// budget of nested script read.
+	start := time.Now()
+	for _, cmd := range []string{
+		"$x = 'iex $x; iex $x; iex $x; iex $x'; iex $x",
+		// Across dialects: PowerShell, bash -c and eval in one fan-out.
+		`$x = 'iex $x; bash -c "eval ''echo > a''; eval x"; pwsh -c "iex x"; iex $x'; iex $x`,
+	} {
+		r := &results{seen: map[string]int{}}
+		p := &psReader{res: r, vars: map[string]string{}, dir: "/w", dirOK: true}
+		p.run(cmd)
+		if r.unknown == 0 || r.nested <= maxNested {
+			t.Errorf("%s: unknown %d, nested %d: the nested budget %d was not hit", cmd, r.unknown, r.nested, maxNested)
+		}
+		if limit := maxNested + readCost + len(cmd); r.nested > limit {
+			t.Errorf("%s: nested %d, past the budget's bound %d", cmd, r.nested, limit)
+		}
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("iex of itself took %v", d)
 	}
 }
 

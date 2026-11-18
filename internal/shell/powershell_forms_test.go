@@ -1,10 +1,12 @@
 package shell
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+	"unicode/utf16"
 )
 
 // psFiles runs PowerShellTargets and returns its paths relative to cwd.
@@ -20,6 +22,15 @@ func psFiles(t *testing.T, cmd, cwd string) ([]string, int) {
 		out = append(out, filepath.ToSlash(rel))
 	}
 	return out, unknown
+}
+
+// encode is s as -EncodedCommand takes it: base64 of UTF-16LE.
+func encode(s string) string {
+	var b []byte
+	for _, u := range utf16.Encode([]rune(s)) {
+		b = append(b, byte(u), byte(u>>8))
+	}
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 // PowerShell takes \ as a separator on every OS, pwsh on Linux too.
@@ -98,7 +109,30 @@ func TestPowerShellForms(t *testing.T) {
 		{"powershell -c", `powershell.exe -c "Remove-Item stele.json"`, []string{"stele.json"}, 0},
 		{"bash -c", "bash -c 'echo x > stele.md'", []string{"stele.md"}, 0},
 		{"cmd /c", `cmd /c "echo x > stele.md"`, []string{"stele.md"}, 0},
-		{"iex", "iex 'Set-Content stele.md x'", nil, 1},
+		{"iex", "iex 'Set-Content stele.md x'", []string{"stele.md"}, 0},
+		{"Invoke-Expression -Command", `Invoke-Expression -Command "Remove-Item stele.json"`, []string{"stele.json"}, 0},
+		{"iex then cd", "iex 'cd dir'; Set-Content stele.md x", []string{"dir/stele.md"}, 0},
+		{"iex of a variable", "iex $cmd", nil, 1},
+		{"iex from the pipeline", "'Set-Content stele.md x' | iex", nil, 1},
+		{"en dash", "Set-Content \u2013Path stele.md x", []string{"stele.md"}, 0},
+		{"em dash", "Remove-Item \u2014LiteralPath stele.md", []string{"stele.md"}, 0},
+		{"horizontal bar", "Set-Content \u2015Path stele.md \u2015Value x", []string{"stele.md"}, 0},
+		{"en dash on pwsh", "pwsh \u2013NoProfile \u2013Command 'Set-Content stele.md x'", []string{"stele.md"}, 0},
+		{"-EncodedCommand", "pwsh -EncodedCommand " + encode("Set-Content stele.md x"), []string{"stele.md"}, 0},
+		{"-enc", "powershell -enc " + encode("Remove-Item stele.json"), []string{"stele.json"}, 0},
+		{"-EncodedCommand not base64", "pwsh -EncodedCommand !!", nil, 1},
+		{"-EncodedCommand with a byte order mark", "pwsh -EncodedCommand " + encode("\uFEFFSet-Content stele.md x"), []string{"stele.md"}, 0},
+		{"bash -cx", "bash -cx 'echo x > stele.md'", []string{"stele.md"}, 0},
+		{"wsl with options", "wsl -d Ubuntu -u root --exec bash -lc 'echo x > stele.md'", []string{"stele.md"}, 0},
+		{"wsl, no -e", "wsl.exe sh -c 'echo x > stele.md'", []string{"stele.md"}, 0},
+		{"wsl running no shell", "wsl ls", nil, 1},
+		{"bash script, -c its argument", "bash script.sh -c 'echo x > stele.md'", nil, 1},
+		{"bash -o takes -c", "bash -o -c 'echo x > stele.md'", nil, 1},
+		{"bash -lc", "bash -lc 'echo x > stele.md'", []string{"stele.md"}, 0},
+		{"sh -e -c", "sh -e -c 'echo x > stele.md'", []string{"stele.md"}, 0},
+		{"zsh -c", "zsh -c 'echo x > stele.md'", []string{"stele.md"}, 0},
+		{"wsl -e sh -c", "wsl -e sh -c 'echo x > stele.md'", []string{"stele.md"}, 0},
+		{"bash -c that does not parse", `bash -c 'echo "x > stele.md'`, nil, 1},
 		{"Start-Process", "Start-Process pwsh -ArgumentList '-c','x'", nil, 1},
 	}
 	for _, tt := range tests {
