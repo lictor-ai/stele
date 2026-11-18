@@ -32,7 +32,26 @@ func TestPowerShellTargets(t *testing.T) {
 		{"go test 2>&1 *> all.log", []tg{{"all.log", Redirect}}, 0},
 		{"echo x>a.go", []tg{{"a.go", Redirect}}, 0},
 		{"New-Item -ItemType File -Path src/x.go -Value 'package x'", []tg{{"src/x.go", Redirect}}, 0},
-		{"New-Item -ItemType Directory src", nil, 0},
+		{"New-Item -ItemType Directory src", []tg{{"src", Create}}, 0},
+		{"New-Item -Path src -Name .git -ItemType Directory", []tg{{"src/.git", Create}}, 0},
+		{"ni -it dir -Path a, b", []tg{{"a", Create}, {"b", Create}}, 0},
+		{"New-Item -ItemType File -Path src/stele.json", []tg{{"src/stele.json", Redirect}}, 0},
+		{"mkdir build", []tg{{"build", Create}}, 0},
+		{"md -Path src/.git -Force", []tg{{"src/.git", Create}}, 0},
+		{"mkdir -Path src -Name sub", []tg{{"src/sub", Create}}, 0},
+		{"mkdir $d", nil, 1},
+		{"git init src", []tg{{"src/.git", Create}}, 0},
+		{"git init", []tg{{".git", Create}}, 0},
+		{"git -C sub init x", []tg{{"sub/x/.git", Create}}, 0},
+		{"git.exe clone https://github.com/o/repo.git", []tg{{"repo/.git", Create}}, 0},
+		{"git clone --depth 1 https://h/o/r.git 'src/r'", []tg{{"src/r/.git", Create}}, 0},
+		{`git worktree add ..\wt`, []tg{{"../wt/.git", Create}}, 0},
+		{"git submodule add https://h/o/lib vendor/lib", []tg{{"vendor/lib/.git", Create}}, 0},
+		{"$r = 'repo'; git init $r", []tg{{"repo/.git", Create}}, 0},
+		{"git init $unknown", nil, 1},
+		{"git --git-dir=x init", nil, 1},
+		{"git status; git log --oneline; git diff", nil, 0},
+		{"cd sub; git init", []tg{{"sub/.git", Create}}, 0},
 		{"ni -Path src -Name x.go", []tg{{"src/x.go", Redirect}}, 0},
 		{"Remove-Item a.go, b.go -Force", []tg{{"a.go", Remove}, {"b.go", Remove}}, 0},
 		{"del stele.md", []tg{{"stele.md", Remove}}, 0},
@@ -193,6 +212,7 @@ func TestPowerShellTargetsExpandBudget(t *testing.T) {
 func FuzzPowerShellTargets(f *testing.F) {
 	f.Add("Set-Content -Path a.go -Value x; Remove-Item b.go")
 	f.Add("[IO.File]::WriteAllText('a.go', \"$x\")")
+	f.Add("git -C $d clone u; mkdir -Name x; ni -ItemType Directory a, b")
 	f.Fuzz(func(t *testing.T, cmd string) {
 		ts, _ := PowerShellTargets(cmd, "/w")
 		for _, x := range ts {

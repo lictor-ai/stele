@@ -1755,16 +1755,21 @@ subshell, simple `NAME=value`, array assignments, whose value is not known,
 and taking at most 5,000 steps a command, a step being a directory opened or a
 fixed path segment walked, those of the current directory included, and left
 unexpanded past either budget) and returns the files it writes by redirection,
-`tee`, `sed -i` and `perl -i`, and those `rm`, `mv`, `cp`, `ln` and `truncate`
-touch. A command it cannot parse is read up to the error, as bash stops at a
-real syntax error, and what it found so far stands. `((` is always arithmetic
+`tee`, `sed -i` and `perl -i`, those `rm`, `mv`, `cp`, `ln` and `truncate`
+touch, and those `touch`, `mkdir`, `git init`, `git clone`, `git worktree add`
+and `git submodule add` make (`shell.Create`: a `.git` for git, `-C` followed,
+`--git-dir` and `--work-tree` unknown; PowerShell's `New-Item` folders, `mkdir`
+and `git` too). A command it cannot parse is read up to the error, as bash
+stops at a real syntax error, and what it found so far stands. `((` is always arithmetic
 up to its `))`: what subshells written that way write is not read, and with no
 `))` nothing after it is. `shopt` options are not followed. A `cd` in a function
 body written with `if`, `case`, `for` or `while` moves the tracked directory for
 what follows.
 A command that writes nothing costs a parse: no key, no index, no file. A
-target that is one of stele's own files asks, as a Write does (#52). A target
-a scoped rule covers is denied, once per file, per agent and per turn
+target that is one of stele's own files, or a `.git` below the root, asks, as
+a Write does (#52). A target a scoped rule covers that the command writes
+content to (`Kind.Writes`: not a removal, a copy or a file or folder made) is
+denied, once per file, per agent and per turn
 (`backstop.DecideBash`, `State.BashDenied`), with the rules not yet shown and
 a pointer to Write and Edit (`bash-message.tmpl`); the same command run at
 least `RetryAfter` later goes through, with a note to run `stele check`. Only a

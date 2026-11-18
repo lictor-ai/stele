@@ -811,6 +811,14 @@ func (p *parser) finish(c *command, inPipe bool) {
 		for _, a := range operands(args, []string{"-s", "-r"}) {
 			p.add(a, Copy)
 		}
+	case "touch":
+		p.touch(args)
+	case "mkdir":
+		for _, a := range operands(args, []string{"-m", "--mode"}) {
+			p.add(a, Create)
+		}
+	case "git":
+		p.gitAdd(args)
 	case "bash", "sh", "zsh", "dash", "ksh":
 		if i, ok := shellScript(args); ok {
 			p.nestedShell(args[i])
