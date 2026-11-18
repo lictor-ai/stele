@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -802,6 +803,113 @@ func (p *parser) finish(c *command, inPipe bool) {
 		for _, a := range operands(args, []string{"-s", "-r"}) {
 			p.add(a, Copy)
 		}
+	case "bash", "sh", "zsh", "dash", "ksh":
+		if i, ok := shellScript(args); ok {
+			p.nestedShell(args[i])
+		}
+	case "eval":
+		p.eval(args, inPipe)
+	}
+}
+
+// shellScript finds the command string of bash -c '…' and the like, after
+// the shell's options: -c alone or in a cluster such as -lc, and the options
+// before or after it, -o and -O taking a word. It returns the string's index
+// in args. found is false with no -c, or no string after it: then the shell
+// runs a script file, or nothing.
+func shellScript(args []word) (i int, found bool) {
+	c := false
+	for ; i < len(args); i++ {
+		a := args[i]
+		t := a.text
+		switch {
+		case a.dynamic || len(t) < 2 || (t[0] != '-' && t[0] != '+'):
+			return i, c
+		case t == "--":
+			return i + 1, c && i+1 < len(args)
+		case strings.HasPrefix(t, "--"):
+			if t == "--rcfile" || t == "--init-file" {
+				i++
+			}
+		default:
+			for j := 1; j < len(t); j++ {
+				switch t[j] {
+				case 'c':
+					c = c || t[0] == '-'
+				case 'o', 'O':
+					i++
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+// nestedShell reads the string of bash -c '…' as a command of its own, in a
+// new shell: it starts in this directory, and a variable this command set is
+// unknown there, since stele does not know whether it was exported. A string
+// it cannot read whole counts as unknown. Its depth adds to this one's, so
+// shells in shells stop at maxDepth.
+func (p *parser) nestedShell(s word) {
+	if s.dynamic || s.glob {
+		p.res.unknown++
+		return
+	}
+	dyn := map[string]bool{}
+	for k := range p.vars {
+		dyn[k] = true
+	}
+	for k := range p.dyn {
+		dyn[k] = true
+	}
+	if !readBash(p.res, s.text, p.dir, p.dirOK, p.depth, dyn) {
+		p.res.unknown++
+	}
+}
+
+// readBash reads script as bash, from dir, adding what it writes to res. It
+// reports whether it read the script whole, within the nesting budget.
+func readBash(res *results, script, dir string, dirOK bool, depth int, dyn map[string]bool) bool {
+	if !res.reread(len(script)) {
+		return false
+	}
+	q := &parser{src: script, res: res, vars: map[string]string{}, dyn: dyn, dir: dir, dirOK: dirOK, depth: depth}
+	q.list("")
+	return !q.err
+}
+
+// eval reads its arguments, joined by spaces, as commands run here: their cd
+// and assignments carry on, unless eval is in a pipeline. An argument stele
+// cannot know is unknown, as is a string it cannot read whole.
+func (p *parser) eval(args []word, inPipe bool) {
+	var b strings.Builder
+	for i, a := range args {
+		if a.dynamic || a.glob {
+			p.res.unknown++
+			return
+		}
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(a.text)
+	}
+	if b.Len() == 0 {
+		return
+	}
+	if !p.res.reread(b.Len()) {
+		p.res.unknown++
+		return
+	}
+	q := &parser{src: b.String(), res: p.res, vars: p.vars, dyn: p.dyn, dir: p.dir, dirOK: p.dirOK, depth: p.depth}
+	if !inPipe {
+		defer func() { p.dir, p.dirOK = q.dir, q.dirOK }()
+	} else {
+		// A pipeline's commands run in subshells: what eval sets stays there.
+		q.vars, q.dyn = maps.Clone(p.vars), maps.Clone(p.dyn)
+	}
+	q.list("")
+	if q.err {
+		p.res.unknown++
 	}
 }
 

@@ -281,6 +281,44 @@ func TestTargets(t *testing.T) {
 		{command: "truncate -s0 f", want: []Target{at("f", Copy)}},
 		{command: "truncate -s 0 f", want: []Target{at("f", Copy)}},
 
+		// The string of bash -c, sh -c and the like is read as a command,
+		// in a new shell: its cd stays there, and variables this command set
+		// are unknown there (#153).
+		{command: "bash -c 'echo x > stele.md'", want: []Target{at("stele.md", R)}},
+		{command: `sh -c "tee a.go"`, want: []Target{at("a.go", T)}},
+		{command: "zsh -c 'sed -i s/a/b/ f'", want: []Target{at("f", S)}},
+		{command: "dash -c 'echo > a'; ksh -c 'echo > b'", want: []Target{at("a", R), at("b", R)}},
+		{command: "bash -lc 'echo > a'", want: []Target{at("a", R)}},
+		{command: "bash -e -c 'echo > a'", want: []Target{at("a", R)}},
+		{command: "bash -c -e 'echo > a'", want: []Target{at("a", R)}},
+		{command: "bash -o pipefail -c 'echo > a'", want: []Target{at("a", R)}},
+		{command: "bash -eo pipefail +O extglob -c 'echo > a'", want: []Target{at("a", R)}},
+		{command: "bash --norc --rcfile x -c 'echo > a'", want: []Target{at("a", R)}},
+		{command: "bash -c -- 'echo > a'", want: []Target{at("a", R)}},
+		{command: "sh -c 'echo > a' name arg", want: []Target{at("a", R)}},
+		{command: "/bin/bash -c 'echo > a'", want: []Target{at("a", R)}},
+		{command: "env FOO=1 bash -c 'echo > a'", want: []Target{at("a", R)}},
+		{command: "sudo -u x sh -c 'echo > a'", want: []Target{at("a", R)}},
+		{command: "bash -c 'cd sub && echo > a'; echo > b", want: []Target{at("sub/a", R), at("b", R)}},
+		{command: "cd sub; bash -c 'echo > a'", want: []Target{at("sub/a", R)}},
+		{command: `bash -c "sh -c 'echo > a'"`, want: []Target{at("a", R)}},
+		{command: "bash -c 'echo > $HOME/a'", want: []Target{{Path: filepath.Join(home, "a"), Kind: R}}},
+		{command: "X=a.go; bash -c 'echo > $X'", unknown: 1},
+		{command: `bash -c "$cmd"`, unknown: 1},
+		{command: `bash -c 'echo "x > a'`, unknown: 1},
+		{command: "bash -c 'echo > a; echo \"x > b'", want: []Target{at("a", R)}, unknown: 1},
+		{command: "bash script.sh; bash -c; bash -- -c x", want: nil},
+		{command: "bash -o -c x", want: nil},
+
+		// eval reads its arguments as commands run here.
+		{command: "eval 'echo > a'", want: []Target{at("a", R)}},
+		{command: "eval echo '>' a", want: []Target{at("a", R)}},
+		{command: "eval 'cd sub'; echo > a", want: []Target{at("sub/a", R)}},
+		{command: "eval 'cd sub' | true; echo > a", want: []Target{at("a", R)}},
+		{command: "eval 'X=b'; echo > $X", want: []Target{at("b", R)}},
+		{command: `eval "$x"`, unknown: 1},
+		{command: `eval 'echo "x > a'`, unknown: 1},
+
 		// What the lexer does not see.
 		{command: "xargs sed -i s/a/b/", want: nil},
 		{command: `python -c "open('x','w')"`, want: nil},
@@ -1010,6 +1048,25 @@ func TestTargetsCaps(t *testing.T) {
 	}
 	if got, _ := Targets(b.String(), cwd); len(got) != maxTargets {
 		t.Errorf("%d targets, want the cap %d", len(got), maxTargets)
+	}
+	// A shell's string adds to the depth it is read at.
+	nested := func(n int) string {
+		return strings.Repeat("$(", n) + "bash -c 'echo > f'" + strings.Repeat(")", n)
+	}
+	if got, unknown := Targets(nested(maxDepth-2), cwd); len(got) != 1 || unknown != 0 {
+		t.Errorf("bash -c within the nesting cap: %v, %d", got, unknown)
+	}
+	if got, unknown := Targets(nested(maxDepth-1), cwd); len(got) != 0 || unknown != 1 {
+		t.Errorf("bash -c past the nesting cap: %v, %d", got, unknown)
+	}
+	// A variable that holds itself, evaluated four times a level, stops at
+	// the budget of nested script read, well before the depth would.
+	start := time.Now()
+	if _, unknown := Targets("X='eval $X;eval $X;eval $X;eval $X'; eval $X", cwd); unknown == 0 {
+		t.Error("eval past the nested budget: not counted as unknown")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("eval of itself took %v", d)
 	}
 	deep := strings.Repeat("$(", 100) + "echo > f" + strings.Repeat(")", 100)
 	if got, _ := Targets(deep, cwd); len(got) != 0 {

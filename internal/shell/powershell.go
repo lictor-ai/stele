@@ -1,9 +1,11 @@
 package shell
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf16"
 )
 
 // PowerShellTargets returns the files a PowerShell command writes, resolved
@@ -21,11 +23,13 @@ import (
 // follows Set-Location, Push-Location and Pop-Location, and variables set to
 // a literal at the top level: one set in a block, from a command, or added
 // to, is unknown from then on. A command assigned, cast, or in parentheses
-// is read as a command. Here-strings, array literals and nested powershell,
-// pwsh, bash and cmd commands with a literal script are read. Expressions as
-// paths, splatting, $(...), $env:, unknown variables, paths bound from the
-// pipeline, Invoke-Expression, Start-Process and scripts are unknown or not
-// seen.
+// is read as a command. A parameter may start with an en dash, em dash or
+// horizontal bar, as PowerShell allows. Here-strings, array literals, nested
+// powershell, pwsh (-EncodedCommand too), bash, sh, zsh and cmd commands with
+// a literal script, and Invoke-Expression of a literal string are read.
+// Expressions as paths, splatting, $(...), $env:, unknown variables, paths
+// bound from the pipeline, any other Invoke-Expression, Start-Process and
+// scripts are unknown or not seen.
 func PowerShellTargets(command, cwd string) (ts []Target, unknown int) {
 	if len(command) > maxCommand {
 		return nil, 1
@@ -266,8 +270,11 @@ func psWord(s string) (psTok, int) {
 			return psTok{text: op}, len(op)
 		}
 	}
-	if s[0] == '-' && len(s) > 1 && letter(s[1]) {
+	if n := psDash(s); n > 0 && len(s) > n && letter(s[n]) {
+		// -Name, or –Name, —Name or ―Name, which PowerShell takes as -Name.
 		t.param = true
+		b.WriteByte('-')
+		i = n
 	}
 	lone := func() bool { // the word so far is one variable
 		w := b.String()
@@ -343,6 +350,19 @@ func psWord(s string) (psTok, int) {
 	}
 	t.text = b.String()
 	return t, i
+}
+
+// psDash is the length of the dash s starts with: 1 for -, 3 for the en
+// dash, em dash and horizontal bar (U+2013 to U+2015) in UTF-8, which
+// PowerShell reads as -; else 0.
+func psDash(s string) int {
+	switch {
+	case strings.HasPrefix(s, "-"):
+		return 1
+	case strings.HasPrefix(s, "\u2013"), strings.HasPrefix(s, "\u2014"), strings.HasPrefix(s, "\u2015"):
+		return 3
+	}
+	return 0
 }
 
 // psEscape is what `c means inside double quotes.
@@ -469,8 +489,8 @@ var psCommands = map[string]string{
 	"new-object": "object",
 	"powershell": "pwsh", "powershell.exe": "pwsh", "pwsh": "pwsh", "pwsh.exe": "pwsh",
 	"cmd": "cmd", "cmd.exe": "cmd",
-	"bash": "bash", "bash.exe": "bash", "sh": "bash", "wsl": "bash", "wsl.exe": "bash",
-	"invoke-expression": "opaque", "iex": "opaque", "start-process": "opaque", "saps": "opaque", "start": "opaque",
+	"bash": "bash", "bash.exe": "bash", "sh": "bash", "zsh": "bash", "dash": "bash", "ksh": "bash", "wsl": "bash", "wsl.exe": "bash",
+	"invoke-expression": "iex", "iex": "iex", "start-process": "opaque", "saps": "opaque", "start": "opaque",
 	"invoke-command": "opaque", "icm": "opaque",
 }
 
@@ -501,7 +521,8 @@ var psParams = map[string][]string{
 	"popd":   {"stackname"},
 	"web":    {"uri", "outfile", "method", "body", "headers", "contenttype", "infile", "credential", "useragent", "timeoutsec"},
 	"object": {"typename", "argumentlist", "comobject", "property"},
-	"pwsh":   {"command", "c", "file", "f", "executionpolicy", "ep", "encodedcommand", "e", "workingdirectory"},
+	"pwsh":   {"command", "c", "file", "f", "executionpolicy", "ep", "encodedcommand", "e", "ec", "workingdirectory"},
+	"iex":    {"command"},
 }
 
 // psParam resolves a parameter as written, -Pa or -Path:x, to its full name
@@ -628,8 +649,21 @@ func (p *psReader) groups(g psTok, depth int) {
 
 // cmdlet reads a cmdlet's arguments: named ones, then positional.
 func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
+	if (kind == "iex" || kind == "pwsh" || kind == "bash" || kind == "cmd") && p.res.nested > maxNested {
+		p.res.unknown++ // past the budget of nested scripts: not read
+		return
+	}
 	if kind == "bash" {
-		// bash -c '…', sh -c '…', wsl -e sh -c '…': read the script as bash.
+		// bash -c '…', sh -lc '…', wsl -e sh -c '…': read the script as bash.
+		ws := make([]word, len(args))
+		for i, a := range args {
+			v, ok := p.value(a)
+			ws[i] = word{text: v, dynamic: !ok}
+		}
+		if i, ok := shellScript(ws); ok {
+			p.nested(args[i:i+1], true)
+			return
+		}
 		for i, a := range args {
 			if a.text == "-c" && i+1 < len(args) {
 				p.nested(args[i+1:i+2], true)
@@ -881,8 +915,17 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 		if script == nil {
 			script = named["c"]
 		}
-		if named["file"] != nil || named["f"] != nil || named["encodedcommand"] != nil || named["e"] != nil {
+		if named["file"] != nil || named["f"] != nil {
 			p.res.unknown++
+			return
+		}
+		if enc := append(append(named["encodedcommand"], named["e"]...), named["ec"]...); enc != nil {
+			v, ok := p.value(enc[0])
+			if script, ok2 := decodeCommand(v); ok && ok2 {
+				p.nestedText(script, false)
+			} else {
+				p.res.unknown++
+			}
 			return
 		}
 		if script == nil {
@@ -909,9 +952,43 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 			}
 		}
 		p.res.unknown++
+	case "iex":
+		// Invoke-Expression 'literal': its statements run here, as a group's.
+		script := named["command"]
+		if script == nil {
+			script = at(0)
+		}
+		v, ok := "", false
+		if len(script) == 1 {
+			v, ok = p.value(script[0])
+		}
+		if !ok || p.depth >= maxDepth || !p.res.reread(len(v)) {
+			p.res.unknown++ // from the pipeline, or what stele cannot know
+			return
+		}
+		p.depth++
+		l := &psLexer{s: v}
+		for _, inner := range l.statements(false) {
+			inner.depth += st.depth
+			p.statement(inner)
+		}
+		p.depth--
 	case "opaque":
-		p.res.unknown++ // Invoke-Expression, Start-Process: stele cannot see what runs
+		p.res.unknown++ // Start-Process, Invoke-Command: stele cannot see what runs
 	}
+}
+
+// decodeCommand decodes the script of -EncodedCommand: base64 of UTF-16LE.
+func decodeCommand(s string) (string, bool) {
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil || len(b)%2 != 0 {
+		return "", false
+	}
+	u := make([]uint16, len(b)/2)
+	for i := range u {
+		u[i] = uint16(b[2*i]) | uint16(b[2*i+1])<<8
+	}
+	return string(utf16.Decode(u)), true
 }
 
 // nested reads a nested shell's script, given as a literal.
@@ -935,11 +1012,14 @@ func (p *psReader) nestedText(script string, bash bool) {
 		return
 	}
 	if bash {
-		ts, unknown := Targets(script, p.dir)
-		for _, t := range ts {
-			p.res.add(t.Path, t.Kind)
+		// Its depth adds to this one's; a script it cannot read whole is unknown.
+		if !readBash(p.res, script, p.dir, p.dirOK, p.depth, map[string]bool{}) {
+			p.res.unknown++
 		}
-		p.res.unknown += unknown
+		return
+	}
+	if !p.res.reread(len(script)) {
+		p.res.unknown++
 		return
 	}
 	q := &psReader{res: p.res, vars: map[string]string{}, dir: p.dir, dirOK: p.dirOK, depth: p.depth + 1}

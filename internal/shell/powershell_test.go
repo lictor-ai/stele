@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPowerShellTargets(t *testing.T) {
@@ -122,6 +123,15 @@ func TestPowerShellTargetsCaps(t *testing.T) {
 	}
 	if got, _ := PowerShellTargets(b.String(), t.TempDir()); len(got) != maxTargets {
 		t.Errorf("%d targets, want the cap %d", len(got), maxTargets)
+	}
+	// A variable that holds itself, run four times a level, stops at the
+	// budget of nested script read.
+	start := time.Now()
+	if _, unknown := PowerShellTargets("$x = 'iex $x; iex $x; iex $x; iex $x'; iex $x", t.TempDir()); unknown == 0 {
+		t.Error("iex past the nested budget: not counted as unknown")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("iex of itself took %v", d)
 	}
 }
 
