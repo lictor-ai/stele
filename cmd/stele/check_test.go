@@ -49,7 +49,7 @@ func gitProject(t *testing.T, steleMD string) string {
 		t.Skip("git is not on PATH")
 	}
 	root := project(t, steleMD)
-	if err := os.Remove(filepath.Join(root, ".git")); err != nil {
+	if err := os.RemoveAll(filepath.Join(root, ".git")); err != nil {
 		t.Fatal(err)
 	}
 	gitT(t, root, "init", "-q")
@@ -412,7 +412,7 @@ func TestCheckNoGitRepository(t *testing.T) {
 		t.Skip("git is not on PATH")
 	}
 	root := project(t, checkRules)
-	if err := os.Remove(filepath.Join(root, ".git")); err != nil {
+	if err := os.RemoveAll(filepath.Join(root, ".git")); err != nil {
 		t.Fatal(err)
 	}
 	if code, _, _ := runCmd("compile"); code != exitOK {

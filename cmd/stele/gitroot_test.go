@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A worktree on a branch without stele.md gets no rules from the main
@@ -38,7 +39,7 @@ func TestHookIgnoresOuterRulesInWorktree(t *testing.T) {
 // as the outer stele check never sees its files.
 func TestHookIgnoresOuterRulesInSubmodule(t *testing.T) {
 	root := project(t, hookRules)
-	writeAt(t, root, "vendor/lib/.git", "gitdir: ../../.git/modules/lib\n")
+	gitlink(t, root, "vendor/lib")
 	if _, out := hook(t, write(filepath.Join(root, "vendor", "lib", "x.go"), "p1", "")); out != "" {
 		t.Errorf("hook in a submodule said %q, want nothing", out)
 	}
@@ -49,7 +50,7 @@ func TestHookIgnoresOuterRulesInSubmodule(t *testing.T) {
 func TestInitInAWorktree(t *testing.T) {
 	root := project(t, "")
 	sub := filepath.Join(root, "sub")
-	writeAt(t, root, "sub/.git", "gitdir: x\n")
+	gitlink(t, root, "sub")
 	t.Chdir(sub)
 
 	for _, cmd := range []string{"init", "uninstall"} {
@@ -99,7 +100,7 @@ func TestCheckSkipsNestedRepositories(t *testing.T) {
 	if code, _, errOut := runCmd("compile"); code != exitOK {
 		t.Fatalf("compile = %d, stderr %q", code, errOut)
 	}
-	writeAt(t, root, "lib/.git", "gitdir: x\n")
+	gitlink(t, root, "lib")
 	writeAt(t, root, "lib/a.go", "password = 1\n")
 	writeAt(t, root, "b.go", "password = 2\n")
 
@@ -166,11 +167,74 @@ func TestCheckInWorktree(t *testing.T) {
 // A submodule without rules has nothing to check, from inside it.
 func TestCheckInSubmoduleWithoutRules(t *testing.T) {
 	root := project(t, checkRules)
-	writeAt(t, root, "vendor/lib/.git", "gitdir: x\n")
+	gitlink(t, root, "vendor/lib")
 	writeAt(t, root, "vendor/lib/x.go", "password = 1\n")
 	t.Chdir(filepath.Join(root, "vendor", "lib"))
 	code, out, errOut := runCmd("check", "x.go")
 	if code != exitOK || !strings.Contains(out, "nothing to check") || strings.Contains(out, "x.go:1:1") {
 		t.Errorf("check in a submodule = %d, stdout %q, stderr %q; want 0 and nothing to check", code, out, errOut)
+	}
+}
+
+// A .git folder git doesn't recognise, as one write into src/.git/ leaves,
+// ends no project: the files beside it are still the outer project's, as
+// git lists them, so the hook still denies, checks and logs them.
+func TestHookKeepsRulesBesideAGitGitIgnores(t *testing.T) {
+	clock(t, time.Now())
+	root := project(t, checkRules)
+	writeAt(t, root, "src/.git/x", "")
+
+	o, out := hook(t, write(filepath.Join(root, "src", "b.go"), "p1", ""))
+	if o.HookSpecificOutput.PermissionDecision != "deny" || !strings.Contains(o.HookSpecificOutput.PermissionDecisionReason, "src/b.go") {
+		t.Errorf("write beside src/.git: %s, want a deny naming src/b.go", out)
+	}
+	if o, _ := postHook(t, root, "post-write", "src/b.go", "package src\n\nvar password = 1\n"); o.Decision != "block" || !strings.Contains(o.Reason, "src/b.go:3:5:") {
+		t.Errorf("check beside src/.git: decision %q, reason %q; want block on src/b.go:3:5", o.Decision, o.Reason)
+	}
+	log, err := os.ReadFile(filepath.Join(root, ".stele", "log.jsonl"))
+	if err != nil || !strings.Contains(string(log), "src/b.go") {
+		t.Errorf("log.jsonl names no src/b.go (err %v):\n%s", err, log)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "src", ".stele")); err == nil {
+		t.Error("the hook took src/ for a project of its own")
+	}
+}
+
+// A write into a .git, or of a .git file, asks: one git recognises would end
+// the project, and its rules with it.
+func TestHookAsksForGit(t *testing.T) {
+	clock(t, time.Now())
+	for _, rel := range []string{"src/.git", "src/.git/x", "src/.git/HEAD", ".git/config", ".git/hooks/pre-commit"} {
+		t.Run(rel, func(t *testing.T) {
+			root := project(t, hookRules)
+			o, out := hook(t, write(filepath.Join(root, filepath.FromSlash(rel)), "p1", ""))
+			if !asks(t, o, rel) || !strings.Contains(o.HookSpecificOutput.PermissionDecisionReason, ".git folder") {
+				t.Errorf("a write to %s: %s, want an ask", rel, out)
+			}
+		})
+	}
+	for _, rel := range []string{".gitignore", "src/.gitattributes", "x.git/y.go", ".github/workflows/ci.yml"} {
+		t.Run("not "+rel, func(t *testing.T) {
+			root := project(t, hookRules)
+			if o, _ := hook(t, write(filepath.Join(root, filepath.FromSlash(rel)), "p1", "")); o.HookSpecificOutput.PermissionDecision == "ask" {
+				t.Errorf("asked for %s", rel)
+			}
+		})
+	}
+}
+
+// stele check, as git, takes the files beside a .git git doesn't recognise
+// for the outer project's.
+func TestCheckBesideAGitGitIgnores(t *testing.T) {
+	root := project(t, checkRules)
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile = %d, stderr %q", code, errOut)
+	}
+	writeAt(t, root, "lib/.git/x", "")
+	writeAt(t, root, "lib/a.go", "password = 1\n")
+
+	code, out, errOut := runCmd("check", "lib/a.go")
+	if code != exitFailed || !strings.Contains(out, "lib/a.go:1:1: error") || strings.Contains(out, "skipped") {
+		t.Errorf("check = %d, stdout %q, stderr %q; want lib/a.go checked", code, out, errOut)
 	}
 }

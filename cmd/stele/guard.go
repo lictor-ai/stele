@@ -18,8 +18,9 @@ import (
 // The agent's project settings count too: they load stele's hooks, and the
 // agent may reload them mid-session, so an edit can switch stele off at once
 // (#56). So does the rules file the agent loads at launch (#68): an edit
-// there changes the rules it reads.
-var ownNames = append([]string{"stele.md", enforce.FileName, "stele.lock", ".stele", "**/.stele/"}, agentNames()...)
+// there changes the rules it reads. And so does a .git at any depth: one git
+// recognises ends the project, and the rules with it.
+var ownNames = append([]string{"stele.md", enforce.FileName, "stele.lock", ".stele", "**/.stele/", ".git", "**/.git/"}, agentNames()...)
 
 // agentNames are every agent's settings files and rules file, at any depth:
 // whichever agent writes, a change to another's can switch stele off for it.
