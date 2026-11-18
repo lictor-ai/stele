@@ -71,25 +71,32 @@ func readGitlink(file string) (string, bool) {
 		return "", false
 	}
 	p := strings.TrimRight(string(rest), " \t\r\n")
-	if p == "" || strings.ContainsAny(p, "\n\x00") {
+	if p == "" || strings.ContainsAny(p, "\n\x00") || remote(p) {
 		return "", false
 	}
 	return filepath.FromSlash(p), true
 }
 
+// remote reports whether p names a network share, \\host\share or
+// //host/share: the hook never reaches across the network to look.
+func remote(p string) bool {
+	return strings.HasPrefix(p, `\\`) || strings.HasPrefix(p, "//")
+}
+
 // isGitDir reports whether d is a directory git would take for a
-// repository: a HEAD file, and objects/ and refs/ in it, or in the common
-// directory its commondir file names, as a worktree's has.
+// repository: a HEAD git accepts, and objects/ and refs/ in it, or in the
+// common directory its commondir file names, as a worktree's has.
 func isGitDir(d string) bool {
-	if info, err := os.Stat(filepath.Join(d, "HEAD")); err != nil || !info.Mode().IsRegular() {
+	if !validHead(filepath.Join(d, "HEAD")) {
 		return false
 	}
 	common := d
 	if data, ok := readSmall(filepath.Join(d, "commondir")); ok {
-		p := filepath.FromSlash(strings.TrimRight(string(data), " \t\r\n"))
-		if p == "" {
+		raw := strings.TrimRight(string(data), " \t\r\n")
+		if raw == "" || remote(raw) {
 			return false
 		}
+		p := filepath.FromSlash(raw)
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(d, p)
 		}
@@ -97,6 +104,37 @@ func isGitDir(d string) bool {
 	}
 	for _, sub := range []string{"objects", "refs"} {
 		if info, err := os.Stat(filepath.Join(common, sub)); err != nil || !info.IsDir() {
+			return false
+		}
+	}
+	return true
+}
+
+// validHead reports whether head is a HEAD git accepts, as its
+// validate_headref does: a symlink into refs/, a "ref: refs/..." line, or an
+// object id of 40 or 64 hex digits.
+func validHead(head string) bool {
+	info, err := os.Lstat(head)
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		to, err := os.Readlink(head)
+		return err == nil && strings.HasPrefix(filepath.ToSlash(to), "refs/")
+	}
+	data, ok := readSmall(head)
+	if !ok {
+		return false
+	}
+	if rest, ok := bytes.CutPrefix(data, []byte("ref:")); ok {
+		return bytes.HasPrefix(bytes.TrimLeft(rest, " \t"), []byte("refs/"))
+	}
+	id := strings.TrimRight(string(data), " \t\r\n")
+	if len(id) != 40 && len(id) != 64 {
+		return false
+	}
+	for _, c := range id {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
 			return false
 		}
 	}

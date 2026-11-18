@@ -18,9 +18,8 @@ import (
 // The agent's project settings count too: they load stele's hooks, and the
 // agent may reload them mid-session, so an edit can switch stele off at once
 // (#56). So does the rules file the agent loads at launch (#68): an edit
-// there changes the rules it reads. And so does a .git at any depth: one git
-// recognises ends the project, and the rules with it.
-var ownNames = append([]string{"stele.md", enforce.FileName, "stele.lock", ".stele", "**/.stele/", ".git", "**/.git/"}, agentNames()...)
+// there changes the rules it reads.
+var ownNames = append([]string{"stele.md", enforce.FileName, "stele.lock", ".stele", "**/.stele/"}, agentNames()...)
 
 // agentNames are every agent's settings files and rules file, at any depth:
 // whichever agent writes, a change to another's can switch stele off for it.
@@ -63,13 +62,14 @@ func allSettings() []string {
 // 8.3 short name, which only a same-file test can tell, is caught for the
 // root's stele.md, stele.json, stele.lock, .stele/, and the agent's settings
 // files and rules file only. A change there can weaken stele or turn it off,
-// so the user is asked every time (#52).
+// so the user is asked every time (#52). So is a write to a .git, or into
+// one, below the root, under any name: one git recognises ends the project.
 func guarded(root, rel, file string) bool {
-	if ownName(rel) {
+	if ownName(rel) || gitName(root, rel) || inGit(root, file) {
 		return true
 	}
 	if r, ok := safefile.Resolve(file); ok && r != file {
-		if _, rrel, ok := target(r); ok && ownName(rrel) {
+		if rroot, rrel, ok := target(r); ok && (ownName(rrel) || gitName(rroot, rrel)) {
 			return true
 		}
 	}
@@ -121,6 +121,46 @@ func ownName(rel string) bool {
 		if scope.Match(p, clean) {
 			return true
 		}
+	}
+	return false
+}
+
+// gitName reports whether rel, relative to root, is a .git or inside one,
+// after cleanRel. Inside the root's own repository is left out: stele.md or
+// stele.json beside it keeps the project, and git writes there all the time.
+func gitName(root, rel string) bool {
+	segs := strings.Split(cleanRel(rel), "/")
+	for i, s := range segs {
+		if !scope.Match("/.git", s) {
+			continue
+		}
+		if i == 0 && len(segs) > 1 && holdsGit(root) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// inGit reports whether file, or a directory on its way below root, is a
+// .git under another name, such as an 8.3 short name: the same file as the
+// .git beside it. Inside the root's own repository is left out, as gitName
+// leaves it.
+func inGit(root, file string) bool {
+	rootGit := root != "" && holdsGit(root)
+	for d := file; d != root && filepath.Dir(d) != d; d = filepath.Dir(d) {
+		info, err := os.Stat(d)
+		if err != nil {
+			continue
+		}
+		git, err := os.Stat(filepath.Join(filepath.Dir(d), ".git"))
+		if err != nil || !os.SameFile(info, git) {
+			continue
+		}
+		if rootGit && filepath.Dir(d) == root && d != file {
+			continue
+		}
+		return true
 	}
 	return false
 }

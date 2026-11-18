@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -200,26 +201,80 @@ func TestHookKeepsRulesBesideAGitGitIgnores(t *testing.T) {
 	}
 }
 
-// A write into a .git, or of a .git file, asks: one git recognises would end
-// the project, and its rules with it.
+// A write that makes or changes a .git below the root asks: one git
+// recognises would end the project, and its rules with it. Inside the
+// root's own repository, git's own files, it does not: stele.md beside it
+// keeps the project.
 func TestHookAsksForGit(t *testing.T) {
 	clock(t, time.Now())
-	for _, rel := range []string{"src/.git", "src/.git/x", "src/.git/HEAD", ".git/config", ".git/hooks/pre-commit"} {
+	for _, rel := range []string{"src/.git", "src/.git/x", "src/.git/HEAD", ".git", "src/.git/sub/.git/x", ".git/modules/x/.git"} {
 		t.Run(rel, func(t *testing.T) {
 			root := project(t, hookRules)
 			o, out := hook(t, write(filepath.Join(root, filepath.FromSlash(rel)), "p1", ""))
-			if !asks(t, o, rel) || !strings.Contains(o.HookSpecificOutput.PermissionDecisionReason, ".git folder") {
+			if !asks(t, o, rel) || !strings.Contains(o.HookSpecificOutput.PermissionDecisionReason, "or a .git") {
 				t.Errorf("a write to %s: %s, want an ask", rel, out)
 			}
 		})
 	}
-	for _, rel := range []string{".gitignore", "src/.gitattributes", "x.git/y.go", ".github/workflows/ci.yml"} {
+	for _, rel := range []string{".gitignore", "src/.gitattributes", "x.git/y.go", ".github/workflows/ci.yml", ".git/config", ".git/hooks/pre-commit", ".git/index.lock", ".git/info/exclude"} {
 		t.Run("not "+rel, func(t *testing.T) {
 			root := project(t, hookRules)
 			if o, _ := hook(t, write(filepath.Join(root, filepath.FromSlash(rel)), "p1", "")); o.HookSpecificOutput.PermissionDecision == "ask" {
 				t.Errorf("asked for %s", rel)
 			}
 		})
+	}
+	// The root's .git counts as git's own only when git recognises it.
+	t.Run("a root .git git doesn't recognise", func(t *testing.T) {
+		root := project(t, hookRules)
+		if err := os.Remove(filepath.Join(root, ".git", "HEAD")); err != nil {
+			t.Fatal(err)
+		}
+		if o, out := hook(t, write(filepath.Join(root, ".git", "HEAD"), "p1", "")); !asks(t, o, ".git/HEAD") {
+			t.Errorf("a write to .git/HEAD beside no repository: %s, want an ask", out)
+		}
+	})
+}
+
+// A Bash command that writes into a .git asks, as a Write does.
+func TestHookBashAsksForGit(t *testing.T) {
+	root := project(t, hookRules)
+	clock(t, time.Now())
+	for command, rel := range map[string]string{
+		"echo > src/.git/HEAD":              "src/.git/HEAD",
+		"echo 'gitdir: ../.git' > src/.git": "src/.git",
+	} {
+		o, out := hook(t, bash(command, root, "p1", ""))
+		if !asks(t, o, rel) {
+			t.Errorf("%s: %s, want an ask", command, out)
+		}
+	}
+	if o, out := hook(t, bash("echo x > .git/info/exclude", root, "p1", "")); o.HookSpecificOutput.PermissionDecision == "ask" {
+		t.Errorf("a write into the root's own repository asked: %s", out)
+	}
+}
+
+// A .git under its 8.3 short name asks too.
+func TestHookAsksForGitShortName(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("8.3 short names are Windows only")
+	}
+	clock(t, time.Now())
+	root := project(t, hookRules)
+	writeAt(t, root, "src/.git/x", "")
+	short := filepath.Join(root, "src", "GIT~1")
+	if _, err := os.Stat(short); err != nil {
+		t.Skipf("no 8.3 short name for src/.git on this volume: %v", err)
+	}
+	o, out := hook(t, write(filepath.Join(short, "HEAD"), "p1", ""))
+	if o.HookSpecificOutput.PermissionDecision != "ask" {
+		t.Errorf("a write to src/GIT~1/HEAD: %s, want an ask", out)
+	}
+	// The root's own repository under its short name stays git's.
+	if rootShort := filepath.Join(root, "GIT~1"); func() bool { _, err := os.Stat(rootShort); return err == nil }() {
+		if o, out := hook(t, write(filepath.Join(rootShort, "config"), "p1", "")); o.HookSpecificOutput.PermissionDecision == "ask" {
+			t.Errorf("a write to GIT~1/config in the root's repository asked: %s", out)
+		}
 	}
 }
 

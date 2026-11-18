@@ -103,15 +103,21 @@ func TestFindRootIgnoresGitGitDoesNotRecognise(t *testing.T) {
 	gitDir(t, filepath.Join(repo, ".git"))
 	writeAt(t, repo, "stele.md", "")
 	for dir, files := range map[string]map[string]string{
-		"empty":     {".git/x": ""},
-		"nohead":    {".git/objects/x": "", ".git/refs/x": ""},
-		"noobjects": {".git/HEAD": "ref: refs/heads/main\n", ".git/refs/x": ""},
-		"headdir":   {".git/HEAD/x": "", ".git/objects/x": "", ".git/refs/x": ""},
-		"plainfile": {".git": "not a gitlink\n"},
-		"missing":   {".git": "gitdir: ../nowhere\n"},
-		"emptylink": {".git": "gitdir: \n"},
-		"tojunk":    {".git": "gitdir: ../empty/.git\n"},
-		"badcommon": {".git": "gitdir: wt\n", "wt/HEAD": "ref: refs/heads/main\n", "wt/commondir": "../nowhere\n"},
+		"empty":       {".git/x": ""},
+		"nohead":      {".git/objects/x": "", ".git/refs/x": ""},
+		"noobjects":   {".git/HEAD": "ref: refs/heads/main\n", ".git/refs/x": ""},
+		"emptyhead":   {".git/HEAD": "", ".git/objects/x": "", ".git/refs/x": ""},
+		"junkhead":    {".git/HEAD": "x\n", ".git/objects/x": "", ".git/refs/x": ""},
+		"badref":      {".git/HEAD": "ref: heads/main\n", ".git/objects/x": "", ".git/refs/x": ""},
+		"shortid":     {".git/HEAD": "abc123\n", ".git/objects/x": "", ".git/refs/x": ""},
+		"emptycommon": {".git": "gitdir: wt2\n", "wt2/HEAD": "ref: refs/heads/main\n", "wt2/commondir": ""},
+		"uncgitdir":   {".git": "gitdir: //host/share/x\n"},
+		"headdir":     {".git/HEAD/x": "", ".git/objects/x": "", ".git/refs/x": ""},
+		"plainfile":   {".git": "not a gitlink\n"},
+		"missing":     {".git": "gitdir: ../nowhere\n"},
+		"emptylink":   {".git": "gitdir: \n"},
+		"tojunk":      {".git": "gitdir: ../empty/.git\n"},
+		"badcommon":   {".git": "gitdir: wt\n", "wt/HEAD": "ref: refs/heads/main\n", "wt/commondir": "../nowhere\n"},
 	} {
 		for name, data := range files {
 			writeAt(t, repo, dir+"/"+name, data)
