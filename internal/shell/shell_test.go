@@ -1078,6 +1078,13 @@ func TestTargetsCaps(t *testing.T) {
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("eval of itself took %v", d)
 	}
+	// Copies of a long variable are counted before they are joined: past the
+	// budget, nothing is built or read, and the count stops near the budget.
+	long := "X='" + strings.Repeat("a", 50<<10) + "'; eval" + strings.Repeat(" $X", 20)
+	if r := globRun(long, cwd); r.unknown != 1 || r.nested <= maxNested || r.nested > maxNested+readCost+len(long) {
+		t.Errorf("eval of 20 copies of 50 KB: unknown %d, nested %d; want 1 and the budget %d hit, within %d",
+			r.unknown, r.nested, maxNested, maxNested+readCost+len(long))
+	}
 	deep := strings.Repeat("$(", 100) + "echo > f" + strings.Repeat(")", 100)
 	if got, _ := Targets(deep, cwd); len(got) != 0 {
 		t.Errorf("past the nesting cap: %v", got)

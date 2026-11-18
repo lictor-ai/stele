@@ -886,23 +886,32 @@ func (p *parser) eval(args []word, inPipe bool) {
 		p.res.unknown++ // past the budget of nested scripts: not read
 		return
 	}
-	var b strings.Builder
-	for i, a := range args {
+	// The string's length first: it is counted against the budget before
+	// it is built, so many copies of a long variable are not joined (#169).
+	n := len(args) - 1
+	for _, a := range args {
 		if a.dynamic || a.glob {
 			p.res.unknown++
 			return
 		}
+		if n <= maxNested {
+			n += len(a.text)
+		}
+	}
+	if n <= 0 {
+		return
+	}
+	if !p.res.reread(n) {
+		p.res.unknown++
+		return
+	}
+	var b strings.Builder
+	b.Grow(n)
+	for i, a := range args {
 		if i > 0 {
 			b.WriteByte(' ')
 		}
 		b.WriteString(a.text)
-	}
-	if b.Len() == 0 {
-		return
-	}
-	if !p.res.reread(b.Len()) {
-		p.res.unknown++
-		return
 	}
 	q := &parser{src: b.String(), res: p.res, vars: p.vars, dyn: p.dyn, dir: p.dir, dirOK: p.dirOK, depth: p.depth}
 	if !inPipe {
