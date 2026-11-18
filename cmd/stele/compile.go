@@ -63,12 +63,15 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 	for _, n := range generatedNotes(root, r.Files) {
 		fmt.Fprintf(stderr, "stele compile: %s\n", n)
 	}
+	for _, n := range check.Notes(r.Index) {
+		fmt.Fprintf(stderr, "stele compile: rule %s \"%s\"%s: %s\n", n.RuleID, n.Excerpt, where(r.Lock, n.RuleID), n.Message)
+	}
 	ps, _ := check.Validate(ctx, r.Index, plugin.NamedCheckers(root))
 	if len(ps) == 0 {
 		return exitOK
 	}
 	printProblems(stdout, r.Lock, ps)
-	fmt.Fprintf(stdout, "%s in the rules: stele check fails, and the hook skips these rules, until they are fixed\n", plural(len(ps), "problem"))
+	fmt.Fprintf(stdout, "%s in the rules: stele check fails, and the hook doesn't check these rules, until they are fixed\n", plural(len(ps), "problem"))
 	return exitFailed
 }
 

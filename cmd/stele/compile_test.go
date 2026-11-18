@@ -120,8 +120,10 @@ func TestCompileInvalidRule(t *testing.T) {
 
 func TestCompileInvalidRuleKinds(t *testing.T) {
 	for name, meta := range map[string]string{
-		"unknown checker": "check: eslint\n",
-		"bad blocking":    "check: regex\npattern: x+\nblocking: maybe\n",
+		"unknown checker":   "check: eslint\n",
+		"bad blocking":      "check: regex\npattern: x+\nblocking: maybe\n",
+		"pattern, no check": "pattern: x+\n",    // #148
+		"message, no check": "message: use y\n", // #148
 	} {
 		t.Run(name, func(t *testing.T) {
 			project(t, meta+"\nA rule.\n")
@@ -129,6 +131,37 @@ func TestCompileInvalidRuleKinds(t *testing.T) {
 				t.Errorf("compile = %d, stdout %q, want exit %d and the problem", code, out, exitFailed)
 			}
 		})
+	}
+}
+
+// Other keys on a rule with no check are kept without a word (D46); blocking
+// there does nothing, which a note says (#148).
+func TestCompileGuidanceKeys(t *testing.T) {
+	for name, tt := range map[string]struct{ meta, note string }{
+		"owner":       {"owner: alice\n", ""},
+		"unknown key": {"scopes: [\"*.go\"]\n", ""},
+		"blocking":    {"blocking: false\n", `"A rule." (stelemd rule 1): blocking without check: the rule is guidance only, so blocking does nothing`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			project(t, tt.meta+"\nA rule.\n")
+			code, out, errOut := runCmd("compile")
+			if code != exitOK || strings.Contains(out, "invalid rule") {
+				t.Fatalf("compile = %d, stdout %q, want exit 0 and no problem", code, out)
+			}
+			if noted := strings.Contains(errOut, "stele compile: rule "); noted != (tt.note != "") || !strings.Contains(errOut, tt.note) {
+				t.Errorf("stderr = %q, want note %q", errOut, tt.note)
+			}
+		})
+	}
+}
+
+// A scope with a comma and no brackets would read as one glob that matches
+// nothing (#146): stele.md does not parse, as for any bad list.
+func TestCompileBareCommaScope(t *testing.T) {
+	project(t, "scope: *.go, *.ts\n\nA rule.\n")
+	code, _, errOut := runCmd("compile")
+	if code == exitOK || !strings.Contains(errOut, `stele.md:1: scope: a comma outside [...] makes *.go, *.ts one glob: write a list as [*.go, *.ts]`) {
+		t.Errorf("compile = %d, stderr %q, want the bad scope named", code, errOut)
 	}
 }
 

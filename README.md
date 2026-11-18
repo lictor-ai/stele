@@ -256,8 +256,8 @@ Never put credentials in code, config or tests. Read them from the environment.
 
 | Key | Meaning |
 |---|---|
-| `scope` | Path globs: `["a", "b"]` or one bare value. No scope means every file. |
-| `check` | `regex`, the built-in checker, or a [checker plugin](#checker-plugins) `stele.json` lists, such as [`opengrep`](#opengrep-checker) or [`trivy`](#trivy-checker). Any other value is an invalid rule. |
+| `scope` | Path globs: `["a", "b"]` or one bare value. No scope means every file. A bare value with a comma outside `{...}`, such as `*.go, *.ts`, is an error: write the list in brackets. |
+| `check` | `regex`, the built-in checker, or a [checker plugin](#checker-plugins) `stele.json` lists, such as [`opengrep`](#opengrep-checker) or [`trivy`](#trivy-checker). Any other value is an invalid rule. Without `check`, a rule with `pattern` or `message` is invalid: nothing would check it. `blocking` without `check` gets a note from `stele compile`. |
 | `pattern` | A Go (RE2) regular expression, for `check: regex`, taken as written: quotes are part of it, so `pattern: "net/http"` matches `"net/http"` with its quotes, as in an import, not a bare mention of net/http. |
 | `message` | What a violation says. Default: the start of the rule. Taken as written, quotes included. |
 | `blocking` | `true` (the default with `check`) or `false`. |
@@ -314,7 +314,7 @@ With `--base`, `stele check` also says when the branch adds, changes or deletes 
 | Exit | Meaning |
 |---|---|
 | 0 | Rules are valid (or there are none) and there is no blocking violation |
-| 1 | A rule is invalid, `stele.lock` or `.claude/rules/stele-rules.md` is out of date (`stele.lock` also when `stele.json` lists a shared rules source it has no pin for), or there is a blocking violation |
+| 1 | `stele.md` does not parse, a rule is invalid, `stele.lock` or `.claude/rules/stele-rules.md` is out of date (`stele.lock` also when `stele.json` lists a shared rules source it has no pin for), or there is a blocking violation |
 | 2 | stele couldn't run: bad flags, no git, a git inside the project, unknown `--base` ref, no merge base, a bad `sources` in `stele.json`, a [shared rules](#shared-rules-from-another-repository) repository it can't read, a [plugin](#plugins) that is missing, refused, crashed, timed out or answered wrong, or with `--push` a sink that failed |
 
 GitHub Actions:

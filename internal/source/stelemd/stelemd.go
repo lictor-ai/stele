@@ -9,7 +9,8 @@
 // opening with "Note: ..." or a URL is still body. A value is the rest of the
 // line, trimmed. The values of description, check and blocking, and each item
 // of tags and scope, lose one pair of matching outer quotes. Every other key is
-// kept as written, for its checker.
+// kept as written, for its checker. A scope without brackets or quotes may not
+// hold a comma outside braces: a list needs [...].
 //
 // HTML comments before a rule's metadata are skipped, so the header comment
 // stele init writes is not a rule. As in a code block, a --- inside a comment
@@ -262,6 +263,10 @@ func parseRule(lines []string, first int) (r source.Rule, ok bool, err error) {
 			if key == "tags" {
 				r.Tags = list
 			} else {
+				if bareComma(value) {
+					v := strings.TrimSpace(value)
+					return fail(i, "scope: a comma outside [...] makes %s one glob: write a list as [%s]", v, strings.TrimRight(v, ", \t"))
+				}
 				if err := scope.Validate(list); err != nil {
 					return fail(i, "%s: %v", key, err)
 				}
@@ -335,6 +340,24 @@ func unquote(s string) string {
 		return s[1 : len(s)-1]
 	}
 	return s
+}
+
+// bareComma reports whether a value written without brackets would split
+// into more than one item in brackets: scope: *.go, *.ts or "a", "b", which
+// read as one glob that matches nothing (#146). It splits as a list does, so
+// a comma inside braces, as in *.{go,ts}, or inside one quoted glob, as in
+// "a, b/*", is part of the glob. A value that would not parse as a list,
+// such as *.go, with nothing after the comma, counts when it holds a comma.
+func bareComma(s string) bool {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "[") {
+		return false
+	}
+	items, err := parseList("[" + s + "]")
+	if err != nil {
+		return strings.Contains(s, ",")
+	}
+	return len(items) > 1
 }
 
 // parseList reads "[a, b]" as a list and anything else as a list of one.

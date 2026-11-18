@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/lictor-ai/stele/internal/check"
@@ -192,6 +193,27 @@ func printRulesJSON(w io.Writer, rep rulesReport) {
 	w.Write(append(data, '\n'))
 }
 
+// showScope joins a scope's globs with ", ". A glob holding a comma outside
+// braces is quoted, so one glob never reads as a list (#146).
+func showScope(globs []string) string {
+	out := make([]string, len(globs))
+	for i, g := range globs {
+		out[i] = g
+		depth := 0
+		for _, c := range g {
+			if c == '{' {
+				depth++
+			} else if c == '}' && depth > 0 {
+				depth--
+			} else if c == ',' && depth == 0 {
+				out[i] = strconv.Quote(g)
+				break
+			}
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
 // printRules prints two lines a rule: its id, source and scope, then the
 // start of its text.
 func printRules(w io.Writer, rep rulesReport) {
@@ -202,7 +224,7 @@ func printRules(w io.Writer, rep rulesReport) {
 		}
 		scope := "every file"
 		if len(r.Scope) > 0 {
-			scope = strings.Join(r.Scope, ", ")
+			scope = showScope(r.Scope)
 		}
 		fmt.Fprintf(w, "%s  %s  %s\n  %s\n", r.ID, showPath(from), showPath(scope), showPath(check.Excerpt(r.Body)))
 	}
