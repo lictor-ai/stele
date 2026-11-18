@@ -1,8 +1,10 @@
 package shell
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +146,47 @@ func TestPowerShellTargetsCaps(t *testing.T) {
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("iex of itself took %v", d)
+	}
+}
+
+// A string's variables share the bash budget of bytes expanded (#171): many
+// copies of a long variable, or a chain of doublings, stop at it. Counted in
+// bytes expanded and allocated, not timed (#138).
+func TestPowerShellTargetsExpandBudget(t *testing.T) {
+	big := strings.Repeat("a", 50<<10)
+	chain := "$v0 = '" + big + "'; "
+	for i := range 30 {
+		chain += fmt.Sprintf("$v%d = \"$v%d$v%d\"; ", i+1, i, i)
+	}
+	for _, cmd := range []string{
+		"$x = '" + big + "'; Set-Content -Path \"" + strings.Repeat("$x", 20000) + "\" -Value 1",
+		"$x = '" + big + "'; echo 1 > \"" + strings.Repeat("${x}", 20000) + "\"",
+		chain + "echo 1 > $v30",
+	} {
+		r := &results{seen: map[string]int{}}
+		p := &psReader{res: r, vars: map[string]string{}, dir: "/w", dirOK: true}
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		p.run(cmd)
+		runtime.ReadMemStats(&after)
+		if r.unknown == 0 || r.grown != maxExpand+1 || len(r.out) != 0 {
+			t.Errorf("%.40s…: %v, unknown %d, expanded %d: the budget %d was not hit", cmd, r.out, r.unknown, r.grown, maxExpand)
+		}
+		if got, limit := after.TotalAlloc-before.TotalAlloc, uint64(64<<20); got > limit {
+			t.Errorf("%.40s…: allocated %d MiB, limit %d MiB", cmd, got>>20, limit>>20)
+		}
+	}
+	cwd := t.TempDir()
+	// Past the budget, a path that expands is unknown; one written out is
+	// still seen.
+	over := "$x = '" + big + "'; echo 1 > \"" + strings.Repeat("$x", 30) + "\"; echo 1 > b.go"
+	if got, unknown := PowerShellTargets(over, cwd); len(got) != 1 || filepath.Base(got[0].Path) != "b.go" || unknown == 0 {
+		t.Errorf("past the budget: %v, unknown %d; want b.go and unknown", got, unknown)
+	}
+	// Within it, a long value named a few times is still read.
+	within := "$x = '" + strings.Repeat("a", 100<<10) + "'; Set-Content -Path \"" + strings.Repeat("$x", 9) + ".go\" -Value 1"
+	if got, unknown := PowerShellTargets(within, cwd); len(got) != 1 || unknown != 0 {
+		t.Errorf("within the budget: %d targets, unknown %d; want 1 and none", len(got), unknown)
 	}
 }
 
