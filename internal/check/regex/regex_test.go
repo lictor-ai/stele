@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/lictor-ai/stele/internal/check"
+	"github.com/lictor-ai/stele/internal/index"
 )
 
 func TestMatch(t *testing.T) {
@@ -58,14 +59,79 @@ func TestMatch(t *testing.T) {
 		{"invalid then valid", `x`, "\xff\xfeéx", []Location{{1, 4}}},
 		{"invalid byte before a newline", `x`, "\xc3\nx", []Location{{2, 1}}},
 		{"match starting on an invalid byte", `.x`, "a\xffx", []Location{{1, 2}}},
+
+		// A line ends at "\n" or "\r\n": with (?m), $ matches before either
+		// (#147). A lone "\r" ends no line.
+		{"(?m)$, LF", `(?m)bar$`, "foo bar\nbar\n", []Location{{1, 5}, {2, 1}}},
+		{"(?m)$, CRLF", `(?m)bar$`, "foo bar\r\nbar\r\n", []Location{{1, 5}, {2, 1}}},
+		{"(?m)$, mixed line ends", `(?m)bar$`, "bar\r\nbar\nbar\r\nbar", []Location{{1, 1}, {2, 1}, {3, 1}, {4, 1}}},
+		{"(?m)$, lone CR ends no line", `(?m)bar$`, "bar\rbaz\nbar\rx", nil},
+		{"(?m)$, CRLF after multibyte", `(?m)x$`, "é\r\néx\r\n", []Location{{2, 2}}},
+		{"(?m)$, CRLF, case folded", `(?mi)BAR$`, "bar\r\n", []Location{{1, 1}}},
+		{"(?m)$, CRLF, ungreedy", `(?mU)a+$`, "aa\r\n", []Location{{1, 1}}},
+		{"(?m)$ inside a group, CRLF", `(?m)(?:x|y$)`, "ay\r\n", []Location{{1, 2}}},
+		{"(?m).$, CRLF: the last character, not the CR", `(?m).$`, "ab\r\ncd\r\n", []Location{{1, 2}, {2, 2}}},
+		{"(?m)$ then text, CRLF", `(?m)a$\s*^b`, "a\r\nb\r\n", []Location{{1, 1}}},
+		{"(?m)^, CRLF", `(?m)^x`, "x\r\nax\r\nx", []Location{{1, 1}, {3, 1}}},
+		{"no (?m): $ is the end of the file", `bar$`, "bar\r\nbar\r\n", nil},
+		{"no (?m): end of file, CRLF before", `bar$`, "x\r\nbar", []Location{{2, 1}}},
+		{"trailing blanks, CRLF", `(?m)[ \t]+$`, "a \r\nb\t\r\nc\r\n", []Location{{1, 2}, {2, 2}}},
+		// A pattern that names the CR still sees it.
+		{"names CR: CR at a line end", `(?m)\r$`, "a\r\nb\n", []Location{{1, 2}}},
+		{"names CR: CRLF", `\r\n`, "a\nb\r\n", []Location{{2, 2}}},
+		{"names CR: whitespace class takes it in", `(?m)\s+$`, "a\r\nb", []Location{{1, 2}}},
+		{"names CR: negated class takes it in", `(?m)[^;]$`, "a;\r\nb;", []Location{{1, 3}}},
+		{"escaped dollar is a dollar", `(?m)\$`, "a$\r\n", []Location{{1, 2}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Match(regexp.MustCompile(tt.pattern), []byte(tt.content))
+			got := Match(mustCompile(t, tt.pattern), []byte(tt.content))
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("Match (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func mustCompile(t *testing.T, pattern string) *regexp.Regexp {
+	t.Helper()
+	re, err := Compile(pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return re
+}
+
+// A CRLF file is checked as its LF copy: same lines, same columns, for any
+// pattern that cannot match the CR itself.
+func TestMatchCRLFLikeLF(t *testing.T) {
+	lf := "package a\n\nfunc f() { // TODO \n\treturn x;\n}\nlast line é;"
+	crlf := strings.ReplaceAll(lf, "\n", "\r\n")
+	for _, p := range []string{
+		`(?m);$`, `(?m)[ \t]+$`, `(?m)^\t`, `(?m)^$`, `(?m)TODO.*$`, `(?m)TODO $`,
+		`(?m)^}$`, `(?m)é;$`, `(?m)\w+$`, `(?m)(?:return|func).*$`,
+		`(?m)^package \w+$`, `;\z`, `(?m)x;$|^func`, `(?ms)TODO.*^\}$`,
+	} {
+		re := mustCompile(t, p)
+		want, got := Match(re, []byte(lf)), Match(re, []byte(crlf))
+		if len(want) == 0 {
+			t.Errorf("%s: no match in the LF file; the test checks nothing", p)
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("%s: CRLF (-LF +CRLF):\n%s", p, diff)
+		}
+	}
+}
+
+// Compile leaves a pattern with no (?m)$ as written.
+func TestCompileLeavesOthers(t *testing.T) {
+	for _, p := range []string{`foo`, `foo$`, `(?m)^foo`, `(?m)\$`, `(?m)[$]`, `a\z`} {
+		if got := mustCompile(t, p).String(); got != p {
+			t.Errorf("Compile(%q) = %q, want it unchanged", p, got)
+		}
+	}
+	if _, err := Compile("("); err == nil {
+		t.Error(`Compile("(") = nil error`)
 	}
 }
 
@@ -205,6 +271,48 @@ func TestCheck(t *testing.T) {
 	cancel()
 	if _, err := New().Check(ctx, root, rules, files); err == nil {
 		t.Error("cancelled context: Check = nil, want an error")
+	}
+}
+
+// stele check and the check after a write both treat "\r\n" as a line end
+// (#147): the same rule flags a file whether its lines end in LF or CRLF.
+func TestCheckCRLF(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "lf.txt", "foo\nfoo bar\nbaz\n")
+	writeFile(t, root, "crlf.txt", "foo\r\nfoo bar\r\nbaz\r\n")
+	rules := []check.Rule{rule("bar", map[string]string{"pattern": `(?m)bar$`})}
+	got, err := New().Check(context.Background(), root, rules, []string{"crlf.txt", "lf.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := check.Result{Violations: []check.Violation{
+		{RuleID: "bar", File: "crlf.txt", Line: 2, Column: 5},
+		{RuleID: "bar", File: "lf.txt", Line: 2, Column: 5},
+	}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("Check (-want +got):\n%s", diff)
+	}
+}
+
+// After an Edit, only the lines it wrote are checked; in a CRLF file, an
+// edit's line found from its LF text, and a violation on it found by (?m)$.
+func TestRunFileLinesCRLF(t *testing.T) {
+	idx := index.Index{Rules: []index.Entry{{
+		ID: "semi", Body: "No semicolons.", Meta: map[string]string{"check": Name, "pattern": `(?m);$`},
+	}}}
+	cs := map[string]check.Checker{Name: New()}
+	for _, nl := range []string{"\n", "\r\n"} {
+		content := []byte(strings.Join([]string{"a;", "b", "c := 1;", "d;", ""}, nl))
+		spans := check.Spans(content, []check.Fragment{{Text: "b\nc := 1;\n"}})
+		keep := func(line int) bool { return check.Contain(spans, line) }
+		r := check.RunFileLines(idx, "a.go", content, cs, keep)
+		var got []Location
+		for _, v := range r.Violations {
+			got = append(got, Location{Line: v.Line, Column: v.Column})
+		}
+		if diff := cmp.Diff([]Location{{Line: 3, Column: 7}}, got); diff != "" {
+			t.Errorf("line ends %q: violations (-want +got):\n%s", nl, diff)
+		}
 	}
 }
 

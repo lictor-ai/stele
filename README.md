@@ -994,7 +994,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 ### Checks
 
-**A regex check only catches what a pattern can express.** It matches text, not code, so it also fires in comments and strings. RE2 has no lookaround or backreferences. The pattern runs over the whole file: use `(?m)` for `^` and `$` to mean line start and end.
+**A regex check only catches what a pattern can express.** It matches text, not code, so it also fires in comments and strings. RE2 has no lookaround or backreferences. The pattern runs over the whole file: use `(?m)` for `^` and `$` to mean line start and end. A line ends at LF or CRLF, so `(?m)foo$` flags the same lines in a Windows checkout as in CI. The CR is still text: a pattern that can match it, like `\s+$` or `[^;]$`, does, so use `[ \t]+$` for trailing blanks. A lone CR ends no line.
 
 **After an Edit, only the lines it wrote are checked.** If stele can't locate them (Claude Code sent no patch and the new text appears more than once), nothing is checked after that edit. Older violations in the file are left to `stele check`.
 
