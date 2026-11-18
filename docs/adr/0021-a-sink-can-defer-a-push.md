@@ -43,18 +43,20 @@ took none of the records and wants them all sent again on a later push.
 `reason` is optional, a string, for the user; stele makes it one printable
 line and keeps at most 200 bytes of it. `deferred` is valid only with
 `accepted: 0`: `"deferred": true` with any other `accepted`, or with none, is
-a protocol error, as is a `deferred` that is not a boolean or a `reason` that
-is not a string. A protocol error fails that sink (exit 2), as any bad
+a protocol error, as is a `deferred` that is not a boolean or `null`, or a
+`reason` that is not a string or `null`. `"deferred"` must be spelled in
+lower case and given once, as `"protocol"` and `"error"` are. A protocol error fails that sink (exit 2), as any bad
 answer does: a sink that says both "took these" and "sent nothing" is
 broken, and guessing which it meant would either lose lines or send them
-twice. `"deferred": false` is the same as no `deferred`, and a `reason`
+twice. `"deferred": false` or `null` is the same as no `deferred`, and a `reason`
 without `"deferred": true` is ignored, as any other key stele does not read.
 
 **The cursor** (amends D83). A deferral does not move the cursor. stele
 stops that sink for this run, as after a partial answer, and keeps the
 lines for the next push. It records the deferral, its reason and time, in
 the sink's sealed cursor, `.stele/push/<sink>.json`, which a first deferral
-creates; any later answer that is not a deferral clears it. A deferral
+creates; the sink's next answer that is neither an error nor a deferral
+clears it (a sink that fails, crashes or times out keeps it). A deferral
 after earlier batches of the same run keeps what those batches moved.
 
 **What it says, and the exit** (amends D83). `stele push` prints
@@ -88,3 +90,5 @@ cursor.
   the lines keep waiting, and the log may rotate them out before they are
   sent, as for a sink not run at all.
 * In CI a deferred record is not sent and not kept.
+* A stele from before this decision reads a deferral as `accepted: 0`: a
+  partial push, exit 1, the records kept for the next push.

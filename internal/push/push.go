@@ -96,7 +96,8 @@ type cursor struct {
 	Pushed  int         `json:"pushed"`
 	TS      time.Time   `json:"ts"`
 	// Deferred is the sink's last answer when it deferred: why, and when.
-	// Any other answer clears it (ADR-0021).
+	// The next answer that is neither an error nor a deferral clears it
+	// (ADR-0021).
 	Deferred *deferral `json:"deferred,omitempty"`
 }
 
@@ -245,6 +246,13 @@ func pushOne(ctx context.Context, root string, key sign.Key, project string, t T
 			// and only the reason is kept, for stele status.
 			c.Deferred = &deferral{Reason: a.Reason, TS: now().UTC()}
 			r.Deferred, r.Reason, r.Pending = true, a.Reason, len(lines)
+			if r.Gap && r.Sent == 0 && c.Pos.File != "" {
+				// The cursor's line rotated out, and this read already
+				// started at the log's beginning: start there next time
+				// too, so the gap is said once however long the sink
+				// defers.
+				c.Pos = journal.Pos{}
+			}
 			if serr := saveCursor(root, key, c); serr != nil {
 				r.Err = serr
 			}

@@ -961,7 +961,7 @@ batch by what the sink accepted (`{"accepted": n}`, the first `n` in order):
 at least once. A sink may instead defer (`"deferred": true`, only with
 `accepted: 0`, ADR-0021, D92): the cursor stays, the sink stops for the run
 with no failure, and the cursor keeps the reason (`push.Waiting`) for
-`stele status` until the sink's next other answer. `stele check --push` pushes the pending lines where the key
+`stele status` until the sink's next answer that is neither an error nor a deferral. `stele check --push` pushes the pending lines where the key
 and `.stele/` exist, and in CI sends one record built as the log's `check` line, never the
 report. `share_briefs` is accepted and has no effect: no record holds a brief.
 Neither runs from `stele hook`, `stele stats` or `stele mcp`.

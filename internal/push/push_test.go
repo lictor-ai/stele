@@ -382,6 +382,99 @@ func TestPushDeferredAfterABatch(t *testing.T) {
 	if w, _ := Pending(root, testKey, "p1", "s"); w.Lines != 1 || !w.Deferred || !w.LastPush.Equal(at) {
 		t.Errorf("pending = %+v", w)
 	}
+	// The next push sends only the line deferred, not the batch taken.
+	on := &fake{name: "s"}
+	if res := run(t, root, on); res.Sinks[0].Sent != 1 || res.Sinks[0].Deferred {
+		t.Fatalf("push once on = %+v", res.Sinks[0])
+	}
+	if got := on.sessions(t); strings.Join(got, ",") != "b" {
+		t.Errorf("sink got %v, want b only", got)
+	}
+}
+
+// One sink deferring does not hold back another: each has its own cursor.
+func TestPushOneDefersOtherTakes(t *testing.T) {
+	root := project(t)
+	log(t, root, "p1", "a", "b")
+	off, on := &fake{name: "off", defer_: "not yet"}, &fake{name: "on"}
+	res := run(t, root, off, on)
+	if s := res.Sinks[0]; !s.Deferred || s.Sent != 0 || s.Pending != 2 || s.Err != nil {
+		t.Errorf("deferring sink = %+v", s)
+	}
+	if s := res.Sinks[1]; s.Deferred || s.Sent != 2 || s.Pending != 0 || s.Err != nil {
+		t.Errorf("taking sink = %+v", s)
+	}
+	if w, _ := Pending(root, testKey, "p1", "off"); w.Lines != 2 || !w.Deferred {
+		t.Errorf("off pending = %+v", w)
+	}
+	if w, _ := Pending(root, testKey, "p1", "on"); w.Lines != 0 || w.Deferred {
+		t.Errorf("on pending = %+v", w)
+	}
+}
+
+// A sink that fails after deferring keeps the reason: only an answer that
+// is neither an error nor a deferral clears it.
+func TestPushErrorKeepsDeferral(t *testing.T) {
+	root := project(t)
+	log(t, root, "p1", "a")
+	run(t, root, &fake{name: "s", defer_: "off"})
+	res := run(t, root, &fake{name: "s", err: errors.New("crashed")})
+	if res.Sinks[0].Err == nil {
+		t.Fatalf("result = %+v, want the error", res.Sinks[0])
+	}
+	if w, _ := Pending(root, testKey, "p1", "s"); w.Lines != 1 || !w.Deferred || w.Reason != "off" {
+		t.Errorf("pending = %+v, want the deferral kept", w)
+	}
+}
+
+// When the cursor's line rotated out and the sink keeps deferring, the gap
+// is said once.
+func TestPushGapSaidOnceWhileDeferring(t *testing.T) {
+	root := project(t)
+	log(t, root, "p1", "a")
+	run(t, root, &fake{name: "s"})
+	if err := os.Remove(filepath.Join(root, index.Dir, journal.FileName)); err != nil {
+		t.Fatal(err)
+	}
+	log(t, root, "p1", "b")
+	off := &fake{name: "s", defer_: "off"}
+	if res := run(t, root, off); !res.Sinks[0].Gap || !res.Sinks[0].Deferred || res.Sinks[0].Pending != 1 {
+		t.Fatalf("first deferral after the log went = %+v, want a gap", res.Sinks[0])
+	}
+	if res := run(t, root, off); res.Sinks[0].Gap || !res.Sinks[0].Deferred || res.Sinks[0].Pending != 1 {
+		t.Errorf("second deferral = %+v, the gap said again", res.Sinks[0])
+	}
+	on := &fake{name: "s"}
+	if res := run(t, root, on); res.Sinks[0].Gap || res.Sinks[0].Sent != 1 {
+		t.Errorf("push once on = %+v", res.Sinks[0])
+	}
+	if got := on.sessions(t); strings.Join(got, ",") != "b" {
+		t.Errorf("sink got %v, want b", got)
+	}
+}
+
+// A cursor with a deferral loads, and so does one written before deferrals
+// existed.
+func TestCursorDeferredFieldLoads(t *testing.T) {
+	root := project(t)
+	if err := os.MkdirAll(filepath.Join(root, index.Dir, cursorDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		`{"v":1,"sink":"s","project":"p1","pos":{},"pushed":0,"ts":"0001-01-01T00:00:00Z"}`,
+		`{"v":1,"sink":"s","project":"p1","pos":{},"pushed":0,"ts":"0001-01-01T00:00:00Z","deferred":{"reason":"off","ts":"2026-11-07T10:00:00Z"}}`,
+	} {
+		if err := os.WriteFile(cursorPath(root, "s"), testKey.Seal(purpose("s"), []byte(body)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		c, err := loadCursor(root, testKey, "s", "p1")
+		if err != nil || c == nil {
+			t.Fatalf("%s: loadCursor = %v, %v", body, c, err)
+		}
+		if want := strings.Contains(body, "deferred"); (c.Deferred != nil) != want || (want && c.Deferred.Reason != "off") {
+			t.Errorf("%s: Deferred = %+v", body, c.Deferred)
+		}
+	}
 }
 
 // A sink that answers a partial push after deferring no longer shows the

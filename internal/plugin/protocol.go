@@ -130,7 +130,8 @@ func DecodeAnswer(data []byte, v any) error {
 	return nil
 }
 
-// envelopeKeys refuses an answer whose top-level "protocol" or "error" is
+// envelopeKeys refuses an answer whose top-level "protocol", "error" or
+// "deferred" (a sink's, ADR-0021) is
 // spelled in another case, or given twice: Go's decoder would take any case,
 // and the last of two, so the answer could say one thing to stele and
 // another to whatever else reads it.
@@ -146,7 +147,7 @@ func envelopeKeys(raw json.RawMessage) error {
 			return fmt.Errorf("%w: %v", ErrProtocol, err)
 		}
 		key, _ := t.(string)
-		for _, k := range []string{"protocol", "error"} {
+		for _, k := range []string{"protocol", "error", "deferred"} {
 			if strings.EqualFold(key, k) {
 				if key != k || seen[k] {
 					return fmt.Errorf("%w: %q must be given once, in lower case", ErrProtocol, k)

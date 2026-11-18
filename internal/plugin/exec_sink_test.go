@@ -114,6 +114,8 @@ func TestSinkPushDeferred(t *testing.T) {
 		// "deferred": false is no deferral, and "reason" alone is ignored.
 		`{"protocol":1,"accepted":2,"deferred":false}`: {Accepted: 2},
 		`{"protocol":1,"accepted":1,"reason":"x"}`:     {Accepted: 1},
+		// "deferred": null is the same as no "deferred".
+		`{"protocol":1,"accepted":2,"deferred":null}`: {Accepted: 2},
 	} {
 		s, _ := sink(t, answer)
 		a, err := s.Push(context.Background(), "p1", records(3))
@@ -127,6 +129,16 @@ func TestSinkPushDeferred(t *testing.T) {
 	}
 }
 
+// A cut reason ends in "…" with no space before it.
+func TestSinkPushDeferredReasonCut(t *testing.T) {
+	reason := strings.Repeat("x", maxReason-1) + "   tail"
+	s, _ := sink(t, `{"protocol":1,"accepted":0,"deferred":true,"reason":"`+reason+`"}`)
+	a, err := s.Push(context.Background(), "p1", records(1))
+	if want := strings.Repeat("x", maxReason-1) + "…"; err != nil || a.Reason != want {
+		t.Errorf("Reason = %q, %v; want %q", a.Reason, err, want)
+	}
+}
+
 // "deferred" is valid only with "accepted": 0: a sink that defers takes
 // nothing. Anything else is a protocol error, as is a reason that is not a
 // string (ADR-0021).
@@ -136,6 +148,9 @@ func TestSinkPushDeferredInvalid(t *testing.T) {
 		`{"protocol":1,"deferred":true}`,
 		`{"protocol":1,"accepted":0,"deferred":"yes"}`,
 		`{"protocol":1,"accepted":0,"deferred":true,"reason":5}`,
+		// "deferred" is exact-case and given once.
+		`{"protocol":1,"accepted":0,"Deferred":true}`,
+		`{"protocol":1,"accepted":0,"deferred":false,"deferred":true}`,
 	} {
 		s, _ := sink(t, answer)
 		if _, err := s.Push(context.Background(), "p1", records(3)); !errors.Is(err, ErrProtocol) {

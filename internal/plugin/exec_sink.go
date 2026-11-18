@@ -170,8 +170,9 @@ func (s *Sink) Push(ctx context.Context, project string, records []json.RawMessa
 		return PushAnswer{}, s.fail("push", fmt.Errorf("%w: accepted %d of %d records", ErrProtocol, *a.Accepted, len(records)))
 	}
 	if a.Deferred == nil || !*a.Deferred {
-		// "reason" means something only with "deferred": an older sink's
-		// extra key is ignored, as any other.
+		// "deferred": false or null is no deferral. "reason" means
+		// something only with "deferred": an older sink's extra key is
+		// ignored, as any other.
 		return PushAnswer{Accepted: *a.Accepted}, nil
 	}
 	if *a.Accepted != 0 {
@@ -183,5 +184,16 @@ func (s *Sink) Push(ctx context.Context, project string, records []json.RawMessa
 			return PushAnswer{}, s.fail("push", fmt.Errorf("%w: \"reason\" is not a string", ErrProtocol))
 		}
 	}
-	return PushAnswer{Deferred: true, Reason: cut(strings.TrimSpace(printable.Clean(reason)), maxReason)}, nil
+	return PushAnswer{Deferred: true, Reason: cutReason(reason)}, nil
+}
+
+// cutReason makes a deferring sink's reason one printable line of at most
+// maxReason bytes, with no space before the "…" of a cut.
+func cutReason(reason string) string {
+	r := strings.TrimSpace(printable.Clean(reason))
+	if len(r) <= maxReason {
+		return r
+	}
+	c := cut(r, maxReason)
+	return strings.TrimRight(strings.TrimSuffix(c, "…"), " ") + "…"
 }
