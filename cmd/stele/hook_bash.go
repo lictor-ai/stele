@@ -36,6 +36,11 @@ func beforeBash(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 			continue
 		}
 		if !ok {
+			// stele's signing key, outside every project (#152).
+			if signingKey(t.Path) {
+				asks = append(asks, filepath.ToSlash(t.Path))
+				continue
+			}
 			// Outside every project, but a link may lead into one.
 			if r, ok := safefile.Resolve(t.Path); ok && r != t.Path {
 				if rroot, rrel, ok := target(r); ok && guarded(rroot, rrel, r) {

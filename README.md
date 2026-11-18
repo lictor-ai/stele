@@ -280,7 +280,7 @@ This is what Claude Code sees. Codex sees the same, with the differences [Codex]
 - **Before a write**, unless `--remind=off`. A rule the agent loaded from `.claude/rules/stele-rules.md` at the start of its session counts as seen until the session ends, as long as the rule hasn't changed since; this needs Claude Code started in the project's root. The first write in a turn to a file with other rules is denied, with those rules as the reason. The agent reads them and retries. Each rule is shown once per turn, to the main agent and to each subagent; rules that do not fit in one message (about 9,000 bytes) are shown on the next write. A retry of the denied write goes through; parallel writes in the same message, to other files or to the same one, are denied too, once.
 - **After a write**, unless `--check=off`. A blocking violation in the lines just written is sent back as a block, with file, line, rule and message. The write is not undone; the agent is told to fix it. Non-blocking violations are added as context.
 - **A broken `stele.md`.** The last good rules keep applying, and the agent is told about the error.
-- **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock`, `.claude/rules/stele-rules.md` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` and the switches say. So does a write to Claude Code's settings files, which run stele's hooks: `.claude/settings.json` and `.claude/settings.local.json` anywhere in the project or from the session's directory up to the git root, and your user `settings.json`. So does a write to a `.git` below the project's top, a file or anything in a folder of that name. A change there can weaken stele or turn it off. Allow it only if you asked for it.
+- **A write to stele's own files** (`stele.md`, `stele.json`, `stele.lock`, `.claude/rules/stele-rules.md` or anything under `.stele/`, a subproject's too) asks you first, every time, whatever `stele.json` and the switches say. So does a write to Claude Code's settings files, which run stele's hooks: `.claude/settings.json` and `.claude/settings.local.json` anywhere in the project or from the session's directory up to the git root, and your user `settings.json`. So does a write to a `.git` below the project's top, a file or anything in a folder of that name. So does a write to stele's signing key, or removing it or its folder: `stele/key` in your user config directory (`~/.config` on Linux, `~/Library/Application Support` on macOS, `%AppData%` on Windows). A change there can weaken stele or turn it off. Allow it only if you asked for it.
 
 ## CI: stele check
 
@@ -725,7 +725,7 @@ There are five kinds of line:
 | `checked` | A file is checked after a write, with what it broke, or nothing |
 | `check` | `stele check` runs, with its counts |
 
-A line holds rule ids, file paths, session and prompt ids, and counts. Never code, rule text or diffs. Each line is signed with your machine's key, so a line made on another machine, edited, or not written by stele is ignored. stele sends the log only to a sink you list, when you run [`stele push`](#send-the-log-somewhere-stele-push), and `stele uninstall` deletes it with `.stele/`.
+A line holds rule ids, file paths, session and prompt ids, and counts. Never code, rule text or diffs. Each line is signed with your machine's key, so a line made on another machine, such as one in a log someone else committed, or an edited one, is ignored. The signature doesn't stop a program running as you, the agent included: it can read the key and sign lines of its own (see [Limits](#limits)). stele sends the log only to a sink you list, when you run [`stele push`](#send-the-log-somewhere-stele-push), and `stele uninstall` deletes it with `.stele/`.
 
 ## How the rules are doing: stele stats
 
@@ -1007,7 +1007,7 @@ stele reads the command, it does not run it. It reads the literal string of `bas
 <details>
 <summary>What is and isn't asked about</summary>
 
-A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock`, `.stele/` and `.claude` settings files. A Bash command that visibly writes, removes, moves or copies onto one of them is asked about too.
+A hard link to one of them, or an 8.3 short name, is caught only for the root's `stele.md`, `stele.json`, `stele.lock`, `.stele/` and `.claude` settings files, and for stele's signing key. Removing or moving the key's folder, or a folder above it, is asked about as well. A Bash command that visibly writes, removes, moves or copies onto one of them is asked about too.
 
 Not asked about: other Bash forms, removing or moving a directory that holds them, such as `rm -rf .claude` or `mv .claude x` (only `.stele/` is asked about by its own name), a NotebookEdit, managed settings, settings passed with `--settings` or the environment, and a session started above the stele project with hooks registered there by hand.
 
@@ -1101,7 +1101,9 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **The log keeps about 64 MiB, up to 96 MiB on Windows.** Past 32 MiB it moves to `.stele/log.1.jsonl`, replacing the older one. On Windows the move fails while another program has the log open; lines are then still added up to 64 MiB, and dropped after that until the move works.
 
-**Signing checks each line, not the log.** A line made on another machine, edited, or not written by stele is ignored. A line deleted, repeated, moved, or copied from another project's log on your machine isn't noticed.
+**Signing checks each line, not the log.** A line made on another machine, or edited, is ignored. A line deleted, repeated, moved, or copied from another project's log on your machine isn't noticed.
+
+**The key protects against other machines, not against your own programs.** A log, index or state file made on another machine, committed to a repository or copied over, doesn't verify. But the key is a file your user can read, so a program running as you, the agent included, can read it and sign lines stele never wrote. stele asks before a write to the key; it sees no read.
 
 **A dead rule may still be needed.** `stele stats` knows only the writes the hook saw, so a rule for files written only through Bash, by hand, or with the hooks off looks dead. It is judged only after 30 turns.
 
@@ -1129,7 +1131,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **Codex runs no hook you haven't approved, and `codex exec` skips it without a word.** stele can only say so at `stele init`. Changing `--remind` or `--check` changes the hooks, and Codex wants them approved again.
 
-**Codex can't ask you about stele's own files.** A patch to `stele.md`, `stele.json`, `stele.lock`, `.stele/` or an agent's settings files is refused, and Codex is told to ask you to make the change.
+**Codex can't ask you about stele's own files.** A patch to `stele.md`, `stele.json`, `stele.lock`, `.stele/`, an agent's settings files or stele's signing key is refused, and Codex is told to ask you to make the change.
 
 **Codex's shell is read, not checked, and the reading is best effort.** On Windows it runs PowerShell, and stele reads its commands as PowerShell: redirections after any word, `Set-Content`, `Add-Content`, `Out-File`, `Tee-Object`, `New-Item` (links too), `Clear-Content`, `Copy-Item`, `Move-Item`, `Rename-Item`, `Remove-Item`, `Export-Csv`, `Export-Clixml`, `Start-Transcript` and `Invoke-WebRequest -OutFile` by any alias or module-qualified name, `[IO.File]`'s write, copy, move and delete methods and an `IO.StreamWriter` on a path, here-strings, array literals, and a `powershell`, `pwsh`, `bash` or `cmd /c` given a literal script (`-EncodedCommand` too), or `Invoke-Expression` given a literal string. A command that writes a file a scoped rule covers is stopped once per file each turn, as a Bash one is. Not seen: scripts, `Invoke-Expression` of anything but a literal string, `Start-Process`, paths taken from the pipeline, variables set in a block or from a command, expressions or `$(...)` as paths, splatting, and any other cmdlet or .NET API. `stele check` in CI is the catch.
 

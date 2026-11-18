@@ -11,6 +11,7 @@ import (
 	"github.com/lictor-ai/stele/internal/install"
 	"github.com/lictor-ai/stele/internal/safefile"
 	"github.com/lictor-ai/stele/internal/scope"
+	"github.com/lictor-ai/stele/internal/sign"
 )
 
 // ownNames are stele's own files at any depth: the root's, a subproject's, or
@@ -64,8 +65,9 @@ func allSettings() []string {
 // files and rules file only. A change there can weaken stele or turn it off,
 // so the user is asked every time (#52). So is a write to a .git, or into
 // one, below the root, under any name: one git recognises ends the project.
+// And so is a write to stele's signing key, wherever it is (#152).
 func guarded(root, rel, file string) bool {
-	if ownName(rel) || gitName(root, rel) || inGit(root, file) {
+	if signingKey(file) || ownName(rel) || gitName(root, rel) || inGit(root, file) {
 		return true
 	}
 	if r, ok := safefile.Resolve(file); ok && r != file {
@@ -242,13 +244,13 @@ func below(dir, file string) (string, bool) {
 }
 
 // askOutside answers a write to e's file outside every stele project: ask when
-// it is a settings file the session loads, or a link leads it to one of a
-// project's own files (#52, #56), else nothing.
+// it is a settings file the session loads, stele's signing key (#152), or a
+// link leads it to one of a project's own files (#52, #56), else nothing.
 func askOutside(ev adapter.Event, e adapter.Edit) adapter.Answer {
 	if !e.Writes && !e.Removes {
 		return adapter.Answer{}
 	}
-	if loadsSettings(ev, e.File) {
+	if loadsSettings(ev, e.File) || signingKey(e.File) {
 		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(filepath.ToSlash(e.File)))}
 	}
 	r, ok := safefile.Resolve(e.File)
@@ -259,4 +261,71 @@ func askOutside(ev adapter.Event, e adapter.Edit) adapter.Answer {
 		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(rel))}
 	}
 	return adapter.Answer{}
+}
+
+// signingKey reports whether a write to file, or a removal of it, changes the
+// key stele signs its files and log with (#152): the key file, a path below
+// it, or a directory on its way, such as stele's config directory. With the
+// key, the agent could sign lines stele never wrote; with a new one, stele
+// ignores every line signed before. Names are compared as cleanRel cleans
+// them, in any case, as written and after the links on their way; a hard
+// link or an 8.3 short name is caught by a same-file test. Reading the key
+// is not a write: stele sees no read.
+func signingKey(file string) bool {
+	dir, err := keyDir()
+	if err != nil || dir == "" || file == "" {
+		return false
+	}
+	key := sign.KeyFile(dir)
+	for _, f := range withLinks(file) {
+		for _, k := range withLinks(key) {
+			if onPath(f, k) || onPath(k, f) {
+				return true
+			}
+		}
+	}
+	info, err := os.Stat(file)
+	if err == nil {
+		// The key under another name.
+		if k, err := os.Stat(key); err == nil && os.SameFile(info, k) {
+			return true
+		}
+		// The key's directory, or one above it, under another name.
+		if info.IsDir() {
+			for d := dir; ; d = filepath.Dir(d) {
+				if di, err := os.Stat(d); err == nil && os.SameFile(info, di) {
+					return true
+				}
+				if filepath.Dir(d) == d {
+					break
+				}
+			}
+		}
+	}
+	// A new key in the key's directory under another name.
+	if parent, err := os.Stat(filepath.Dir(file)); err == nil && strings.EqualFold(cleanRel(filepath.Base(file)), filepath.Base(key)) {
+		if kd, err := os.Stat(dir); err == nil && os.SameFile(parent, kd) {
+			return true
+		}
+	}
+	return false
+}
+
+// withLinks is file, and file after the links on its way when they lead
+// elsewhere.
+func withLinks(file string) []string {
+	if r, ok := safefile.Resolve(file); ok && r != file {
+		return []string{file, r}
+	}
+	return []string{file}
+}
+
+// onPath reports whether file is dir or below it, both absolute, compared
+// after cleanRel and in any case: an extra prompt is harmless.
+func onPath(dir, file string) bool {
+	norm := func(p string) string {
+		return strings.ToLower(cleanRel(filepath.ToSlash(filepath.Clean(p))))
+	}
+	d, f := strings.TrimRight(norm(dir), "/"), norm(file)
+	return f == d || strings.HasPrefix(f, d+"/")
 }

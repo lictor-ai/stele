@@ -55,6 +55,12 @@ func DefaultDir() (string, error) {
 	return filepath.Join(dir, "stele"), nil
 }
 
+// KeyFile is the key's file in dir. stele hook asks before a write to it or
+// a removal of it (#152).
+func KeyFile(dir string) string {
+	return filepath.Join(dir, keyFile)
+}
+
 // LoadKey returns the key in dir, creating dir and the key on first use. The
 // key file is owner-only. Two processes creating it at once agree on one key:
 // the file appears whole, and the loser reads the winner's. A key that cannot
@@ -63,7 +69,7 @@ func LoadKey(dir string) (Key, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("stele key directory %s: %w", dir, err)
 	}
-	path := filepath.Join(dir, keyFile)
+	path := KeyFile(dir)
 	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
 		k := make([]byte, keySize)
 		if _, err := rand.Read(k); err != nil {
@@ -82,7 +88,7 @@ func LoadKey(dir string) (Key, error) {
 // or its directory: for a command that only records what it did where stele
 // already runs, such as stele check in CI.
 func LoadExistingKey(dir string) (Key, error) {
-	return readKey(filepath.Join(dir, keyFile))
+	return readKey(KeyFile(dir))
 }
 
 func readKey(path string) (Key, error) {
