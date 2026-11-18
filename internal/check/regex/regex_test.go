@@ -82,6 +82,9 @@ func TestMatch(t *testing.T) {
 		{"names CR: whitespace class takes it in", `(?m)\s+$`, "a\r\nb", []Location{{1, 2}}},
 		{"names CR: negated class takes it in", `(?m)[^;]$`, "a;\r\nb;", []Location{{1, 3}}},
 		{"escaped dollar is a dollar", `(?m)\$`, "a$\r\n", []Location{{1, 2}}},
+		{"names CR: dot takes it in", `(?m)^.{3,}$`, "ab\r\nab\n", []Location{{1, 1}}},
+		{"any character but a line end", `(?m)^[^\r\n]{3,}$`, "ab\r\nab\n", nil},
+		{"(?m)$, lone CR at the end of the file ends the line", `(?m)bar$`, "bar\r", []Location{{1, 1}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -132,6 +135,16 @@ func TestCompileLeavesOthers(t *testing.T) {
 	}
 	if _, err := Compile("("); err == nil {
 		t.Error(`Compile("(") = nil error`)
+	}
+
+	// A pattern that compiles, but whose rewrite exceeds regexp's size limit,
+	// is compiled as written.
+	big := "(?m)(?:" + strings.Repeat("a$", 900) + "){1000}"
+	if _, err := regexp.Compile(big); err != nil {
+		t.Fatalf("the test needs a pattern that compiles: %v", err)
+	}
+	if got := mustCompile(t, big).String(); got != big {
+		t.Errorf("Compile of a pattern too large to rewrite = %.40q…, want it as written", got)
 	}
 }
 

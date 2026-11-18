@@ -7,9 +7,11 @@
 // excerpt.
 //
 // A line ends at "\n" or "\r\n", so a CRLF file is checked as its LF copy
-// would be: with (?m), $ also matches before the "\r" of "\r\n" (see Compile).
-// A lone "\r" does not end a line. The "\r" stays in the text, so a pattern
-// that can match it, such as `\r$`, `\s+$` or `[^;]$`, still does.
+// would be, for a pattern that cannot match the "\r": with (?m), $ also
+// matches before the "\r" of "\r\n" (see Compile). A lone "\r" ends no line,
+// except at the end of the file. The "\r" stays in the text, so a pattern that
+// can match it, such as `.`, `\s+$` or `[^;]$`, does: [^\r\n] is any
+// character, and [ \t]+$ is trailing blanks.
 //
 // Lines and columns are 1-based; a column counts characters, and a leading
 // UTF-8 byte order mark is not part of the text.
@@ -168,23 +170,21 @@ func compileAll(rules []check.Rule) []compiled {
 // the "\r". ^ needs nothing: it already matches after the "\n" of "\r\n".
 // Without (?m), $ is the end of the file and is left alone.
 func Compile(pattern string) (*regexp.Regexp, error) {
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, err
-	}
 	tree, err := syntax.Parse(pattern, syntax.Perl)
 	if err != nil {
-		return re, nil // cannot happen: it compiled
+		return regexp.Compile(pattern) // for its error, which names the pattern
 	}
 	// A parent, so that a pattern that is only $ is rewritten too.
 	tree = &syntax.Regexp{Op: syntax.OpConcat, Sub: []*syntax.Regexp{tree}, Flags: tree.Flags}
 	if !crlfEnds(tree) {
-		return re, nil
+		return regexp.Compile(pattern)
 	}
 	if crlf, err := regexp.Compile(tree.String()); err == nil {
 		return crlf, nil
 	}
-	return re, nil // cannot happen: the tree printed is one that parsed
+	// The rewrite can exceed regexp's size limit; fall back to the pattern as
+	// written.
+	return regexp.Compile(pattern)
 }
 
 // crlfEnds makes each (?m)$ under re also match before the "\r" of a line end,
