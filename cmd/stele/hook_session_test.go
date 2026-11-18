@@ -47,9 +47,7 @@ func TestHookSessionStart(t *testing.T) {
 
 func TestHookSessionStartOutsideStele(t *testing.T) {
 	plain := t.TempDir()
-	if err := os.Mkdir(filepath.Join(plain, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	gitDir(t, filepath.Join(plain, ".git"))
 	for _, cwd := range []string{plain, ""} {
 		if _, out := hook(t, sessionPayload(t, "SessionStart", cwd)); out != "" {
 			t.Errorf("cwd %q: stdout = %q, want nothing outside a stele project", cwd, out)

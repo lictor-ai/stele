@@ -16,9 +16,7 @@ const rules = "tags: [db]\n\nNever build SQL by string concatenation.\n\n---\n\n
 func project(t *testing.T, steleMD string) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	gitDir(t, filepath.Join(root, ".git"))
 	if steleMD != "" {
 		if err := os.WriteFile(filepath.Join(root, "stele.md"), []byte(steleMD), 0o644); err != nil {
 			t.Fatal(err)

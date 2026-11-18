@@ -8,10 +8,34 @@ import (
 	"testing"
 )
 
+// gitDir makes d a directory git takes for a repository: HEAD, objects/
+// and refs/.
+func gitDir(t *testing.T, d string) {
+	t.Helper()
+	for _, sub := range []string{"objects", "refs"} {
+		if err := os.MkdirAll(filepath.Join(d, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(d, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// gitlink makes rel, under root, a checkout as a submodule or worktree is:
+// a .git file whose "gitdir: <path>" leads to a repository elsewhere.
+func gitlink(t *testing.T, root, rel string) {
+	t.Helper()
+	d := filepath.Join(t.TempDir(), "modules", "x")
+	gitDir(t, d)
+	writeAt(t, root, rel+"/.git", "gitdir: "+filepath.ToSlash(d)+"\n")
+}
+
 func TestFindRoot(t *testing.T) {
 	// repo/.git, repo/sub/stele.md, repo/sub/deep/, repo/other/
 	repo := t.TempDir()
-	for _, d := range []string{".git", "sub/deep", "other"} {
+	gitDir(t, filepath.Join(repo, ".git"))
+	for _, d := range []string{"sub/deep", "other"} {
 		if err := os.MkdirAll(filepath.Join(repo, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -40,23 +64,28 @@ func TestFindRoot(t *testing.T) {
 	}
 }
 
-// A .git, a directory or the file a worktree or submodule has, ends the
-// search: rules never cross into another checkout (#43).
+// A .git git recognises, a directory or the file a worktree or submodule
+// has, ends the search: rules never cross into another checkout (#43).
 func TestFindRootStopsAtGit(t *testing.T) {
 	// repo/.git/, repo/stele.md, repo/wt/.git (file), repo/wt/deep/,
-	// repo/nested/.git/, repo/sub/stele.md, repo/sub/deep/
+	// repo/nested/.git/, repo/sub/stele.md, repo/sub/deep/,
+	// repo/linked/.git (file, relative, to a worktree's gitdir)
 	repo := t.TempDir()
-	for _, d := range []string{".git", "wt/deep", "nested/.git", "sub/deep"} {
+	gitDir(t, filepath.Join(repo, ".git"))
+	gitDir(t, filepath.Join(repo, "nested", ".git"))
+	for _, d := range []string{"wt/deep", "sub/deep", "linked/deep"} {
 		if err := os.MkdirAll(filepath.Join(repo, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for name, data := range map[string]string{"stele.md": "", "wt/.git": "gitdir: x\n", "sub/stele.md": ""} {
-		if err := os.WriteFile(filepath.Join(repo, filepath.FromSlash(name)), []byte(data), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for from, want := range map[string]string{"wt/deep": "wt", "wt": "wt", "nested": "nested", "sub/deep": "sub", ".": "."} {
+	gitlink(t, repo, "wt")
+	// A worktree's gitdir has HEAD and a commondir, no objects/ or refs/.
+	writeAt(t, repo, ".git/worktrees/linked/HEAD", "ref: refs/heads/b\n")
+	writeAt(t, repo, ".git/worktrees/linked/commondir", "../..\n")
+	writeAt(t, repo, "linked/.git", "gitdir: ../.git/worktrees/linked\n")
+	writeAt(t, repo, "stele.md", "")
+	writeAt(t, repo, "sub/stele.md", "")
+	for from, want := range map[string]string{"wt/deep": "wt", "wt": "wt", "nested": "nested", "sub/deep": "sub", ".": ".", "linked/deep": "linked"} {
 		got, err := findRoot(filepath.Join(repo, from))
 		if err != nil {
 			t.Fatal(err)
@@ -67,10 +96,50 @@ func TestFindRootStopsAtGit(t *testing.T) {
 	}
 }
 
-// A .git that is a dangling link still marks a checkout: the hook's root
-// search and check's and init's holdsGit must agree on it.
+// A .git git does not recognise ends nothing: git lists the files beside it
+// as the outer repository's, so the outer rules reach them too.
+func TestFindRootIgnoresGitGitDoesNotRecognise(t *testing.T) {
+	repo := t.TempDir()
+	gitDir(t, filepath.Join(repo, ".git"))
+	writeAt(t, repo, "stele.md", "")
+	for dir, files := range map[string]map[string]string{
+		"empty":       {".git/x": ""},
+		"nohead":      {".git/objects/x": "", ".git/refs/x": ""},
+		"noobjects":   {".git/HEAD": "ref: refs/heads/main\n", ".git/refs/x": ""},
+		"emptyhead":   {".git/HEAD": "", ".git/objects/x": "", ".git/refs/x": ""},
+		"junkhead":    {".git/HEAD": "x\n", ".git/objects/x": "", ".git/refs/x": ""},
+		"badref":      {".git/HEAD": "ref: heads/main\n", ".git/objects/x": "", ".git/refs/x": ""},
+		"shortid":     {".git/HEAD": "abc123\n", ".git/objects/x": "", ".git/refs/x": ""},
+		"emptycommon": {".git": "gitdir: wt2\n", "wt2/HEAD": "ref: refs/heads/main\n", "wt2/commondir": ""},
+		"uncgitdir":   {".git": "gitdir: //host/share/x\n"},
+		"headdir":     {".git/HEAD/x": "", ".git/objects/x": "", ".git/refs/x": ""},
+		"plainfile":   {".git": "not a gitlink\n"},
+		"missing":     {".git": "gitdir: ../nowhere\n"},
+		"emptylink":   {".git": "gitdir: \n"},
+		"tojunk":      {".git": "gitdir: ../empty/.git\n"},
+		"badcommon":   {".git": "gitdir: wt\n", "wt/HEAD": "ref: refs/heads/main\n", "wt/commondir": "../nowhere\n"},
+	} {
+		for name, data := range files {
+			writeAt(t, repo, dir+"/"+name, data)
+		}
+		if holdsGit(filepath.Join(repo, dir)) {
+			t.Errorf("holdsGit(%s) = true, want false", dir)
+		}
+		got, err := findRoot(filepath.Join(repo, dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != repo {
+			t.Errorf("findRoot(%s) = %s, want the outer root %s", dir, got, repo)
+		}
+	}
+}
+
+// A .git that is a dangling link is no repository either: the hook's root
+// search and check's and init's holdsGit agree on it.
 func TestFindRootDanglingGitLink(t *testing.T) {
 	repo := t.TempDir()
+	gitDir(t, filepath.Join(repo, ".git"))
 	if err := os.WriteFile(filepath.Join(repo, "stele.md"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -84,8 +153,8 @@ func TestFindRootDanglingGitLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != sub || !holdsGit(sub) {
-		t.Errorf("findRoot = %s, holdsGit = %v; want %s and true", got, holdsGit(sub), sub)
+	if got != repo || holdsGit(sub) {
+		t.Errorf("findRoot = %s, holdsGit = %v; want %s and false", got, holdsGit(sub), repo)
 	}
 }
 

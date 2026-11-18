@@ -176,6 +176,7 @@ func TestPreSubprojectsAndNestedGit(t *testing.T) {
 	p := newProject(t, "Outer rule, everywhere.\n")
 	p.compile()
 	p.write("services/api/stele.md", "Inner rule for the api.\n")
+	p.git("init", "-q", "--bare", ".git/modules/lib")
 	p.write("vendor/lib/.git", "gitdir: ../../.git/modules/lib\n")
 
 	a := p.hook(pre("services/api/h.go", "package api"))
