@@ -30,9 +30,7 @@ func probeVersion(a adapter.Adapter, root string) []string {
 }
 
 // runProbe runs argv for the project at root and returns its output. It runs
-// outside the project, as plugins and scanners do (D80): on Windows npm's
-// codex.cmd runs through cmd.exe, which looks for the node it starts in the
-// working directory before PATH.
+// from a fresh folder outside the project, like plugins and scanners (D80).
 func runProbe(argv []string, root string) ([]byte, error) {
 	found, err := exec.LookPath(argv[0])
 	if errors.Is(err, exec.ErrDot) {
@@ -49,6 +47,8 @@ func runProbe(argv []string, root string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A program the probe started may still hold the folder: best effort.
+	defer os.RemoveAll(dir)
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, argv[1:]...)
@@ -60,22 +60,17 @@ func runProbe(argv []string, root string) ([]byte, error) {
 	return cmd.Output()
 }
 
-// probeDir is the directory the probe runs in: the temp directory, or the
-// user's home directory, whichever is a directory outside the project at
-// root.
+// probeDir makes the empty folder the probe runs in, under the temp
+// directory and outside the project at root. The caller removes it.
 func probeDir(root string) (string, error) {
-	tries := []string{os.TempDir()}
-	if home, err := os.UserHomeDir(); err == nil {
-		tries = append(tries, home)
+	dir, err := os.MkdirTemp("", "stele-probe-")
+	if err != nil {
+		return "", fmt.Errorf("no folder to run the version probe in: %w", err)
 	}
-	for _, d := range tries {
-		abs, err := toolpath.Vet("working directory", d, root)
-		if err != nil {
-			continue
-		}
-		if info, err := os.Stat(abs); err == nil && info.IsDir() {
-			return abs, nil
-		}
+	abs, err := toolpath.Vet("working directory", dir, root)
+	if err != nil {
+		os.RemoveAll(dir)
+		return "", err
 	}
-	return "", errors.New("no directory outside the project to run the version probe in")
+	return abs, nil
 }

@@ -127,7 +127,7 @@ func (g Cmd) Args(args []string) []string {
 func (g Cmd) Environ(extra []string) []string {
 	base := g.Env
 	if base == nil {
-		base = os.Environ()
+		base = toolpath.Env(os.Environ(), "")
 	}
 	var out []string
 	for _, kv := range base {

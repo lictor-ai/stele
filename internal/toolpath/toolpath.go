@@ -75,8 +75,8 @@ func PluginEnv(env []string, root string) []string {
 	return noCwdLookup(cut(env, root, LoadPaths))
 }
 
-// noCwdVar, set to any value, stops Windows, and cmd.exe running a .cmd or
-// .bat, looking for a program in the working directory before PATH.
+// noCwdVar, set to any value, makes Windows look for a program a child starts
+// on PATH, not in its working directory.
 const noCwdVar = "NoDefaultCurrentDirectoryInExePath"
 
 // noCwdLookup returns env with noCwdVar set on Windows, in a new slice, as
