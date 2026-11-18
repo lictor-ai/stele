@@ -6,6 +6,13 @@
 // (?m). An optional `message` key replaces the default message, the rule's
 // excerpt.
 //
+// A line ends at "\n" or "\r\n", so a CRLF file is checked as its LF copy
+// would be, for a pattern that cannot match the "\r": with (?m), $ also
+// matches before the "\r" of "\r\n" (see Compile). A lone "\r" ends no line,
+// except at the end of the file. The "\r" stays in the text, so a pattern that
+// can match it, such as `.`, `\s+$` or `[^;]$`, does: [^\r\n] is any
+// character, and [ \t]+$ is trailing blanks.
+//
 // Lines and columns are 1-based; a column counts characters, and a leading
 // UTF-8 byte order mark is not part of the text.
 package regex
@@ -18,6 +25,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"regexp"
+	"regexp/syntax"
 	"unicode/utf8"
 
 	"github.com/lictor-ai/stele/internal/check"
@@ -154,12 +162,54 @@ func compileAll(rules []check.Rule) []compiled {
 	return cs
 }
 
+// Compile compiles a rule's pattern. Where (?m) is on, each $ also matches
+// before a "\r" that ends a line, as if written \r?$: Go's $ matches only
+// before "\n", so (?m)foo$ would otherwise find nothing in a CRLF file, which
+// Git for Windows checks out by default. A match still starts where it would
+// in the LF copy, so lines and columns do not move; only its end can take in
+// the "\r". ^ needs nothing: it already matches after the "\n" of "\r\n".
+// Without (?m), $ is the end of the file and is left alone.
+func Compile(pattern string) (*regexp.Regexp, error) {
+	tree, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return regexp.Compile(pattern) // for its error, which names the pattern
+	}
+	// A parent, so that a pattern that is only $ is rewritten too.
+	tree = &syntax.Regexp{Op: syntax.OpConcat, Sub: []*syntax.Regexp{tree}, Flags: tree.Flags}
+	if !crlfEnds(tree) {
+		return regexp.Compile(pattern)
+	}
+	if crlf, err := regexp.Compile(tree.String()); err == nil {
+		return crlf, nil
+	}
+	// The rewrite can exceed regexp's size limit; fall back to the pattern as
+	// written.
+	return regexp.Compile(pattern)
+}
+
+// crlfEnds makes each (?m)$ under re also match before the "\r" of a line end,
+// and reports whether there was one.
+func crlfEnds(re *syntax.Regexp) bool {
+	found := false
+	for i, sub := range re.Sub {
+		if sub.Op != syntax.OpEndLine {
+			found = crlfEnds(sub) || found
+			continue
+		}
+		cr := &syntax.Regexp{Op: syntax.OpLiteral, Rune: []rune{'\r'}, Flags: sub.Flags}
+		opt := &syntax.Regexp{Op: syntax.OpQuest, Sub: []*syntax.Regexp{cr}, Flags: sub.Flags}
+		re.Sub[i] = &syntax.Regexp{Op: syntax.OpConcat, Sub: []*syntax.Regexp{opt, sub}, Flags: sub.Flags}
+		found = true
+	}
+	return found
+}
+
 func compile(r check.Rule) (*regexp.Regexp, error) {
 	p := r.Meta["pattern"]
 	if p == "" {
 		return nil, errors.New("regex: no pattern")
 	}
-	re, err := regexp.Compile(p)
+	re, err := Compile(p)
 	if err != nil {
 		return nil, fmt.Errorf("regex: pattern does not compile: %v", err)
 	}
