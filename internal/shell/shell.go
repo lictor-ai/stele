@@ -4,10 +4,12 @@
 // Write and Edit tools show the agent a file's rules and check what it wrote.
 //
 // It understands the forms an agent uses to write a file: redirections
-// (heredoc bodies skipped), tee, sed -i and perl -i, plus rm, mv, cp, ln and
-// truncate for stele's own files. It follows cd, simple NAME=value variables
-// and globs, and reads the literal string of bash -c, sh -c, zsh -c, dash -c,
-// ksh -c and eval as commands: one it cannot read whole counts as unknown.
+// (heredoc bodies skipped), tee, sed -i and perl -i, plus rm, mv, cp, ln,
+// truncate, touch, mkdir, and the .git folders git init, clone, worktree add
+// and submodule add make, for stele's own files and a .git below a project.
+// It follows cd, simple NAME=value variables and globs, and reads the literal
+// string of bash -c, sh -c, zsh -c, dash -c, ksh -c and eval as commands: one
+// it cannot read whole counts as unknown.
 // Scripts, generators, xargs, find -exec and targets it cannot
 // resolve are not seen: Targets counts the last kind as unknown. A command it
 // cannot parse is read up to the error: nothing after it runs when bash agrees,
@@ -34,10 +36,11 @@ const (
 	PerlInPlace             // a file of perl -i
 	Remove                  // an operand of rm, a source of mv
 	Copy                    // what cp, mv, ln or truncate leave there
+	Create                  // a file or folder touch, mkdir or git makes
 )
 
 // Writes reports whether the kind writes content, which rules are about.
-// Remove and Copy matter only for stele's own files.
+// Remove, Copy and Create matter only for stele's own files.
 func (k Kind) Writes() bool { return k <= PerlInPlace }
 
 // Target is a file a command writes.

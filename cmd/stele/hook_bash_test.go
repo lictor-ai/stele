@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/install"
 )
 
@@ -252,6 +253,54 @@ func TestHookBashAsksForOwnFiles(t *testing.T) {
 	link(t, filepath.Join(root, "stele.md"), filepath.Join(outside, "rules.md"), false)
 	if o, out := hook(t, bash("echo x > rules.md", outside, "p1", "")); !asks(t, o, "stele.md") {
 		t.Errorf("a link to stele.md: %s", out)
+	}
+}
+
+// The files and folders touch, mkdir and git make are seen: one that is
+// stele's own, or a .git below the root, which ends the project there, asks
+// as a Write of it does. One a scoped rule covers is no write of content,
+// and is never stopped: only a write is shown the rules.
+func TestHookBashCreates(t *testing.T) {
+	root := project(t, hookRules)
+	clock(t, time.Now())
+	for command, rel := range map[string]string{
+		"git init src":                          "src/.git",
+		"git -C src init":                       "src/.git",
+		"git clone https://h.example/o/lib.git": "lib/.git",
+		"git worktree add wt":                   "wt/.git",
+		"git submodule add ../lib vendor/lib":   "vendor/lib/.git",
+		"touch src/stele.json":                  "src/stele.json",
+		"mkdir -p src/.git":                     "src/.git",
+		"mkdir -p sub/.stele":                   "sub/.stele",
+		"touch .claude/settings.local.json":     ".claude/settings.local.json",
+	} {
+		o, out := hook(t, bash(command, root, "p1", ""))
+		if !asks(t, o, rel) {
+			t.Errorf("%q: want an ask naming %s, got %s", command, rel, out)
+		}
+	}
+	for _, command := range []string{
+		"git status", "git log --oneline -5", "git -C src status", "git diff HEAD~1",
+		"touch notes.txt", "mkdir build", "touch internal/new.go", "mkdir -p internal/db",
+		"git init ../elsewhere",
+	} {
+		if o, out := hook(t, bash(command, root, "p1", "")); out != "" {
+			t.Errorf("%q: want no answer, got %+v (%s)", command, o, out)
+		}
+	}
+	// PowerShell's New-Item, mkdir and git, read the same way.
+	ev := adapter.Event{Kind: adapter.PreShell, SessionID: "s1", PromptID: "p1", Cwd: root, Dialect: adapter.PowerShell}
+	for _, command := range []string{"git init src", "New-Item -ItemType Directory -Path src/.git", "mkdir src/.git", "ni src/stele.json"} {
+		ev.Command = command
+		if a := beforeBash(ev, adapter.Switches{}); a.Ask == "" {
+			t.Errorf("PowerShell %q: want an ask, got %+v", command, a)
+		}
+	}
+	for _, command := range []string{"git status", "mkdir build", "New-Item -ItemType Directory internal/db"} {
+		ev.Command = command
+		if a := beforeBash(ev, adapter.Switches{}); a.Ask != "" || a.Deny {
+			t.Errorf("PowerShell %q: want neither ask nor deny, got %+v", command, a)
+		}
 	}
 }
 

@@ -14,10 +14,10 @@ import (
 // cannot follow it counts as unknown, and stele check in CI is the catch.
 //
 // It reads redirections (> >> *> n>), after any word; Set-Content,
-// Add-Content, Out-File, Tee-Object, New-Item (files and links),
-// Clear-Content, Copy-Item, Move-Item, Rename-Item, Remove-Item, Export-Csv,
-// Export-Clixml, Start-Transcript and Invoke-WebRequest -OutFile, by any
-// alias or module-qualified name, with abbreviated and colon-joined
+// Add-Content, Out-File, Tee-Object, New-Item (files, folders and links),
+// mkdir, Clear-Content, Copy-Item, Move-Item, Rename-Item, Remove-Item,
+// Export-Csv, Export-Clixml, Start-Transcript and Invoke-WebRequest -OutFile,
+// by any alias or module-qualified name, with abbreviated and colon-joined
 // parameters and the common ones; [IO.File]'s write, copy, move and delete
 // methods, their Async forms, and an IO.StreamWriter made on a path. It
 // follows Set-Location, Push-Location and Pop-Location, and variables set to
@@ -26,7 +26,8 @@ import (
 // is read as a command. A parameter may start with an en dash, em dash or
 // horizontal bar, as PowerShell allows. Here-strings, array literals, nested
 // powershell, pwsh (-EncodedCommand too), bash, sh, zsh and cmd commands with
-// a literal script, and Invoke-Expression of a literal string are read.
+// a literal script, and Invoke-Expression of a literal string are read, and
+// git's commands that make a repository, as in bash.
 // Expressions as paths, splatting, $(...), $env:, unknown variables, paths
 // bound from the pipeline, any other Invoke-Expression, Start-Process and
 // scripts are unknown or not seen.
@@ -494,7 +495,7 @@ var psCommands = map[string]string{
 	"out-file":   "out",
 	"tee-object": "tee", "tee": "tee",
 	"export-csv": "out", "epcsv": "out", "export-clixml": "out", "start-transcript": "out",
-	"new-item": "new", "ni": "new",
+	"new-item": "new", "ni": "new", "mkdir": "mkdir", "md": "mkdir",
 	"clear-content": "clear", "clc": "clear",
 	"copy-item": "copy", "cp": "copy", "copy": "copy", "cpi": "copy",
 	"move-item": "move", "mv": "move", "move": "move", "mi": "move",
@@ -510,6 +511,7 @@ var psCommands = map[string]string{
 	"bash": "bash", "bash.exe": "bash", "sh": "bash", "zsh": "bash", "dash": "bash", "ksh": "bash", "wsl": "wsl", "wsl.exe": "wsl",
 	"invoke-expression": "iex", "iex": "iex", "start-process": "opaque", "saps": "opaque", "start": "opaque",
 	"invoke-command": "opaque", "icm": "opaque",
+	"git": "git", "git.exe": "git",
 }
 
 // psCommon are the parameters every cmdlet takes a value for.
@@ -529,6 +531,7 @@ var psParams = map[string][]string{
 	"out":    {"filepath", "path", "literalpath", "inputobject", "encoding", "width", "delimiter", "depth", "outputdirectory"},
 	"tee":    {"filepath", "literalpath", "inputobject", "variable", "encoding"},
 	"new":    {"path", "name", "itemtype", "type", "value", "credential", "target"},
+	"mkdir":  {"path", "name", "value", "credential"},
 	"clear":  {"path", "literalpath", "filter", "include", "exclude", "stream", "credential"},
 	"copy":   {"path", "literalpath", "destination", "filter", "include", "exclude", "credential", "tosession", "fromsession"},
 	"move":   {"path", "literalpath", "destination", "filter", "include", "exclude", "credential"},
@@ -635,7 +638,7 @@ func (p *psReader) statement(st psStmt) {
 	kind, ok := psCommands[strings.ToLower(name)]
 	if !ok {
 		// A program run by its path, such as C:\Windows\System32\cmd.exe.
-		if k, ok2 := psCommands[strings.ToLower(filepath.Base(strings.ReplaceAll(name, `\`, "/")))]; ok2 && (k == "pwsh" || k == "cmd" || k == "bash" || k == "wsl") {
+		if k, ok2 := psCommands[strings.ToLower(filepath.Base(strings.ReplaceAll(name, `\`, "/")))]; ok2 && (k == "pwsh" || k == "cmd" || k == "bash" || k == "wsl" || k == "git") {
 			kind, ok = k, true
 		}
 	}
@@ -692,6 +695,20 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 			return
 		}
 		p.res.unknown++
+		return
+	}
+	if kind == "git" {
+		// git init, clone, worktree add and submodule add, read as in bash.
+		ws := make([]word, len(args))
+		for i, a := range args {
+			v, ok := p.value(a)
+			ws[i] = word{text: v, dynamic: !ok}
+		}
+		made, unknown := gitMakes(ws)
+		p.res.unknown += unknown
+		for _, w := range made {
+			p.addTok(psTok{text: w.text, quoted: true}, Create, true)
+		}
 		return
 	}
 	names := append(append([]string{}, psParams[kind]...), psCommon...)
@@ -785,14 +802,16 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 		if ps, lit := path(0); needPath(ps) {
 			p.addAll(ps, Redirect, lit)
 		}
-	case "new":
+	case "new", "mkdir":
 		k := Redirect
 		switch {
+		case kind == "mkdir" || strings.HasPrefix("directory", itemType) && itemType != "":
+			k = Create // a folder: no content, but a .git or one of stele's own names matters
 		case itemType == "" || strings.HasPrefix("file", itemType):
 		case strings.HasPrefix("symboliclink", itemType), strings.HasPrefix("hardlink", itemType), strings.HasPrefix("junction", itemType):
 			k = Copy // a link at the path: what is there now
 		default:
-			return // a directory: no file
+			return // a registry key or the like: no file
 		}
 		ps, lit := path(0)
 		if name := named["name"]; name != nil {
