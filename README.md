@@ -1120,7 +1120,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **Only `apply_patch` is checked,** whether Codex calls it as a tool or runs it in its shell. Writes through MCP tools aren't seen.
 
-**Only the version is checked, at `stele init`.** stele runs `codex --version` there and never in the hook. The release notes, not stele, are the source for 0.141 and 0.145.
+**Only the version is checked, at `stele init`.** stele runs `codex --version` there, from a folder outside the project, and never in the hook. The release notes, not stele, are the source for 0.141 and 0.145.
 
 ### Upgrades
 
