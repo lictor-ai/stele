@@ -65,7 +65,7 @@ func prime(ev adapter.Event, root string) {
 		loaded = agent.ReadRules(data)
 	}
 	primed := false
-	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
+	_, err = session.UpdateWithin(root, ev.SessionID, now(), key, sessionWait(), func(st *session.State) error {
 		if launch {
 			st.LaunchRoot = true
 		}
@@ -105,7 +105,7 @@ func forget(ev adapter.Event, root, id string) {
 	if st, err := session.Load(root, ev.SessionID, key); err != nil || st.Primed[id] == nil {
 		return
 	}
-	_, _ = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
+	_, _ = session.UpdateWithin(root, ev.SessionID, now(), key, sessionWait(), func(st *session.State) error {
 		st.Primed = withPrimed(st.Primed, id, nil)
 		return nil
 	})

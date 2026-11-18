@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -54,9 +55,9 @@ func TestBeforeWriteBatchByStart(t *testing.T) {
 	}
 }
 
-// STELE_TEST_BATCH_WINDOW widens the window for tests, and 0 leaves only
-// the chain.
-func TestBeforeWriteWindowFromEnv(t *testing.T) {
+// A test build's window (parseWindow) widens or narrows the batch window;
+// 0 leaves only the chain.
+func TestBeforeWriteTestWindow(t *testing.T) {
 	for _, tt := range []struct {
 		env      string
 		wantDeny bool
@@ -71,7 +72,9 @@ func TestBeforeWriteWindowFromEnv(t *testing.T) {
 		{"500ms", false}, // narrowed
 	} {
 		t.Run(tt.env, func(t *testing.T) {
-			t.Setenv(windowEnv, tt.env)
+			old := batchWindow
+			batchWindow = func() time.Duration { return parseWindow(tt.env) }
+			t.Cleanup(func() { batchWindow = old })
 			root := project(t, hookRules)
 			advance := clock(t, time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC))
 			if a := beforeWrite(batchWrite(root, "a.go"), adapter.Switches{}); !a.Deny {
@@ -82,6 +85,38 @@ func TestBeforeWriteWindowFromEnv(t *testing.T) {
 				t.Errorf("another file 10 s later: deny %v, want %v", a.Deny, tt.wantDeny)
 			}
 		})
+	}
+}
+
+// The hook waits for the session lock only as long as is left of its time:
+// one that already spent 8.4 s, in compile.EnsureFresh say, gives up at once
+// and warns, before the agent kills it with no word (#151).
+func TestBeforeWriteSessionWaitWithinBudget(t *testing.T) {
+	root := project(t, hookRules)
+	clock(t, time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC))
+	if a := beforeWrite(batchWrite(root, "a.go"), adapter.Switches{}); !a.Deny {
+		t.Fatalf("first write: %+v, want a deny", a)
+	}
+	// Another hook holds the session's lock.
+	lock := filepath.Join(root, ".stele", "state", "s1.json.lock")
+	if err := os.WriteFile(lock, []byte("token"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if d := sessionWait(); d != sessionWaitMax {
+		t.Errorf("outside a hook call, sessionWait = %v, want %v", d, sessionWaitMax)
+	}
+	t.Cleanup(func() { startedWall = time.Time{} })
+	startedWall = time.Now().Add(-8400 * time.Millisecond)
+	if d := sessionWait(); d > 100*time.Millisecond {
+		t.Errorf("8.4 s in, sessionWait = %v, want at most 100 ms", d)
+	}
+	start := time.Now()
+	a := beforeWrite(batchWrite(root, "b.go"), adapter.Switches{})
+	if d := time.Since(start); d >= 3*time.Second {
+		t.Errorf("waited %v for the lock, past the hook's time", d)
+	}
+	if a.Deny || !strings.Contains(a.Warning, "rules not enforced") {
+		t.Errorf("a hook out of time: %+v, want the write through with a warning", a)
 	}
 }
 

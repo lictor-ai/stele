@@ -26,8 +26,12 @@
 //     the hooks of a batch the agent starts slowly.
 //
 // A retry is recognised by its file: a write to a file whose write was
-// denied, started at least RetryAfter after that deny and not chained to the
-// batch, comes after the agent read the batch's reasons.
+// denied, started at least RetryAfter after that deny, comes after the agent
+// read that deny's reason, unless it is chained to the same chain of denies
+// as the deny: then it is a second write to the file in one message. A chain
+// is a run of denies each less than RetryAfter after the one before
+// (Batch.Chain is its first); a write chained to a later chain, such as a
+// retry sent together with a write that needs a new rule, is still a retry.
 package backstop
 
 import (
@@ -112,7 +116,7 @@ func Decide(in Input, st session.State) (Decision, session.State) {
 	// Sooner is a parallel write to the same file, and a deny in the future
 	// (the clock moved back) proves nothing.
 	deniedAt, retry := st.Denied[in.AgentID][in.File]
-	retry = retry && in.File != "" && !chained && c.start.Sub(deniedAt) >= RetryAfter
+	retry = retry && in.File != "" && retried(c, b, chained, deniedAt)
 
 	var show []Rule
 	var fresh []string
@@ -144,7 +148,7 @@ func Decide(in Input, st session.State) (Decision, session.State) {
 	if in.File != "" {
 		st.Denied = with(st.Denied, in.AgentID, []string{in.File}, c.now)
 	}
-	st.Batch = extend(st.Batch, in.AgentID, inBatch, c.now)
+	st.Batch = extend(st.Batch, in.AgentID, inBatch, chained, c.now)
 	return Decision{Deny: true, Rules: show, More: more}, st
 }
 
@@ -181,14 +185,28 @@ func shownIn(b session.Batch, at time.Time) bool {
 	return !b.End.IsZero() && !at.Before(b.Start) && !at.After(b.End)
 }
 
+// retried reports whether a write that started with clock c, to a file
+// denied at deniedAt, is the agent's retry: it started at least RetryAfter
+// after the deny, and is not chained to the chain of denies that holds it.
+// A deny before the current chain began was read when the agent sent it.
+func retried(c clock, b session.Batch, chained bool, deniedAt time.Time) bool {
+	return c.start.Sub(deniedAt) >= RetryAfter && (!chained || deniedAt.Before(b.Chain))
+}
+
 // extend returns a copy of m in which agent's batch takes a deny decided at
-// now: the batch goes on when the write was in it, else a new one starts.
-func extend(m map[string]session.Batch, agent string, inBatch bool, now time.Time) map[string]session.Batch {
+// now: the batch goes on when the write was in it, else a new one starts;
+// the chain goes on when the write was chained, else a new one starts. End
+// is the last deny's time, even one before it: after the clock moved back
+// it moves back too, which only shortens the chain.
+func extend(m map[string]session.Batch, agent string, inBatch, chained bool, now time.Time) map[string]session.Batch {
 	next := make(map[string]session.Batch, len(m)+1)
 	maps.Copy(next, m)
 	b := next[agent]
 	if !inBatch || b.End.IsZero() {
 		b.Start = now
+	}
+	if !chained || b.Chain.IsZero() {
+		b.Chain = now
 	}
 	b.End = now
 	next[agent] = b

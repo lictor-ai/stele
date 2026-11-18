@@ -27,7 +27,7 @@ func shown(agent string, at time.Time, ids ...string) map[string]map[string]time
 
 // batch is one agent's batch of denies, from start to end.
 func batch(agent string, start, end time.Time) map[string]session.Batch {
-	return map[string]session.Batch{agent: {Start: start, End: end}}
+	return map[string]session.Batch{agent: {Start: start, End: end, Chain: start}}
 }
 
 // denied is shown's twin for the files whose write was denied.
@@ -407,5 +407,49 @@ func TestDecideBatchUnderLoad(t *testing.T) {
 	// A write to a new file, after the agent read the rules, goes through.
 	if d, _ := Decide(Input{PromptID: "p1", File: "other.go", Rules: []Rule{sqlRule}, Now: retry.Add(time.Minute)}, st); d.Deny {
 		t.Error("a later write was shown a rule the agent already read")
+	}
+}
+
+// The agent retries a.go and b.go together with c.go, which needs a new
+// rule. c.go's hook takes the lock first: its deny starts a new chain in the
+// batch's window, and the retries, chained to it, are still retries: their
+// files were denied in a reason the agent read. Only c.go is denied.
+func TestDecideRetriesWithANewRule(t *testing.T) {
+	r1 := Rule{ID: "r1", Text: "one"}
+	r2 := Rule{ID: "r2", Text: "two"}
+	var st session.State
+	decide := func(file string, start, now time.Duration, rules ...Rule) Decision {
+		t.Helper()
+		var d Decision
+		d, st = Decide(Input{PromptID: "p1", File: file, Rules: rules, Start: t0.Add(start), Now: t0.Add(now)}, st)
+		return d
+	}
+	ms := time.Millisecond
+	if d := decide("a.go", 0, 0, r1); !d.Deny {
+		t.Fatal("a.go: let through, want denied with r1")
+	}
+	if d := decide("b.go", 0, 50*ms, r1); !d.Deny {
+		t.Fatal("b.go, in the batch: let through")
+	}
+	// The retry message, 1.5 s later.
+	if d := decide("c.go", 1500*ms, 1510*ms, r1, r2); !d.Deny {
+		t.Fatal("c.go, needing r2: let through")
+	}
+	if d := decide("a.go", 1500*ms, 1560*ms, r1); d.Deny {
+		t.Errorf("a.go's retry, after c.go's deny: denied again with %v", d.Rules)
+	}
+	if d := decide("b.go", 1500*ms, 1590*ms, r1); d.Deny {
+		t.Errorf("b.go's retry, after c.go's deny: denied again with %v", d.Rules)
+	}
+	// c.go's own retry.
+	if d := decide("c.go", 3200*ms, 3200*ms, r1, r2); d.Deny {
+		t.Errorf("c.go's retry: denied again with %v", d.Rules)
+	}
+	// A second write to c.go in the message that wrote it is no retry.
+	st = session.State{}
+	decide("c.go", 0, 0, r1)
+	decide("d.go", 1500*ms, 1500*ms, r2)
+	if d := decide("d.go", 1500*ms, 1550*ms, r2); !d.Deny {
+		t.Error("a second write to d.go in its own message passed as a retry")
 	}
 }

@@ -41,10 +41,11 @@ const (
 	maxSize = 1 << 20
 )
 
-// lockWait is how long an update waits for another process's lock. The hook
-// runs on every write, so it must not wait long; but a batch of parallel
-// writes queues on this lock, and an update that gives up lets its write
-// through unread (#151). Half the 10 s an agent gives the hook. A test
+// lockWait is how long an update waits for each other process holding the
+// lock in turn, and for all of them together in Update. The hook runs on
+// every write, so it must not wait long; but a batch of parallel writes
+// queues on this lock, and an update that gives up lets its write through
+// unread (#151). The hook bounds its whole wait with UpdateWithin. A test
 // raises it.
 var lockWait = 5 * time.Second
 
@@ -110,6 +111,11 @@ type State struct {
 type Batch struct {
 	Start time.Time `json:"start"`
 	End   time.Time `json:"end"`
+	// Chain is when the batch's current chain began: the first of its
+	// denies that followed the one before by RetryAfter or more, or came
+	// first. A file denied before it was denied in a reason the agent had
+	// read when it sent the writes of this chain.
+	Chain time.Time `json:"chain,omitempty"`
 }
 
 // errUnreadable is a state file that exists but holds no usable state: not
@@ -155,6 +161,13 @@ func Load(root, id string, key sign.Key) (State, error) {
 // update of the session. Afterwards, session files older than 24 hours are
 // removed.
 func Update(root, id string, now time.Time, key sign.Key, fn func(*State) error) (State, error) {
+	return UpdateWithin(root, id, now, key, lockWait, fn)
+}
+
+// UpdateWithin is Update waiting at most total for the lock, over every
+// holder in turn: the hook, which the agent kills after 10 s, passes what is
+// left of its time. A total of 0 or less tries the lock once.
+func UpdateWithin(root, id string, now time.Time, key sign.Key, total time.Duration, fn func(*State) error) (State, error) {
 	if len(key) == 0 {
 		return State{}, errors.New("session: no key to sign with")
 	}
@@ -169,7 +182,8 @@ func Update(root, id string, now time.Time, key sign.Key, fn func(*State) error)
 		return State{}, err
 	}
 
-	unlock, err := safefile.Lock(path(root, id)+".lock", lockWait, staleLock)
+	total = max(total, 0)
+	unlock, err := safefile.LockInTurn(path(root, id)+".lock", min(lockWait, total), total, staleLock)
 	if err != nil {
 		return State{}, err
 	}

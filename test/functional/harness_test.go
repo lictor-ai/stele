@@ -38,7 +38,9 @@ func TestMain(m *testing.M) {
 		os.Exit(2)
 	}
 	bin = filepath.Join(dir, "stele"+exe())
-	build := exec.Command("go", "build", "-o", bin, "../../cmd/stele")
+	// steletest: the hook reads its batch window from batchEnv, which a
+	// release build never does.
+	build := exec.Command("go", "build", "-tags", "steletest", "-o", bin, "../../cmd/stele")
 	build.Stdout, build.Stderr = os.Stdout, os.Stderr
 	if err := build.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "building stele:", err)

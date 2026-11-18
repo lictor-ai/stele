@@ -59,8 +59,9 @@ func DecideBash(in BashInput, st session.State) (BashDecision, session.State) {
 	var fresh []string
 	for _, f := range in.Files {
 		// A retry, as for Decide: denied at least RetryAfter before this
-		// hook started, not chained to the batch, and not in the future.
-		if at, ok := st.BashDenied[in.AgentID][f.File]; ok && !chained && c.start.Sub(at) >= RetryAfter {
+		// hook started, not in the chain of denies that holds it, and not
+		// in the future.
+		if at, ok := st.BashDenied[in.AgentID][f.File]; ok && retried(c, b, chained, at) {
 			continue
 		}
 		d.Files = append(d.Files, f.File)
@@ -95,6 +96,6 @@ func DecideBash(in BashInput, st session.State) (BashDecision, session.State) {
 	if len(fresh) > 0 {
 		st.Shown = with(st.Shown, in.AgentID, fresh, c.now)
 	}
-	st.Batch = extend(st.Batch, in.AgentID, inBatch, c.now)
+	st.Batch = extend(st.Batch, in.AgentID, inBatch, chained, c.now)
 	return d, st
 }
