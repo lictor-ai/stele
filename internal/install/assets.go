@@ -98,15 +98,26 @@ var refuseTemplate = template.Must(template.New("refuse-message").Parse(refuseMe
 // files, w naming the agent. For an agent that cannot ask, it is the
 // refusal the agent reads.
 func AskMessage(w adapter.Words, path string) string {
+	return askMessageFor(w, path, false)
+}
+
+// AskKeyFolderMessage is AskMessage for path, a folder that holds stele's
+// signing key, such as stele's config directory or one above it.
+func AskKeyFolderMessage(w adapter.Words, path string) string {
+	return askMessageFor(w, path, true)
+}
+
+func askMessageFor(w adapter.Words, path string, keyFolder bool) string {
 	t := askTemplate
 	if w.NoAsk {
 		t = refuseTemplate
 	}
 	var b strings.Builder
 	if err := t.Execute(&b, struct {
-		Words adapter.Words
-		Path  string
-	}{w, path}); err != nil {
+		Words     adapter.Words
+		Path      string
+		KeyFolder bool
+	}{w, path, keyFolder}); err != nil {
 		panic(err) // the template is compiled in and tested
 	}
 	return strings.TrimSpace(b.String())
