@@ -34,6 +34,38 @@ var (
 	now             = time.Now
 )
 
+// started is when this hook call began, before it waited for the session
+// lock or anything else: a batch of parallel writes is told by it, not by
+// when each call got the lock (#151). Zero outside runHook.
+var started time.Time
+
+// hookStart is when this hook call began, or now outside runHook.
+func hookStart() time.Time {
+	if started.IsZero() {
+		return now()
+	}
+	return started
+}
+
+// windowEnv widens or narrows backstop.Window, for tests only: functional
+// tests run many hooks on a loaded machine, or must step past the window
+// without sleeping. Not for users; it is not in the README's options.
+const windowEnv = "STELE_TEST_BATCH_WINDOW"
+
+// batchWindow is the window windowEnv sets, a Go duration up to a minute,
+// where 0 leaves only the chain of a batch; else 0, backstop.Window.
+func batchWindow() time.Duration {
+	v := os.Getenv(windowEnv)
+	if v == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 || d > time.Minute {
+		return 0
+	}
+	return max(d, time.Nanosecond)
+}
+
 // maxPayload caps the hook payload. A Write carries the whole file, so it can
 // be large, but not unbounded.
 const maxPayload = 64 << 20
@@ -77,6 +109,8 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 			code = exitOK
 		}
 	}()
+	defer func(prev time.Time) { started = prev }(started)
+	started = now()
 	// The version and switches stele init wrote on the command (ADR-0006).
 	installed, sw := agent.HookArgs(args)
 	var a adapter.Answer
@@ -242,7 +276,8 @@ func beforeRoot(ev adapter.Event, root string, rels []string, budget int) (a ada
 	// is answered: a deny that was not recorded would repeat forever.
 	var d backstop.Decision
 	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
-		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, File: file, Rules: rules, Now: now(),
+		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, File: file, Rules: rules,
+			Start: hookStart(), Now: now(), Window: batchWindow(),
 			Fit: func(rs []backstop.Rule) int {
 				// At least one: a rule too long for any message would
 				// otherwise be denied forever.

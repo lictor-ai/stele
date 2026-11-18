@@ -1,6 +1,8 @@
 package backstop
 
 import (
+	"fmt"
+	"maps"
 	"testing"
 	"time"
 
@@ -23,6 +25,11 @@ func shown(agent string, at time.Time, ids ...string) map[string]map[string]time
 	return map[string]map[string]time.Time{agent: m}
 }
 
+// batch is one agent's batch of denies, from start to end.
+func batch(agent string, start, end time.Time) map[string]session.Batch {
+	return map[string]session.Batch{agent: {Start: start, End: end}}
+}
+
 // denied is shown's twin for the files whose write was denied.
 func denied(agent string, at time.Time, files ...string) map[string]map[string]time.Time {
 	return shown(agent, at, files...)
@@ -37,6 +44,7 @@ func TestDecide(t *testing.T) {
 		wantRules  []Rule
 		wantShown  map[string]map[string]time.Time
 		wantDenied map[string]map[string]time.Time
+		wantBatch  map[string]session.Batch // checked when set
 	}{
 		{
 			name:       "first write of a turn shows the rules",
@@ -45,25 +53,26 @@ func TestDecide(t *testing.T) {
 			wantRules:  []Rule{sqlRule, logRule},
 			wantShown:  shown("", t0, "sql", "log"),
 			wantDenied: denied("", t0, "a.go"),
+			wantBatch:  batch("", t0, t0),
 		},
 		{
 			name:       "after the window, the retry goes through",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(10 * time.Second)},
-			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
 			wantShown:  shown("", t0, "sql"),
 			wantDenied: denied("", t0, "a.go"),
 		},
 		{
 			name:       "within the window, a retry of the denied file goes through",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(2 * time.Second)},
-			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
 			wantShown:  shown("", t0, "sql"),
 			wantDenied: denied("", t0, "a.go"),
 		},
 		{
 			name:       "a parallel write to the denied file, sooner than RetryAfter, is denied too",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(50 * time.Millisecond)},
-			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
 			wantDeny:   true,
 			wantRules:  []Rule{sqlRule},
 			wantShown:  shown("", t0, "sql"),
@@ -72,14 +81,14 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "a write to the denied file at exactly RetryAfter is a retry",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(RetryAfter)},
-			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
 			wantShown:  shown("", t0, "sql"),
 			wantDenied: denied("", t0, "a.go"),
 		},
 		{
 			name:       "within the window, a parallel write to another file is denied too",
 			in:         Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule}, Now: t0.Add(time.Second)},
-			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
 			wantDeny:   true,
 			wantRules:  []Rule{sqlRule},
 			wantShown:  shown("", t0, "sql"), // not re-stamped: the window does not slide
@@ -88,7 +97,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "a retry that needs a rule never shown is denied with only that rule",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule, logRule}, Now: t0.Add(2 * time.Second)},
-			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
 			wantDeny:   true,
 			wantRules:  []Rule{logRule},
 			wantShown:  map[string]map[string]time.Time{"": {"sql": t0, "log": t0.Add(2 * time.Second)}},
@@ -101,6 +110,7 @@ func TestDecide(t *testing.T) {
 				PromptID: "p1",
 				Shown:    map[string]map[string]time.Time{"": {"sql": t0, "log": t0.Add(time.Second)}},
 				Denied:   map[string]map[string]time.Time{"": {"a.go": t0, "b.go": t0.Add(time.Second)}},
+				Batch:    batch("", t0, t0.Add(time.Second)),
 			},
 			wantDeny:   true,
 			wantRules:  []Rule{logRule},
@@ -110,7 +120,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:      "a subagent writing the main agent's denied file is not a retry",
 			in:        Input{PromptID: "p1", AgentID: "sub", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(time.Second)},
-			st:        session.State{PromptID: "p1", Shown: shown("sub", t0, "sql"), Denied: denied("", t0, "a.go")},
+			st:        session.State{PromptID: "p1", Shown: shown("sub", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("sub", t0, t0)},
 			wantDeny:  true,
 			wantRules: []Rule{sqlRule},
 			wantShown: shown("sub", t0, "sql"),
@@ -131,7 +141,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "a new turn starts with nothing shown and nothing denied",
 			in:         Input{PromptID: "p2", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(time.Minute)},
-			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
 			wantDeny:   true,
 			wantRules:  []Rule{sqlRule},
 			wantShown:  shown("", t0.Add(time.Minute), "sql"),
@@ -149,21 +159,21 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "the clock moved back: a rule shown in the future counts as read",
 			in:         Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule}, Now: t0.Add(-time.Hour)},
-			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
 			wantShown:  shown("", t0, "sql"),
 			wantDenied: denied("", t0, "a.go"),
 		},
 		{
 			name:       "the clock moved back on a retry",
 			in:         Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule}, Now: t0.Add(-time.Hour)},
-			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
 			wantShown:  shown("", t0, "sql"),
 			wantDenied: denied("", t0, "a.go"),
 		},
 		{
 			name:       "at the same instant, another file is in the window",
 			in:         Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule}, Now: t0},
-			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
 			wantDeny:   true,
 			wantRules:  []Rule{sqlRule},
 			wantShown:  shown("", t0, "sql"),
@@ -172,17 +182,85 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "at exactly the window, another file goes through",
 			in:         Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule}, Now: t0.Add(Window)},
-			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go")},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
 			wantShown:  shown("", t0, "sql"),
 			wantDenied: denied("", t0, "a.go"),
 		},
 		{
 			name:      "with no file, there is no retry and nothing is recorded",
 			in:        Input{PromptID: "p1", Rules: []Rule{sqlRule}, Now: t0.Add(time.Second)},
-			st:        session.State{PromptID: "p1", Shown: shown("", t0, "sql")},
+			st:        session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Batch: batch("", t0, t0)},
 			wantDeny:  true,
 			wantRules: []Rule{sqlRule},
 			wantShown: shown("", t0, "sql"),
+		},
+		{
+			name: "a write whose hook started before the batch's last deny is in it, however long it waited for the lock",
+			in: Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule},
+				Start: t0.Add(100 * time.Millisecond), Now: t0.Add(5 * time.Second)},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0.Add(4*time.Second))},
+			wantDeny:   true,
+			wantRules:  []Rule{sqlRule},
+			wantShown:  shown("", t0, "sql"),
+			wantDenied: map[string]map[string]time.Time{"": {"a.go": t0, "b.go": t0.Add(5 * time.Second)}},
+			wantBatch:  batch("", t0, t0.Add(5*time.Second)),
+		},
+		{
+			name: "a hook that started before the batch's first deny, waiting for it, is in the batch",
+			in: Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule},
+				Start: t0.Add(-time.Second), Now: t0.Add(time.Second)},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0.Add(900*time.Millisecond))},
+			wantDeny:   true,
+			wantRules:  []Rule{sqlRule},
+			wantShown:  shown("", t0, "sql"),
+			wantDenied: map[string]map[string]time.Time{"": {"a.go": t0, "b.go": t0.Add(time.Second)}},
+		},
+		{
+			name: "a write to a denied file chained to the batch is a parallel one, not a retry",
+			in: Input{PromptID: "p1", File: "a.go", Rules: []Rule{sqlRule},
+				Start: t0.Add(2100 * time.Millisecond), Now: t0.Add(2200 * time.Millisecond), Window: time.Nanosecond},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0.Add(2*time.Second))},
+			wantDeny:   true,
+			wantRules:  []Rule{sqlRule},
+			wantShown:  shown("", t0, "sql"),
+			wantDenied: denied("", t0.Add(2200*time.Millisecond), "a.go"),
+		},
+		{
+			name:       "a narrower window lets another file through once the chain is broken",
+			in:         Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule}, Now: t0.Add(time.Second), Window: time.Nanosecond},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
+			wantShown:  shown("", t0, "sql"),
+			wantDenied: denied("", t0, "a.go"),
+		},
+		{
+			name:       "a wider window keeps another file in the batch",
+			in:         Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule}, Now: t0.Add(10 * time.Second), Window: time.Minute},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
+			wantDeny:   true,
+			wantRules:  []Rule{sqlRule},
+			wantShown:  shown("", t0, "sql"),
+			wantDenied: map[string]map[string]time.Time{"": {"a.go": t0, "b.go": t0.Add(10 * time.Second)}},
+		},
+		{
+			name: "a rule shown in an earlier batch counts as read in a later one",
+			in:   Input{PromptID: "p1", File: "b.go", Rules: []Rule{sqlRule, logRule}, Now: t0.Add(10*time.Second + 100*time.Millisecond)},
+			st: session.State{PromptID: "p1", Shown: map[string]map[string]time.Time{"": {"sql": t0, "log": t0.Add(10 * time.Second)}},
+				Denied: denied("", t0.Add(10*time.Second), "c.go"), Batch: batch("", t0.Add(10*time.Second), t0.Add(10*time.Second))},
+			wantDeny:   true,
+			wantRules:  []Rule{logRule},
+			wantShown:  map[string]map[string]time.Time{"": {"sql": t0, "log": t0.Add(10 * time.Second)}},
+			wantDenied: map[string]map[string]time.Time{"": {"c.go": t0.Add(10 * time.Second), "b.go": t0.Add(10*time.Second + 100*time.Millisecond)}},
+			wantBatch:  batch("", t0.Add(10*time.Second), t0.Add(10*time.Second+100*time.Millisecond)),
+		},
+		{
+			name:       "a deny outside the batch starts a new one",
+			in:         Input{PromptID: "p1", File: "b.go", Rules: []Rule{logRule}, Now: t0.Add(time.Minute)},
+			st:         session.State{PromptID: "p1", Shown: shown("", t0, "sql"), Denied: denied("", t0, "a.go"), Batch: batch("", t0, t0)},
+			wantDeny:   true,
+			wantRules:  []Rule{logRule},
+			wantShown:  map[string]map[string]time.Time{"": {"sql": t0, "log": t0.Add(time.Minute)}},
+			wantDenied: map[string]map[string]time.Time{"": {"a.go": t0, "b.go": t0.Add(time.Minute)}},
+			wantBatch:  batch("", t0.Add(time.Minute), t0.Add(time.Minute)),
 		},
 		{
 			name: "no rules apply",
@@ -204,6 +282,11 @@ func TestDecide(t *testing.T) {
 			}
 			if diff := cmp.Diff(tt.wantDenied, next.Denied, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("denied (-want +got):\n%s", diff)
+			}
+			if tt.wantBatch != nil {
+				if diff := cmp.Diff(tt.wantBatch, next.Batch); diff != "" {
+					t.Errorf("batch (-want +got):\n%s", diff)
+				}
 			}
 			if diff := cmp.Diff(before, tt.st); diff != "" {
 				t.Errorf("Decide changed the caller's state (-before +after):\n%s", diff)
@@ -232,6 +315,7 @@ func cloneState(st session.State) session.State {
 	st.Shown = cp(st.Shown)
 	st.Denied = cp(st.Denied)
 	st.BashDenied = cp(st.BashDenied)
+	st.Batch = maps.Clone(st.Batch)
 	return st
 }
 
@@ -291,5 +375,37 @@ func TestDecideBatch(t *testing.T) {
 		if got := write(s.file, s.at); got != s.wantDeny {
 			t.Errorf("write %s at +%v: deny = %v, want %v", s.file, s.at, got, s.wantDeny)
 		}
+	}
+}
+
+// TestDecideBatchUnderLoad is #151: the hooks of 16 parallel writes all
+// start at once, then wait for each other's lock, the last for longer than
+// Window. Every one is denied, and the retries of the whole batch go through.
+func TestDecideBatchUnderLoad(t *testing.T) {
+	var st session.State
+	const n = 16
+	step := 400 * time.Millisecond // each hook holds the lock this long
+	for i := range n {
+		var d Decision
+		d, st = Decide(Input{PromptID: "p1", File: fmt.Sprintf("pkg%d/f.go", i), Rules: []Rule{sqlRule},
+			Start: t0, Now: t0.Add(time.Duration(i) * step)}, st)
+		if !d.Deny {
+			t.Errorf("write %d, deciding %v after the batch started: let through unread", i, time.Duration(i)*step)
+		}
+	}
+	// The agent reads the reasons after the last hook, and retries.
+	retry := t0.Add(n*step + time.Second)
+	for i := range n {
+		var d Decision
+		at := retry.Add(time.Duration(i) * step)
+		d, st = Decide(Input{PromptID: "p1", File: fmt.Sprintf("pkg%d/f.go", i), Rules: []Rule{sqlRule},
+			Start: retry, Now: at}, st)
+		if d.Deny {
+			t.Errorf("retry %d denied again", i)
+		}
+	}
+	// A write to a new file, after the agent read the rules, goes through.
+	if d, _ := Decide(Input{PromptID: "p1", File: "other.go", Rules: []Rule{sqlRule}, Now: retry.Add(time.Minute)}, st); d.Deny {
+		t.Error("a later write was shown a rule the agent already read")
 	}
 }

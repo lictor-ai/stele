@@ -6,6 +6,28 @@
 // (ADR-0004). Given the rules, the session state and the time, it
 // returns the decision and the state to save, so the most behaviour-dense part
 // of the hook is a table test.
+//
+// # Batches
+//
+// A batch is the writes the agent issues at once, in one message: their
+// hooks run before it reads any deny reason, so a rule one deny of the batch
+// showed is not read yet when the next hook runs, and that write is denied
+// with it too. The agent reads the rules once and retries the whole batch.
+//
+// The turn (PromptID) cannot tell a batch apart: one turn holds many model
+// round trips. So a batch is told by when each hook started, taken before it
+// waited for the session lock or anything else, never by when it got the
+// lock: in a batch of many, a hook can wait seconds for the others (#151). A
+// hook is in the batch of the agent's last deny when
+//
+//   - it started before that deny was answered, or less than RetryAfter
+//     after it (chained): the agent cannot have read it; or
+//   - it started less than Window after the batch's first deny, which covers
+//     the hooks of a batch the agent starts slowly.
+//
+// A retry is recognised by its file: a write to a file whose write was
+// denied, started at least RetryAfter after that deny and not chained to the
+// batch, comes after the agent read the batch's reasons.
 package backstop
 
 import (
@@ -15,22 +37,24 @@ import (
 	"github.com/lictor-ai/stele/internal/session"
 )
 
-// Window is how long after a rule is shown a write that needs it is still
-// denied. The agent often issues several writes at once, and their hooks run
-// before it reads any deny reason; the window denies the whole batch, so the
-// agent reads the rules once and retries all of it. A model can retry within
-// the window, so a retry is recognised by its file: a write to a file whose
-// write was denied at least RetryAfter ago comes after that deny's reason
-// was read.
-// A time before a rule was shown (the clock moved back) is outside it.
+// Window is how long after a batch's first deny a write is still taken as
+// part of the batch, however its hook was delayed. The chain covers hooks
+// that follow each other closely; this covers a batch the agent starts
+// slowly. A time before the batch's first deny is not in the window.
 const Window = 3 * time.Second
 
-// RetryAfter is how long after a deny a write to the same file counts as the
-// agent's retry. The hooks of parallel tool calls run within milliseconds of
-// each other; a retry needs a model round trip, and the fastest seen took
-// 1.2 s. A write to the denied file sooner than this is a parallel write,
-// denied as any other in the window.
+// RetryAfter is how long after a deny a write counts as the agent's next
+// step, made after it read the reason. The hooks of parallel tool calls run
+// within milliseconds of each other; a retry needs a model round trip, and
+// the fastest seen took 1.2 s. A write that started sooner than this after
+// the batch's last deny is in the batch.
 const RetryAfter = 500 * time.Millisecond
+
+// Lead is how long before a batch's first deny a hook of that batch can have
+// started: it was waiting for the hooks before it. A hook that started
+// earlier is not chained to the batch: the clock moved back, and chaining it
+// could deny a write until the clock caught up.
+const Lead = 10 * time.Second
 
 // Rule is a rule that applies to the file about to be written.
 type Rule struct {
@@ -49,11 +73,16 @@ func loaded(st session.State, agent string, r Rule) bool {
 
 // Input is what the hook knows about one write.
 type Input struct {
-	PromptID string    // the turn; a new one starts with no rules shown
-	AgentID  string    // "" for the main agent; a subagent has its own record
-	File     string    // root-relative path of the file written; "" disables retry detection
-	Rules    []Rule    // every rule that applies to the file
-	Now      time.Time // when the hook runs
+	PromptID string // the turn; a new one starts with no rules shown
+	AgentID  string // "" for the main agent; a subagent has its own record
+	File     string // root-relative path of the file written; "" disables retry detection
+	Rules    []Rule // every rule that applies to the file
+	// Start is when the hook started, before it waited for anything; a
+	// batch is told by it. Zero, or after Now, means Now.
+	Start time.Time
+	Now   time.Time // when the hook decides, holding the session lock
+	// Window replaces the package's Window when positive.
+	Window time.Duration
 	// Fit returns how many of the rules to show, in order, fit in the
 	// message; nil fits them all. With none, the deny shows only a count.
 	Fit func([]Rule) int
@@ -74,12 +103,16 @@ func Decide(in Input, st session.State) (Decision, session.State) {
 	}
 	newTurn(&st, in.PromptID)
 	shown := st.Shown[in.AgentID]
-	// A retry: this file's write was denied at least RetryAfter ago, so the
-	// agent has read that reason, which held every rule for the file shown
-	// at or before it. Sooner is a parallel write to the same file, and a
-	// deny in the future (the clock moved back) proves nothing.
+	c := newClock(in.Start, in.Now, in.Window)
+	b := st.Batch[in.AgentID]
+	chained, inBatch := c.in(b)
+	// A retry: this file's write was denied at least RetryAfter before this
+	// hook started, and the batch has ended, so the agent has read that
+	// reason, which held every rule for the file shown at or before it.
+	// Sooner is a parallel write to the same file, and a deny in the future
+	// (the clock moved back) proves nothing.
 	deniedAt, retry := st.Denied[in.AgentID][in.File]
-	retry = retry && in.File != "" && in.Now.Sub(deniedAt) >= RetryAfter
+	retry = retry && in.File != "" && !chained && c.start.Sub(deniedAt) >= RetryAfter
 
 	var show []Rule
 	var fresh []string
@@ -93,7 +126,7 @@ func Decide(in Input, st session.State) (Decision, session.State) {
 			fresh = append(fresh, r.ID)
 		case retry && !at.After(deniedAt):
 			// read in this file's deny reason, or before it
-		case inWindow(in.Now, at):
+		case inBatch && shownIn(b, at):
 			show = append(show, r) // same batch: shown, but not read yet
 		}
 	}
@@ -107,11 +140,59 @@ func Decide(in Input, st session.State) (Decision, session.State) {
 	show, fresh = show[:k], kept(fresh, show[:k])
 
 	// Copy before writing, so the caller's state is never changed in place.
-	st.Shown = with(st.Shown, in.AgentID, fresh, in.Now)
+	st.Shown = with(st.Shown, in.AgentID, fresh, c.now)
 	if in.File != "" {
-		st.Denied = with(st.Denied, in.AgentID, []string{in.File}, in.Now)
+		st.Denied = with(st.Denied, in.AgentID, []string{in.File}, c.now)
 	}
+	st.Batch = extend(st.Batch, in.AgentID, inBatch, c.now)
 	return Decision{Deny: true, Rules: show, More: more}, st
+}
+
+// clock is when a hook started and decided, and the window it uses.
+type clock struct {
+	start, now time.Time
+	window     time.Duration
+}
+
+func newClock(start, now time.Time, window time.Duration) clock {
+	if start.IsZero() || start.After(now) {
+		start = now
+	}
+	if window <= 0 {
+		window = Window
+	}
+	return clock{start: start, now: now, window: window}
+}
+
+// in reports whether a hook with this clock is chained to batch b, and
+// whether it is in b at all (chained, or in b's window). No batch holds
+// nothing.
+func (c clock) in(b session.Batch) (chained, in bool) {
+	if b.End.IsZero() {
+		return false, false
+	}
+	chained = c.start.Sub(b.End) < RetryAfter && b.Start.Sub(c.start) <= Lead
+	d := c.start.Sub(b.Start)
+	return chained, chained || (d >= 0 && d < c.window)
+}
+
+// shownIn reports whether a rule shown at at was shown in batch b.
+func shownIn(b session.Batch, at time.Time) bool {
+	return !b.End.IsZero() && !at.Before(b.Start) && !at.After(b.End)
+}
+
+// extend returns a copy of m in which agent's batch takes a deny decided at
+// now: the batch goes on when the write was in it, else a new one starts.
+func extend(m map[string]session.Batch, agent string, inBatch bool, now time.Time) map[string]session.Batch {
+	next := make(map[string]session.Batch, len(m)+1)
+	maps.Copy(next, m)
+	b := next[agent]
+	if !inBatch || b.End.IsZero() {
+		b.Start = now
+	}
+	b.End = now
+	next[agent] = b
+	return next
 }
 
 // fit returns how many of rs f fits: all with no f.
@@ -143,15 +224,8 @@ func kept(ids []string, rs []Rule) []string {
 func newTurn(st *session.State, prompt string) {
 	if prompt != st.PromptID {
 		st.PromptID = prompt
-		st.Shown, st.Denied, st.BashDenied = nil, nil, nil
+		st.Shown, st.Denied, st.BashDenied, st.Batch = nil, nil, nil, nil
 	}
-}
-
-// inWindow reports whether now is within Window after at. A now before at
-// means the clock moved back, and is outside: the rule counts as read.
-func inWindow(now, at time.Time) bool {
-	d := now.Sub(at)
-	return d >= 0 && d < Window
 }
 
 // with returns a copy of m in which agent's keys are stamped at, leaving m

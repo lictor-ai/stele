@@ -5,6 +5,10 @@ Write it with {{.Words.WriteInstead}}: stele shows you the rules first and check
 
 Note: {{.Note}}
 {{- end}}
+{{- if and (not .Rules) (not .More)}}
+
+You have already been given its rules in this session: follow them.
+{{- end}}
 {{range .Rules}}
 ---
 {{.Text}}

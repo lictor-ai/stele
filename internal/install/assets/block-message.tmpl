@@ -1,6 +1,6 @@
-stele paused this write to {{.Path}}: this project has rules for it that you have not seen in this turn.
+stele paused this write to {{.Path}}: this project has rules for it that you have not read yet in this turn.
 
-Read them, make sure your change follows them, then retry the same write. It will go through. Each rule is shown once per turn. Write files with {{.Words.WriteTools}} only, not through {{.Words.Shell}}.
+Read them, make sure your change follows them, then retry the same write. It will go through. Each rule is shown once per turn, and again to the writes you sent together with this one, since none of their reasons had been read. Write files with {{.Words.WriteTools}} only, not through {{.Words.Shell}}.
 {{- if .Note}}
 
 Note: {{.Note}}

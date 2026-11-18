@@ -42,8 +42,11 @@ const (
 )
 
 // lockWait is how long an update waits for another process's lock. The hook
-// runs on every write, so it must not wait long. A test raises it.
-var lockWait = 2 * time.Second
+// runs on every write, so it must not wait long; but a batch of parallel
+// writes queues on this lock, and an update that gives up lets its write
+// through unread (#151). Half the 10 s an agent gives the hook. A test
+// raises it.
+var lockWait = 5 * time.Second
 
 // ErrBadSessionID is a session id that cannot name a file. The id comes from
 // the host agent, or from .stele/state/current, which a cloned repository can
@@ -78,6 +81,10 @@ type State struct {
 	// was stopped from writing and when (#57): agent id to root-relative file
 	// to time. The same command run again is let through.
 	BashDenied map[string]map[string]time.Time `json:"bash_denied,omitempty"`
+	// Batch records, for each agent this turn, the batch of parallel writes
+	// its last deny belongs to (#151): the writes the agent issued at once,
+	// whose hooks run before it reads any deny reason.
+	Batch map[string]Batch `json:"batch,omitempty"`
 	// Primed records, per agent ("" for the main agent), the rules in
 	// the agent's rules file as that agent loaded it: rule id to a hash
 	// of the block's text (#68). The agent loads the file at session start,
@@ -97,6 +104,12 @@ type State struct {
 	// warning comes once a session for each set of problems (#54).
 	RulesWarned string    `json:"rules_warned,omitempty"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// Batch is a batch of denies: when its first was decided, and its last.
+type Batch struct {
+	Start time.Time `json:"start"`
+	End   time.Time `json:"end"`
 }
 
 // errUnreadable is a state file that exists but holds no usable state: not

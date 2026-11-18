@@ -18,7 +18,9 @@ type BashInput struct {
 	PromptID string
 	AgentID  string
 	Files    []BashFile
-	Now      time.Time
+	Start    time.Time        // as for Input
+	Now      time.Time        // as for Input
+	Window   time.Duration    // as for Input
 	Fit      func([]Rule) int // as for Input
 }
 
@@ -26,14 +28,17 @@ type BashInput struct {
 type BashDecision struct {
 	Deny  bool
 	Files []string // the files denied, in input order
-	Rules []Rule   // the rules the agent has not been shown, each once, in input order
-	More  int      // unseen rules left out of the message; they stay unseen
+	// Rules are the rules the agent has not read, each once, in input
+	// order: never shown, or shown in this batch. Empty when it has read
+	// them all, or loaded them at the session's start.
+	Rules []Rule
+	More  int // unseen rules left out of the message; they stay unseen
 }
 
 // DecideBash decides a shell command that writes files with rules (#57). A
 // file written through the shell is never shown its rules or checked, so the
 // first such command for a file, per agent and turn, is denied: the agent
-// is told to use its write tools, and given the rules it has not seen. The
+// is told to use its write tools, and given the rules it has not read. The
 // same command run again, at least RetryAfter later, goes through: the file
 // may have to come from the command itself.
 //
@@ -45,23 +50,35 @@ func DecideBash(in BashInput, st session.State) (BashDecision, session.State) {
 	}
 	newTurn(&st, in.PromptID)
 	shown := st.Shown[in.AgentID]
+	c := newClock(in.Start, in.Now, in.Window)
+	b := st.Batch[in.AgentID]
+	chained, inBatch := c.in(b)
 
 	var d BashDecision
 	listed := map[string]bool{}
 	var fresh []string
 	for _, f := range in.Files {
-		// A retry, as for Decide: denied at least RetryAfter ago, and not in
-		// the future.
-		if at, ok := st.BashDenied[in.AgentID][f.File]; ok && in.Now.Sub(at) >= RetryAfter {
+		// A retry, as for Decide: denied at least RetryAfter before this
+		// hook started, not chained to the batch, and not in the future.
+		if at, ok := st.BashDenied[in.AgentID][f.File]; ok && !chained && c.start.Sub(at) >= RetryAfter {
 			continue
 		}
 		d.Files = append(d.Files, f.File)
 		for _, r := range f.Rules {
-			if _, seen := shown[r.ID]; !seen && !listed[r.ID] && !loaded(st, in.AgentID, r) {
-				listed[r.ID] = true
-				d.Rules = append(d.Rules, r)
-				fresh = append(fresh, r.ID)
+			if listed[r.ID] || loaded(st, in.AgentID, r) {
+				continue
 			}
+			at, seen := shown[r.ID]
+			switch {
+			case !seen:
+				fresh = append(fresh, r.ID)
+			case inBatch && shownIn(b, at):
+				// shown in this batch, not read yet
+			default:
+				continue // read
+			}
+			listed[r.ID] = true
+			d.Rules = append(d.Rules, r)
 		}
 	}
 	if len(d.Files) == 0 {
@@ -73,10 +90,11 @@ func DecideBash(in BashInput, st session.State) (BashDecision, session.State) {
 	d.More = len(d.Rules) - k
 	d.Rules, fresh = d.Rules[:k], kept(fresh, d.Rules[:k])
 	// Copy before writing, so the caller's state is never changed in place.
-	st.BashDenied = with(st.BashDenied, in.AgentID, d.Files, in.Now)
-	st.Denied = with(st.Denied, in.AgentID, d.Files, in.Now)
+	st.BashDenied = with(st.BashDenied, in.AgentID, d.Files, c.now)
+	st.Denied = with(st.Denied, in.AgentID, d.Files, c.now)
 	if len(fresh) > 0 {
-		st.Shown = with(st.Shown, in.AgentID, fresh, in.Now)
+		st.Shown = with(st.Shown, in.AgentID, fresh, c.now)
 	}
+	st.Batch = extend(st.Batch, in.AgentID, inBatch, c.now)
 	return d, st
 }
