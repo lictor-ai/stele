@@ -364,7 +364,7 @@ $ stele compile
 stele compile: stele.json: invalid JSON at line 3, column 1: invalid character '}' looking for beginning of object key string
 ```
 
-The hook still applies the rules, which come from `stele.md`. It can't read `block_on_error`, so it takes it as `false`, and warns you on each write:
+The hook still applies the rules from the compiled index (built from `stele.md`). It can't read `block_on_error`, so it takes it as `false`, and warns you on each write:
 
 ```
 stele: stele.json: invalid JSON at line 3, column 1: invalid character '}' looking for beginning of object key string. The rules still apply; block_on_error is off until stele.json is fixed.

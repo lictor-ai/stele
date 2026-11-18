@@ -68,6 +68,19 @@ func TestValidNamesPosition(t *testing.T) {
 	if err := d.Valid(); err == nil || !strings.Contains(err.Error(), "line 1, column 9:") {
 		t.Fatalf("err = %v", err)
 	}
+	for _, c := range []struct{ in, want string }{
+		// A column counts characters, not bytes.
+		{"{\n  \"a\": \"éé\",}", "line 2, column 13:"},
+		// A carriage return ends the line before; it moves no column.
+		{"{\r\n  \"a\": 1,\r\n}\r\n", "line 3, column 1:"},
+		// At the end of the input, the place after the last character.
+		{`{"a": 1`, "line 1, column 8:"},
+	} {
+		d, _ = Split([]byte(c.in))
+		if err := d.Valid(); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("Valid(%q) = %v, want %q", c.in, err, c.want)
+		}
+	}
 }
 
 func TestMarshalKeepsHTML(t *testing.T) {

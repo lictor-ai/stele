@@ -102,13 +102,15 @@ func Load(root string) (Policy, error) {
 	if err != nil {
 		return Default(), err
 	}
-	if _, err := Parse(data); err != nil {
-		return Default(), err
-	}
 	var raw struct {
 		BlockOnError *bool `json:"block_on_error"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
+		// A file that is not a JSON object says so, as every command
+		// says it; only a bad value is block_on_error's.
+		if _, perr := Parse(data); perr != nil {
+			return Default(), perr
+		}
 		return Default(), fmt.Errorf("%s: %w", FileName, err)
 	}
 	p := Default()
@@ -160,6 +162,8 @@ func describe(kind string) string {
 	switch kind {
 	case "array", "object":
 		return "an " + kind
+	case "bool":
+		return "a boolean (true or false)"
 	}
 	return "a " + kind
 }

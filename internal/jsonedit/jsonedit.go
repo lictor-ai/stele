@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 )
 
 // Member is one key of a JSON object, its key and value kept exactly as
@@ -154,7 +155,7 @@ func (d Doc) Valid() error {
 	if err := json.Unmarshal(d.Body, &v); err != nil {
 		var se *json.SyntaxError
 		if errors.As(err, &se) {
-			line, col := position(d.Body, se.Offset)
+			line, col := position(d.Body, se.Offset, se.Error() == "unexpected end of JSON input")
 			return fmt.Errorf("invalid JSON at line %d, column %d: %v", line, col, err)
 		}
 		return fmt.Errorf("invalid JSON: %v", err)
@@ -180,12 +181,18 @@ func (d Doc) Render(compact []byte) ([]byte, error) {
 	return out, nil
 }
 
-// position turns a json.SyntaxError's offset, the bytes read up to and
-// including the one in error, into that byte's 1-based line and column.
-func position(data []byte, offset int64) (line, col int) {
-	at := min(max(int(offset)-1, 0), len(data))
+// position turns a json.SyntaxError's offset into the 1-based line and
+// column, in characters, of the byte in error. The offset counts the bytes
+// read up to and including that byte; at the end of the input, where no byte
+// is in error, it is the input's length and names the place after the last.
+func position(data []byte, offset int64, atEnd bool) (line, col int) {
+	at := int(offset)
+	if !atEnd {
+		at--
+	}
+	at = min(max(at, 0), len(data))
 	before := data[:at]
 	line = bytes.Count(before, []byte("\n")) + 1
-	col = at - bytes.LastIndexByte(before, '\n')
+	col = utf8.RuneCount(before[bytes.LastIndexByte(before, '\n')+1:]) + 1
 	return line, col
 }

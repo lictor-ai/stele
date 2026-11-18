@@ -813,12 +813,13 @@ marked shown; the rest stay unseen, so the next write, the retry, is denied
 with them. A Bash command writing into several projects shares one message
 budget across them. The first message shows at least one rule, however long.
 
-**Failures** — no key, a session that cannot be saved, an invalid `stele.json`,
-`stele.md` broken with no good index behind it — go to `failure`: with
-`block_on_error` off, allow and warn the user (`systemMessage`); with it on, deny
-and tell the agent why. A broken `stele.md` with a good index behind it is not a
-failure: the last good rules apply, and a note in the answer tells the agent what
-is wrong. A repository without `stele.md` or `stele.json` is left alone entirely:
+**Failures** — no key, a session that cannot be saved, `stele.md` broken with
+no good index behind it — go to `failure`: with `block_on_error` off, allow and
+warn the user (`systemMessage`); with it on, deny and tell the agent why. A
+broken `stele.md` with a good index behind it is not a failure: the last good
+rules apply, and a note in the answer tells the agent what is wrong. Nor is a
+`stele.json` that cannot be read: the rules still apply from the index,
+`block_on_error` is taken as off, and the user is warned (#150). A repository without `stele.md` or `stele.json` is left alone entirely:
 the hook writes nothing there, even when it finds a `.git`.
 
 ### `internal/matcher` and `internal/serve`

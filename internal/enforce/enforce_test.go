@@ -212,6 +212,7 @@ func TestParse(t *testing.T) {
 		{``, "stele.json: invalid JSON at line 1, column 1: unexpected end of JSON input"},
 		{`[1]`, "stele.json: the file is an array; it must be an object, such as {}"},
 		{`"x"`, "stele.json: the file is a string; it must be an object, such as {}"},
+		{`true`, "stele.json: the file is a boolean (true or false); it must be an object, such as {}"},
 	}
 	for _, tt := range tests {
 		m, err := Parse([]byte(tt.content))
@@ -238,5 +239,17 @@ func TestLoadSyntaxError(t *testing.T) {
 	}
 	if p != Default() {
 		t.Errorf("Load = %+v, want the default policy", p)
+	}
+	// Not an object: said as Parse says it. A bad value: block_on_error's.
+	for content, want := range map[string]string{
+		`[1]`:                       "stele.json: the file is an array; it must be an object, such as {}",
+		`{"block_on_error": "yes"}`: "block_on_error",
+	} {
+		if err := os.WriteFile(filepath.Join(root, FileName), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(root); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Load(%s): err = %v, want %q", content, err, want)
+		}
 	}
 }
