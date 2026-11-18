@@ -168,3 +168,42 @@ func TestHookAsksForTheSigningKeyThroughALink(t *testing.T) {
 		t.Errorf("a Write through a link to the key's folder: %s, want ask", out)
 	}
 }
+
+// Before stele's first run there is no key and no folder yet: a write that
+// would make them, with a key the agent chose, asks all the same.
+func TestHookAsksForTheSigningKeyBeforeItExists(t *testing.T) {
+	root := project(t, "")
+	clock(t, time.Now())
+	dir := filepath.Join(t.TempDir(), "stele")
+	keyDir = func() (string, error) { return dir, nil } // project restores it
+	key := sign.KeyFile(dir)
+	if o, out := hook(t, inSession("Write", key, root)); !asks(t, o, filepath.ToSlash(key)) {
+		t.Errorf("a Write to a key not made yet: %s, want ask", out)
+	}
+	t.Setenv("KEYDIR", dir)
+	if o, out := hook(t, bash("echo x > $KEYDIR/key", root, "p1", "")); o.HookSpecificOutput.PermissionDecision != "ask" {
+		t.Errorf("a redirect to a key not made yet: %s, want ask", out)
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Errorf("the hook made the key's folder")
+	}
+}
+
+// Removing a folder that holds the key says so, rather than calling the
+// folder one of stele's own files.
+func TestHookAsksForTheSigningKeyFolder(t *testing.T) {
+	root := project(t, hookRules)
+	clock(t, time.Now())
+	dir, _ := signingKeyFile(t)
+	t.Setenv("KEYDIR", dir)
+	for _, command := range []string{"rm -rf $KEYDIR", "rm -rf $KEYDIR/.."} {
+		o, out := hook(t, bash(command, root, "p1", ""))
+		if r := o.HookSpecificOutput.PermissionDecisionReason; o.HookSpecificOutput.PermissionDecision != "ask" ||
+			!strings.Contains(r, "holds stele's signing key") || strings.Contains(r, "is one of stele's own files") {
+			t.Errorf("%q: %s, want an ask saying it holds the key", command, out)
+		}
+	}
+	if o, _ := hook(t, bash("rm $KEYDIR/key", root, "p1", "")); !strings.Contains(o.HookSpecificOutput.PermissionDecisionReason, "is one of stele's own files") {
+		t.Errorf("rm of the key: %+v", o.HookSpecificOutput)
+	}
+}

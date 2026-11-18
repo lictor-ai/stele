@@ -60,6 +60,7 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 	}
 	defer func(prev adapter.Adapter) { agent = prev }(agent)
 	agent = who
+	keyCache = nil // the signing key is looked at once per call
 	data, err := io.ReadAll(io.LimitReader(stdin, maxPayload))
 	if err != nil {
 		return exitOK

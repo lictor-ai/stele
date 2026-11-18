@@ -8,7 +8,6 @@ import (
 	"github.com/lictor-ai/stele/internal/backstop"
 	"github.com/lictor-ai/stele/internal/install"
 	"github.com/lictor-ai/stele/internal/journal"
-	"github.com/lictor-ai/stele/internal/safefile"
 	"github.com/lictor-ai/stele/internal/scope"
 	"github.com/lictor-ai/stele/internal/session"
 	"github.com/lictor-ai/stele/internal/shell"
@@ -27,6 +26,7 @@ func beforeBash(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 	}
 	targets, _ := read(ev.Command, ev.Cwd)
 	var asks, roots []string
+	folders := 0 // asks for a folder that holds stele's signing key
 	rels := map[string][]string{}
 	for _, t := range targets {
 		root, rel, ok := target(t.Path)
@@ -37,12 +37,16 @@ func beforeBash(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 		}
 		if !ok {
 			// stele's signing key, outside every project (#152).
-			if signingKey(t.Path) {
+			r := resolved(t.Path)
+			if hit := signingKey(t.Path, r); hit != keyMissed {
 				asks = append(asks, filepath.ToSlash(t.Path))
+				if hit == keyAbove {
+					folders++
+				}
 				continue
 			}
 			// Outside every project, but a link may lead into one.
-			if r, ok := safefile.Resolve(t.Path); ok && r != t.Path {
+			if r != "" {
 				if rroot, rrel, ok := target(r); ok && guarded(rroot, rrel, r) {
 					asks = append(asks, rrel)
 				}
@@ -77,7 +81,11 @@ func beforeBash(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 		a.Warning = joinLines(a.Warning, r.Warning)
 	}
 	if !a.Deny && len(asks) > 0 {
-		a.Ask = install.AskMessage(agent.Words(), showPath(strings.Join(asks, ", ")))
+		ask := install.AskMessage
+		if folders == len(asks) {
+			ask = install.AskKeyFolderMessage
+		}
+		a.Ask = ask(agent.Words(), showPath(strings.Join(asks, ", ")))
 	}
 	return a
 }

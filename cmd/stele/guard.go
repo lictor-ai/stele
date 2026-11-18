@@ -67,13 +67,17 @@ func allSettings() []string {
 // one, below the root, under any name: one git recognises ends the project.
 // And so is a write to stele's signing key, wherever it is (#152).
 func guarded(root, rel, file string) bool {
-	if signingKey(file) || ownName(rel) || gitName(root, rel) || inGit(root, file) {
+	if ownName(rel) || gitName(root, rel) || inGit(root, file) {
 		return true
 	}
-	if r, ok := safefile.Resolve(file); ok && r != file {
+	r := resolved(file)
+	if r != "" {
 		if rroot, rrel, ok := target(r); ok && (ownName(rrel) || gitName(rroot, rrel)) {
 			return true
 		}
+	}
+	if signingKey(file, r) != keyMissed {
+		return true
 	}
 	// The root's .stele under another name, such as an 8.3 short name.
 	if dot, err := os.Stat(filepath.Join(root, ".stele")); err == nil {
@@ -250,11 +254,17 @@ func askOutside(ev adapter.Event, e adapter.Edit) adapter.Answer {
 	if !e.Writes && !e.Removes {
 		return adapter.Answer{}
 	}
-	if loadsSettings(ev, e.File) || signingKey(e.File) {
+	if loadsSettings(ev, e.File) {
 		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(filepath.ToSlash(e.File)))}
 	}
-	r, ok := safefile.Resolve(e.File)
-	if !ok || r == e.File {
+	r := resolved(e.File)
+	switch signingKey(e.File, r) {
+	case keyItself:
+		return adapter.Answer{Ask: install.AskMessage(agent.Words(), showPath(filepath.ToSlash(e.File)))}
+	case keyAbove:
+		return adapter.Answer{Ask: install.AskKeyFolderMessage(agent.Words(), showPath(filepath.ToSlash(e.File)))}
+	}
+	if r == "" {
 		return adapter.Answer{}
 	}
 	if root, rel, ok := target(r); ok && guarded(root, rel, r) {
@@ -263,69 +273,130 @@ func askOutside(ev adapter.Event, e adapter.Edit) adapter.Answer {
 	return adapter.Answer{}
 }
 
-// signingKey reports whether a write to file, or a removal of it, changes the
-// key stele signs its files and log with (#152): the key file, a path below
-// it, or a directory on its way, such as stele's config directory. With the
-// key, the agent could sign lines stele never wrote; with a new one, stele
-// ignores every line signed before. Names are compared as cleanRel cleans
-// them, in any case, as written and after the links on their way; a hard
-// link or an 8.3 short name is caught by a same-file test. Reading the key
-// is not a write: stele sees no read.
-func signingKey(file string) bool {
+// keyHit is what a write does to stele's signing key.
+type keyHit int
+
+const (
+	keyMissed keyHit = iota // not the key
+	keyItself               // the key, or a path below it
+	keyAbove                // the key's folder, or one above it
+)
+
+// keySide is what signingKey needs of the key, found once per hook call.
+type keySide struct {
+	dir    string
+	base   string        // the key file's name
+	names  []string      // the key, as written and after links, as norm writes it
+	info   os.FileInfo   // the key; nil when there is none yet
+	folder os.FileInfo   // the key's folder; nil when there is none yet
+	above  []os.FileInfo // the key's folder and each one above it that exists
+}
+
+// keyCache holds the key side for keyDir's dir; runHook empties it, so each
+// hook call looks once.
+var keyCache *keySide
+
+// loadKeySide returns the key side, nil when there is no config directory.
+func loadKeySide() *keySide {
 	dir, err := keyDir()
-	if err != nil || dir == "" || file == "" {
-		return false
+	if err != nil || dir == "" {
+		return nil
+	}
+	if keyCache != nil && keyCache.dir == dir {
+		return keyCache
 	}
 	key := sign.KeyFile(dir)
-	for _, f := range withLinks(file) {
-		for _, k := range withLinks(key) {
-			if onPath(f, k) || onPath(k, f) {
-				return true
+	k := &keySide{dir: dir, base: filepath.Base(key)}
+	for _, n := range withLinks(key) {
+		k.names = append(k.names, norm(n))
+	}
+	if info, err := os.Stat(key); err == nil {
+		k.info = info
+	}
+	if info, err := os.Stat(dir); err == nil {
+		k.folder = info
+	}
+	for d := dir; ; d = filepath.Dir(d) {
+		if info, err := os.Stat(d); err == nil {
+			k.above = append(k.above, info)
+		}
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	keyCache = k
+	return k
+}
+
+// resolved is file after the links on its way, or "" when they lead nowhere
+// else.
+func resolved(file string) string {
+	if r, ok := safefile.Resolve(file); ok && r != file {
+		return r
+	}
+	return ""
+}
+
+// signingKey reports what a write to file, or a removal of it, does to the
+// key stele signs its files and log with (#152): it changes the key when it
+// is the key file or a path below it, and removes or replaces it when it is
+// the key's folder or one above it, such as stele's config directory. With
+// the key, the agent could sign lines stele never wrote; with a new one,
+// stele ignores every line signed before. r is file after its links, as
+// resolved returns it. Names are compared as norm writes them, as written
+// and after links; a hard link or an 8.3 short name is caught by a same-file
+// test. Reading the key is not a write: stele sees no read.
+func signingKey(file, r string) keyHit {
+	k := loadKeySide()
+	if k == nil || file == "" {
+		return keyMissed
+	}
+	fs := []string{norm(file)}
+	if r != "" {
+		fs = append(fs, norm(r))
+	}
+	for _, f := range fs {
+		for _, n := range k.names {
+			switch {
+			case f == n || strings.HasPrefix(f, n+"/"):
+				return keyItself
+			case strings.HasPrefix(n, strings.TrimRight(f, "/")+"/"):
+				return keyAbove
 			}
 		}
 	}
-	info, err := os.Stat(file)
-	if err == nil {
-		// The key under another name.
-		if k, err := os.Stat(key); err == nil && os.SameFile(info, k) {
-			return true
+	if info, err := os.Stat(file); err == nil {
+		if k.info != nil && os.SameFile(info, k.info) {
+			return keyItself // the key under another name
 		}
-		// The key's directory, or one above it, under another name.
 		if info.IsDir() {
-			for d := dir; ; d = filepath.Dir(d) {
-				if di, err := os.Stat(d); err == nil && os.SameFile(info, di) {
-					return true
-				}
-				if filepath.Dir(d) == d {
-					break
+			for _, a := range k.above {
+				if os.SameFile(info, a) {
+					return keyAbove // the key's folder under another name
 				}
 			}
 		}
 	}
-	// A new key in the key's directory under another name.
-	if parent, err := os.Stat(filepath.Dir(file)); err == nil && strings.EqualFold(cleanRel(filepath.Base(file)), filepath.Base(key)) {
-		if kd, err := os.Stat(dir); err == nil && os.SameFile(parent, kd) {
-			return true
+	// A new key in the key's folder under another name.
+	if k.folder != nil && strings.EqualFold(cleanRel(filepath.Base(file)), k.base) {
+		if parent, err := os.Stat(filepath.Dir(file)); err == nil && os.SameFile(parent, k.folder) {
+			return keyItself
 		}
 	}
-	return false
+	return keyMissed
 }
 
 // withLinks is file, and file after the links on its way when they lead
 // elsewhere.
 func withLinks(file string) []string {
-	if r, ok := safefile.Resolve(file); ok && r != file {
+	if r := resolved(file); r != "" {
 		return []string{file, r}
 	}
 	return []string{file}
 }
 
-// onPath reports whether file is dir or below it, both absolute, compared
-// after cleanRel and in any case: an extra prompt is harmless.
-func onPath(dir, file string) bool {
-	norm := func(p string) string {
-		return strings.ToLower(cleanRel(filepath.ToSlash(filepath.Clean(p))))
-	}
-	d, f := strings.TrimRight(norm(dir), "/"), norm(file)
-	return f == d || strings.HasPrefix(f, d+"/")
+// norm is an absolute path cleaned, with / separators, each segment as
+// cleanRel cleans it, in lower case: an extra prompt is harmless.
+func norm(p string) string {
+	return strings.ToLower(cleanRel(filepath.ToSlash(filepath.Clean(p))))
 }
