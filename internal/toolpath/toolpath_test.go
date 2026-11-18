@@ -25,6 +25,44 @@ func pathOf(env []string) (string, bool) {
 	return "", false
 }
 
+// withNoCwd is want as Env returns it: with NoDefaultCurrentDirectoryInExePath
+// on Windows.
+func withNoCwd(want []string) []string {
+	if runtime.GOOS == "windows" {
+		return append(slices.Clip(want), "NoDefaultCurrentDirectoryInExePath=1")
+	}
+	return want
+}
+
+// On Windows the programs stele starts, and cmd.exe running a .cmd shim
+// for one, look for what they start on PATH only, never in the working
+// directory first; once is enough, in whatever case it is spelled.
+func TestEnvNoCwdLookup(t *testing.T) {
+	root := t.TempDir()
+	for _, f := range []func([]string, string) []string{Env, PluginEnv} {
+		for _, r := range []string{root, ""} {
+			got := f([]string{"A=1"}, r)
+			want := []string{"A=1"}
+			if runtime.GOOS == "windows" {
+				want = append(want, "NoDefaultCurrentDirectoryInExePath=1")
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("env with root %q = %q, want %q", r, got, want)
+			}
+			set := []string{"nodefaultcurrentdirectoryinexepath=yes", "A=1"}
+			if got := f(set, r); !slices.Equal(got, set) {
+				t.Errorf("env with root %q = %q, want %q as it was", r, got, set)
+			}
+		}
+	}
+	in := make([]string, 1, 4)
+	in[0] = "A=1"
+	_ = Env(in, "")
+	if extra := in[:2]; extra[1] != "" {
+		t.Errorf("Env wrote past its input's length: %q", extra)
+	}
+}
+
 func TestEnvFiltersPath(t *testing.T) {
 	top := t.TempDir()
 	if err := os.Mkdir(filepath.Join(top, ".git"), 0o755); err != nil {
@@ -53,7 +91,7 @@ func TestEnvFiltersPath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			env := []string{"A=1", "PATH=" + strings.Join([]string{out1, tt.entry, out2}, sep), "B=2"}
 			got := Env(env, root)
-			want := []string{"A=1", "PATH=" + out1 + sep + out2, "B=2"}
+			want := withNoCwd([]string{"A=1", "PATH=" + out1 + sep + out2, "B=2"})
 			if !slices.Equal(got, want) {
 				t.Errorf("Env = %q, want %q", got, want)
 			}
@@ -64,23 +102,23 @@ func TestEnvFiltersPath(t *testing.T) {
 func TestEnvKeepsWhatIsOutside(t *testing.T) {
 	root, a, b := t.TempDir(), t.TempDir(), t.TempDir()
 	env := []string{"PATH=" + b + sep + a}
-	if got := Env(env, root); !slices.Equal(got, env) {
-		t.Errorf("Env = %q, want %q", got, env)
+	if got, want := Env(env, root), withNoCwd(env); !slices.Equal(got, want) {
+		t.Errorf("Env = %q, want %q", got, want)
 	}
 }
 
 func TestEnvNothingLeft(t *testing.T) {
 	root := t.TempDir()
 	env := []string{"A=1", "PATH=" + filepath.Join(root, "bin")}
-	if got := Env(env, root); !slices.Equal(got, []string{"A=1"}) {
+	if got := Env(env, root); !slices.Equal(got, withNoCwd([]string{"A=1"})) {
 		t.Errorf("Env = %q, want no PATH at all", got)
 	}
 }
 
 func TestEnvNoRoot(t *testing.T) {
 	env := []string{"PATH=." + sep + "bin"}
-	if got := Env(env, ""); !slices.Equal(got, env) {
-		t.Errorf("Env = %q, want %q", got, env)
+	if got, want := Env(env, ""), withNoCwd(env); !slices.Equal(got, want) {
+		t.Errorf("Env = %q, want %q", got, want)
 	}
 }
 
@@ -98,8 +136,8 @@ func TestEnvLeavesOtherVariables(t *testing.T) {
 	root := t.TempDir()
 	inside := filepath.Join(root, "bin")
 	env := []string{"MYPATH=" + inside, "PATHEXT=.EXE", "=C:=" + inside, "NOEQUALS"}
-	if got := Env(env, root); !slices.Equal(got, env) {
-		t.Errorf("Env = %q, want %q", got, env)
+	if got, want := Env(env, root), withNoCwd(env); !slices.Equal(got, want) {
+		t.Errorf("Env = %q, want %q", got, want)
 	}
 }
 
@@ -112,7 +150,7 @@ func TestEnvPathNameOnWindows(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		want = []string{"Path=" + out} // Windows names it in any case; the rest of the systems do not
 	}
-	if !slices.Equal(got, want) {
+	if want = withNoCwd(want); !slices.Equal(got, want) {
 		t.Errorf("Env = %q, want %q", got, want)
 	}
 }
@@ -480,6 +518,9 @@ func TestPluginEnvCutsLoadPaths(t *testing.T) {
 	}
 	env = append(env, "OTHER="+inside)
 	got := PluginEnv(env, root)
+	if runtime.GOOS == "windows" {
+		got = got[:len(got)-1] // NoDefaultCurrentDirectoryInExePath, TestEnvNoCwdLookup
+	}
 	for i, name := range LoadPaths {
 		if want := name + "=" + out; got[i] != want {
 			t.Errorf("%s: got %q, want %q", name, got[i], want)

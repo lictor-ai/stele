@@ -56,8 +56,9 @@ func Vet(name, found, root string) (string, error) {
 // none inside root or the git repository that holds it. A program vetted with
 // Vet still finds what it starts, git its ssh, on PATH. With nothing left the
 // variable goes: an empty PATH can mean the current directory. An empty root
-// returns env as it is.
-func Env(env []string, root string) []string { return cut(env, root, nil) }
+// leaves PATH as it is. On Windows NoDefaultCurrentDirectoryInExePath is
+// set too (see noCwdLookup).
+func Env(env []string, root string) []string { return noCwdLookup(cut(env, root, nil)) }
 
 // LoadPaths are the variables that name directories a dynamic loader or an
 // interpreter loads code from. An empty or relative entry in one means the
@@ -70,7 +71,27 @@ var LoadPaths = []string{
 // PluginEnv is Env for an external plugin: PATH and each of LoadPaths are
 // cut the same way, since a plugin can be any program in any language
 // (D80).
-func PluginEnv(env []string, root string) []string { return cut(env, root, LoadPaths) }
+func PluginEnv(env []string, root string) []string {
+	return noCwdLookup(cut(env, root, LoadPaths))
+}
+
+// noCwdVar, set to any value, makes Windows look for a program a child starts
+// on PATH, not in its working directory.
+const noCwdVar = "NoDefaultCurrentDirectoryInExePath"
+
+// noCwdLookup returns env with noCwdVar set on Windows, in a new slice, as
+// it is when env already has it. Elsewhere it returns env.
+func noCwdLookup(env []string) []string {
+	if runtime.GOOS != "windows" {
+		return env
+	}
+	for _, kv := range env {
+		if name, _, _ := strings.Cut(kv, "="); strings.EqualFold(name, noCwdVar) {
+			return env
+		}
+	}
+	return append(slices.Clip(env), noCwdVar+"=1")
+}
 
 // cut returns env with PATH, and each variable in lists, cut down to entries
 // outside the project at root. A variable with nothing left goes.
