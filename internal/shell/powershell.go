@@ -443,6 +443,8 @@ func (p *psReader) value(t psTok) (string, bool) {
 	}
 	// The length first: the values are counted against the budget before
 	// the string is built, so many copies of a long variable are not (#171).
+	// A token read twice, as a path and as a nested bash or wsl script, is
+	// counted twice: that errs toward unknown.
 	parts := strings.Split(t.text, "\x00")
 	n, grown := 0, 0
 	for i, part := range parts {

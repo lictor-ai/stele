@@ -87,6 +87,22 @@ type results struct {
 	steps   int // directories globs opened and fixed path segments they walked
 	nested  int // bytes of nested scripts read, each read counted readCost more
 	grown   int // bytes variables expanded to; maxExpand+1 once spent
+	envs    map[string]string
+}
+
+// env reads an environment variable once a command: on Windows each read
+// copies the value, so a variable named many times would cost that many
+// copies, past the budget too.
+func (r *results) env(name string) string {
+	if v, ok := r.envs[name]; ok {
+		return v
+	}
+	if r.envs == nil {
+		r.envs = map[string]string{}
+	}
+	v := getenv(name)
+	r.envs[name] = v
+	return v
 }
 
 // readCost is what reading a nested script costs beyond its bytes: a parser

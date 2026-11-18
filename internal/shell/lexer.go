@@ -684,7 +684,11 @@ func (p *parser) expand(b *strings.Builder, w *word, name string) {
 	}
 	v, ok := p.vars[name]
 	if !ok {
-		v = getenv(name)
+		if p.res.grown > maxExpand { // spent: not even looked up
+			w.dynamic = true
+			return
+		}
+		v = p.res.env(name)
 		ok = v != ""
 	}
 	if !ok || !p.res.expand(len(v)) {
@@ -1507,9 +1511,9 @@ func matchPattern(seg string) string {
 
 // home is the home directory ~ stands for.
 func (p *parser) home() string {
-	h := getenv("HOME")
+	h := p.res.env("HOME")
 	if h == "" && windows {
-		h = getenv("USERPROFILE")
+		h = p.res.env("USERPROFILE")
 	}
 	return h
 }

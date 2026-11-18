@@ -1102,12 +1102,26 @@ func TestTargetsCaps(t *testing.T) {
 func TestTargetsExpandBudget(t *testing.T) {
 	cwd := t.TempDir()
 	big := strings.Repeat("a", 50<<10)
+	// The environment is read once a variable: on Windows each read copies
+	// the value, so a long one named many times would cost that many copies.
+	reads := 0
+	old := getenv
+	getenv = func(k string) string {
+		reads++
+		return map[string]string{"HOME": cwd, "BIG": strings.Repeat("b", 32<<10)}[k]
+	}
+	t.Cleanup(func() { getenv = old })
+	spend := "X='" + big + "'; echo" + strings.Repeat(" $X", 21) + ";"
 	for _, cmd := range []string{
 		"X='" + big + "'; echo" + strings.Repeat(" $X", 20000) + " > f",
 		"X='" + big + "'; echo" + strings.Repeat(` "${X}"`, 20000) + " > f",
 		"X='" + big + "'; " + strings.Repeat("X=$X$X; ", 30) + "echo > $X",
 		"cd '" + big + "'; echo" + strings.Repeat(" $PWD", 20000) + " > f",
+		"echo" + strings.Repeat(" $BIG", 7000) + " > f",
+		spend + " echo" + strings.Repeat(" $BIG", 7000) + " > f",
+		spend + " echo" + strings.Repeat(" ~/", 20000) + " > f",
 	} {
+		reads = 0
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
 		r := globRun(cmd, cwd)
@@ -1117,6 +1131,9 @@ func TestTargetsExpandBudget(t *testing.T) {
 		}
 		if got, limit := after.TotalAlloc-before.TotalAlloc, uint64(64<<20); got > limit {
 			t.Errorf("%.40s…: allocated %d MiB, limit %d MiB", cmd, got>>20, limit>>20)
+		}
+		if reads > 2 {
+			t.Errorf("%.40s…: the environment read %d times", cmd, reads)
 		}
 	}
 	// Past the budget, a target that expands is unknown; one written out is
