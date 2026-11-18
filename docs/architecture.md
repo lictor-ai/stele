@@ -1165,7 +1165,7 @@ it holds every rule's text, so it is never checked against them.
 `--relative` keeps a `stele.md` in a subdirectory of the repository to its own
 files. Names are taken exactly as git gives them. Files in a nested project — a
 directory below the root with a regular file named `stele.md` or `stele.json`, or
-with its own `.git` git recognises (a worktree or submodule, §6) — are left
+with its own `.git` git recognises (a nested repository, worktree or submodule, §6) — are left
 out: the hook gives them
 that project's rules (ADR-0004, §6), so its own `stele check` does. Each such
 subproject is reported (`sub/: skipped N files`,
@@ -1280,7 +1280,8 @@ into every project, nor `/.git` take `/usr/bin`. On Windows, `toolpath.Env`
 and `toolpath.PluginEnv` also set `NoDefaultCurrentDirectoryInExePath=1`,
 unless it is already set, so the programs stele starts (git, `gh`, `glab`,
 the browser opener, plugins, scanners, the agent version probe) find the
-programs they start by bare name on `PATH`, not in their working directory.
+programs they start by bare name on `PATH`, not in their working directory
+(D95).
 The package imports no
 `os/exec`. `cmd/stele/check.go` uses it and does not import this package,
 though the one binary links both, through `cmd/stele/publish.go`.
@@ -1664,8 +1665,7 @@ and symlinks and junctions on the way are followed, from inside a project or
 outside every project. A hard link or an 8.3 short name, which only a same-file
 test tells, is caught for the root's `stele.md`, `stele.json`, `stele.lock` and
 `.stele/` only. A write to a `.git` below the root, or into
-one, asks the same way (D94), under an 8.3 short name too: a `.git` git
-recognises ends a project (§6). Files inside the root's own `.git/`, such as
+one, asks the same way (D94). Files inside the root's own `.git/`, such as
 `.git/index.lock`, do not ask. The ask comes before `stele.json`
 is read, so `block_on_error` and the switches change nothing. Claude Code shows
 `permissionDecisionReason` to the user in the prompt; with no one to answer
@@ -2214,7 +2214,7 @@ stamps `devel` for any version that is not a release.
 `cmd/stele/agentversion.go`: the program is found on `PATH` outside the
 project and runs, with `PATH` cut by `toolpath.Env`, from a new empty folder
 under the temp directory, checked to be outside the project and removed
-afterwards, never the project root, as plugins do (D80).
+afterwards, never the project root, as plugins do (D80, D95).
 
 Standard-library `flag` and a switch on `os.Args[1]`. Eleven subcommands with a
 handful of flags does not justify a CLI framework.
