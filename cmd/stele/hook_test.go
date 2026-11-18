@@ -282,30 +282,63 @@ func TestHookFailurePolicy(t *testing.T) {
 			t.Errorf("block_on_error was not honoured, got %+v", o)
 		}
 	})
-	t.Run("stele.json in UTF-16: allow and say how to fix it", func(t *testing.T) {
+	// A stele.json stele cannot read leaves the rules, which come from the
+	// signed index, in force: it is not a failure with no good index to fall
+	// back on (ADR-0004). block_on_error is unknown, so it is off (#150).
+	t.Run("stele.json in UTF-16: the rules still apply, and the user is told how to fix it", func(t *testing.T) {
 		root := project(t, hookRules)
 		if err := os.WriteFile(filepath.Join(root, "stele.json"), []byte("\xff\xfe{\x00}\x00"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		o, _ := hook(t, write(filepath.Join(root, "a.go"), "p1", ""))
-		if o.HookSpecificOutput.PermissionDecision == "deny" {
-			t.Error("denied although block_on_error cannot be read")
+		if o.HookSpecificOutput.PermissionDecision != "deny" || !strings.Contains(o.HookSpecificOutput.PermissionDecisionReason, "Never build SQL") {
+			t.Errorf("the rules were not shown: %+v", o)
 		}
 		if !strings.Contains(o.SystemMessage, "UTF-16") || !strings.Contains(o.SystemMessage, "save it as UTF-8") {
 			t.Errorf("warning %q should name the encoding and the fix", o.SystemMessage)
 		}
 	})
-	t.Run("stele.json too large: allow and warn the user", func(t *testing.T) {
+	t.Run("stele.json too large: the rules still apply, and the user is warned", func(t *testing.T) {
 		root := project(t, hookRules)
 		if err := os.WriteFile(filepath.Join(root, "stele.json"), []byte(strings.Repeat(" ", 2<<20)+"{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		o, _ := hook(t, write(filepath.Join(root, "a.go"), "p1", ""))
+		if o.HookSpecificOutput.PermissionDecision != "deny" {
+			t.Errorf("the rules were not shown: %+v", o)
+		}
+		if !strings.Contains(o.SystemMessage, "stele.json") {
+			t.Errorf("warning %q should name stele.json", o.SystemMessage)
+		}
+	})
+	t.Run("stele.json with a trailing comma: the rules still apply, and the user is told where", func(t *testing.T) {
+		root := project(t, hookRules)
+		if err := os.WriteFile(filepath.Join(root, "stele.json"), []byte("{\n  \"block_on_error\": true,\n}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		o, _ := hook(t, write(filepath.Join(root, "a.go"), "p1", ""))
+		if o.HookSpecificOutput.PermissionDecision != "deny" || !strings.Contains(o.HookSpecificOutput.PermissionDecisionReason, "Never build SQL") {
+			t.Errorf("the rules were not shown: %+v", o)
+		}
+		const want = "stele: stele.json: invalid JSON at line 3, column 1: invalid character '}' looking for beginning of object key string. The rules still apply; block_on_error is off until stele.json is fixed."
+		if o.SystemMessage != want {
+			t.Errorf("warning = %q, want %q", o.SystemMessage, want)
+		}
+	})
+	t.Run("stele.json with a trailing comma and stele failing: block_on_error is off", func(t *testing.T) {
+		root := project(t, hookRules)
+		noKey(t)
+		if err := os.WriteFile(filepath.Join(root, "stele.json"), []byte(`{"block_on_error": true,}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		o, _ := hook(t, write(filepath.Join(root, "a.go"), "p1", ""))
 		if o.HookSpecificOutput.PermissionDecision == "deny" {
 			t.Error("denied although block_on_error cannot be read")
 		}
-		if !strings.Contains(o.SystemMessage, "stele.json") {
-			t.Errorf("warning %q should name stele.json", o.SystemMessage)
+		for _, want := range []string{"line 1, column 25", "no config directory"} {
+			if !strings.Contains(o.SystemMessage, want) {
+				t.Errorf("warning %q should name %q", o.SystemMessage, want)
+			}
 		}
 	})
 	t.Run("no session id: the record cannot be saved", func(t *testing.T) {

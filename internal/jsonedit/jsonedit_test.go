@@ -55,7 +55,17 @@ func TestParseObjectRefusesDuplicateKey(t *testing.T) {
 
 func TestValidNamesPosition(t *testing.T) {
 	d, _ := Split([]byte("{\n  \"a\": ,\n}"))
-	if err := d.Valid(); err == nil || !strings.Contains(err.Error(), "line 2") {
+	if err := d.Valid(); err == nil || !strings.Contains(err.Error(), "line 2, column 8:") {
+		t.Fatalf("err = %v", err)
+	}
+	// The column is the byte in error's, here the brace after a trailing
+	// comma, at the start of its line.
+	d, _ = Split([]byte("{\n  \"a\": 1,\n}\n"))
+	if err := d.Valid(); err == nil || !strings.Contains(err.Error(), "line 3, column 1:") {
+		t.Fatalf("err = %v", err)
+	}
+	d, _ = Split([]byte(`{"a": 1,}`))
+	if err := d.Valid(); err == nil || !strings.Contains(err.Error(), "line 1, column 9:") {
 		t.Fatalf("err = %v", err)
 	}
 }

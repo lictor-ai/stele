@@ -197,3 +197,46 @@ func TestSetsBackstop(t *testing.T) {
 		}
 	}
 }
+
+// A stele.json that is not a JSON object is one error, the same for every
+// key a command came to read: a syntax error at its line and column (#150).
+func TestParse(t *testing.T) {
+	tests := []struct {
+		content string
+		want    string // "" means no error
+	}{
+		{`{}`, ""},
+		{`null`, ""},
+		{"{\n  \"block_on_error\": false,\n}\n", "stele.json: invalid JSON at line 3, column 1: invalid character '}' looking for beginning of object key string"},
+		{`{"sources": [}`, "stele.json: invalid JSON at line 1, column 14: "},
+		{``, "stele.json: invalid JSON at line 1, column 1: unexpected end of JSON input"},
+		{`[1]`, "stele.json: the file is an array; it must be an object, such as {}"},
+		{`"x"`, "stele.json: the file is a string; it must be an object, such as {}"},
+	}
+	for _, tt := range tests {
+		m, err := Parse([]byte(tt.content))
+		switch {
+		case tt.want == "" && err != nil:
+			t.Errorf("Parse(%q) = %v", tt.content, err)
+		case tt.want != "" && (err == nil || !strings.HasPrefix(err.Error(), tt.want)):
+			t.Errorf("Parse(%q) = %v, want %q", tt.content, err, tt.want)
+		case tt.want != "" && m != nil:
+			t.Errorf("Parse(%q) = %v and an error", tt.content, m)
+		}
+	}
+}
+
+// Load reports a syntax error as Parse does, not as the key it was reading.
+func TestLoadSyntaxError(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, FileName), []byte("{\n  \"block_on_error\": true,\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(root)
+	if err == nil || !strings.HasPrefix(err.Error(), "stele.json: invalid JSON at line 3, column 1: ") {
+		t.Errorf("Load: err = %v", err)
+	}
+	if p != Default() {
+		t.Errorf("Load = %+v, want the default policy", p)
+	}
+}

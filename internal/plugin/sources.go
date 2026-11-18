@@ -160,9 +160,11 @@ func listedRaw(root, key string, kind error) ([]json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("%w: %v", kind, err)
+	// A file that is not a JSON object is reported as such, not as a bad
+	// key: stele.json's own error says where it is (#150).
+	raw, err := enforce.Parse(data)
+	if err != nil {
+		return nil, err
 	}
 	var msgs []json.RawMessage
 	if v, ok := raw[key]; ok {

@@ -180,10 +180,12 @@ func (d Doc) Render(compact []byte) ([]byte, error) {
 	return out, nil
 }
 
-// position turns a byte offset into a 1-based line and column.
+// position turns a json.SyntaxError's offset, the bytes read up to and
+// including the one in error, into that byte's 1-based line and column.
 func position(data []byte, offset int64) (line, col int) {
-	before := data[:min(int(offset), len(data))]
+	at := min(max(int(offset)-1, 0), len(data))
+	before := data[:at]
 	line = bytes.Count(before, []byte("\n")) + 1
-	col = len(before) - bytes.LastIndexByte(before, '\n')
+	col = at - bytes.LastIndexByte(before, '\n')
 	return line, col
 }

@@ -63,6 +63,9 @@ func LoadConfig(root string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if _, err := enforce.Parse(data); err != nil {
+		return Config{}, err
+	}
 	var raw struct {
 		Publish json.RawMessage `json:"publish"`
 	}

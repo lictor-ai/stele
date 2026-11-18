@@ -203,11 +203,11 @@ func beforeWrite(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 // beforeRoot decides the files, relative to root, that one tool call writes
 // in one project: the rules of every file, each once, in the index's order.
 // Its deny reason fits in budget bytes.
-func beforeRoot(ev adapter.Event, root string, rels []string, budget int) adapter.Answer {
+func beforeRoot(ev adapter.Event, root string, rels []string, budget int) (a adapter.Answer) {
 	policy, perr := enforce.Load(root)
 	fail := func(err error) adapter.Answer { return failure(policy, ev.Kind, err) }
 	if perr != nil {
-		return fail(perr)
+		defer func() { a.Warning = joinLines(policyWarning(perr), a.Warning) }()
 	}
 
 	key, err := loadKey()
@@ -380,7 +380,7 @@ func afterWrites(ev adapter.Event, sw adapter.Switches) adapter.Answer {
 // reason in at most reasonRoom bytes and the context in at most contextRoom.
 // A project's note already in noted is not given again. It keeps no session
 // state, so parallel writes cannot race.
-func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, reasonRoom, contextRoom int, noted map[string]bool) adapter.Answer {
+func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, reasonRoom, contextRoom int, noted map[string]bool) (a adapter.Answer) {
 	root, rel, ok := target(e.File)
 	if !ok {
 		return adapter.Answer{}
@@ -392,7 +392,7 @@ func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, reasonRoo
 	policy, perr := enforce.Load(root)
 	fail := func(err error) adapter.Answer { return failure(policy, ev.Kind, err) }
 	if perr != nil {
-		return fail(perr)
+		defer func() { a.Warning = joinLines(policyWarning(perr), a.Warning) }()
 	}
 	key, err := loadKey()
 	if err != nil {
@@ -470,7 +470,6 @@ func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, reasonRoo
 	}
 	// The blocking violations are the block's reason; the context holds the
 	// notes and the non-blocking ones, which share its budget.
-	var a adapter.Answer
 	if len(hard) > 0 {
 		a.Deny, a.Reason = true, message(hard, true, reasonRoom)
 	}
@@ -596,6 +595,16 @@ func joinNotes(notes ...string) string {
 		}
 	}
 	return strings.Join(kept, "\n\n")
+}
+
+// policyWarning is the warning when stele.json cannot be read, say for a
+// trailing comma. The rules come from the signed index, built from stele.md,
+// not from stele.json, so they still apply: block_on_error covers stele
+// failing with no good index to fall back on (ADR-0004), and a broken policy
+// file is not that. Only block_on_error itself is unknown; it is taken as
+// its default, off, until the file is fixed (#150).
+func policyWarning(err error) string {
+	return fmt.Sprintf("stele: %v. The rules still apply; block_on_error is off until %s is fixed.", err, enforce.FileName)
 }
 
 // failure is the answer when stele itself cannot run. With block_on_error off,
