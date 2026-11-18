@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/lictor-ai/stele/internal/enforce"
+	"github.com/lictor-ai/stele/internal/printable"
 )
 
 // ErrSinks is a "sinks" key in stele.json stele cannot use.
@@ -111,41 +113,87 @@ func (s *Sink) fail(op string, err error) error {
 	return &Error{Kind: KindSink, Name: s.Name, List: "sinks", Exe: Exe(KindSink, s.Name), Op: op, Err: err}
 }
 
-// Push hands records to the sink, for project. accepted is how many it
-// took: the first accepted of them, in order (D82).
-func (s *Sink) Push(ctx context.Context, project string, records []json.RawMessage) (accepted int, err error) {
+// maxReason is the longest reason a deferring sink's answer keeps, in
+// bytes.
+const maxReason = 200
+
+// PushAnswer is a sink's answer to a push: how many records it took, the
+// first Accepted of them, in order (D82), or that it deferred them all
+// (ADR-0021).
+type PushAnswer struct {
+	Accepted int
+	// Deferred is a sink that sent nothing now, by its own choice: the
+	// records wait for the next push, and it is not a failure.
+	Deferred bool
+	// Reason is the deferring sink's reason, one printable line; it may be
+	// empty.
+	Reason string
+}
+
+// Push hands records to the sink, for project. A deferred answer has
+// Accepted 0; "deferred" with any other "accepted" is a protocol error
+// (ADR-0021).
+func (s *Sink) Push(ctx context.Context, project string, records []json.RawMessage) (PushAnswer, error) {
 	if s.missing != nil {
-		return 0, s.missing
+		return PushAnswer{}, s.missing
 	}
 	s.once.Do(func() { _, s.derr = describe(ctx, s.run, KindSink, s.Name, s.bin) })
 	if s.derr != nil {
-		return 0, s.derr
+		return PushAnswer{}, s.derr
 	}
 	if records == nil {
 		records = []json.RawMessage{}
 	}
 	req, err := Request("push", map[string]any{"project_dir": s.root, "config": s.config, "project": project, "records": records})
 	if err != nil {
-		return 0, s.fail("push", err)
+		return PushAnswer{}, s.fail("push", err)
 	}
 	out, err := s.run.Run(ctx, s.bin, req, SmallAnswer, s.timeout)
 	if err != nil {
-		return 0, s.fail("push", err)
+		return PushAnswer{}, s.fail("push", err)
 	}
 	if !utf8.Valid(out) {
-		return 0, s.fail("push", fmt.Errorf("%w: answer is not valid UTF-8", ErrProtocol))
+		return PushAnswer{}, s.fail("push", fmt.Errorf("%w: answer is not valid UTF-8", ErrProtocol))
 	}
 	var a struct {
-		Accepted *int `json:"accepted"`
+		Accepted *int            `json:"accepted"`
+		Deferred *bool           `json:"deferred"`
+		Reason   json.RawMessage `json:"reason"`
 	}
 	if err := DecodeAnswer(out, &a); err != nil {
-		return 0, s.fail("push", err)
+		return PushAnswer{}, s.fail("push", err)
 	}
 	if a.Accepted == nil {
-		return 0, s.fail("push", fmt.Errorf("%w: no \"accepted\"", ErrProtocol))
+		return PushAnswer{}, s.fail("push", fmt.Errorf("%w: no \"accepted\"", ErrProtocol))
 	}
 	if *a.Accepted < 0 || *a.Accepted > len(records) {
-		return 0, s.fail("push", fmt.Errorf("%w: accepted %d of %d records", ErrProtocol, *a.Accepted, len(records)))
+		return PushAnswer{}, s.fail("push", fmt.Errorf("%w: accepted %d of %d records", ErrProtocol, *a.Accepted, len(records)))
 	}
-	return *a.Accepted, nil
+	if a.Deferred == nil || !*a.Deferred {
+		// "deferred": false or null is no deferral. "reason" means
+		// something only with "deferred": an older sink's extra key is
+		// ignored, as any other.
+		return PushAnswer{Accepted: *a.Accepted}, nil
+	}
+	if *a.Accepted != 0 {
+		return PushAnswer{}, s.fail("push", fmt.Errorf("%w: deferred, yet accepted %d records: a sink that defers takes none", ErrProtocol, *a.Accepted))
+	}
+	var reason string
+	if len(a.Reason) > 0 && string(a.Reason) != "null" {
+		if err := json.Unmarshal(a.Reason, &reason); err != nil {
+			return PushAnswer{}, s.fail("push", fmt.Errorf("%w: \"reason\" is not a string", ErrProtocol))
+		}
+	}
+	return PushAnswer{Deferred: true, Reason: cutReason(reason)}, nil
+}
+
+// cutReason makes a deferring sink's reason one printable line of at most
+// maxReason bytes, with no space before the "…" of a cut.
+func cutReason(reason string) string {
+	r := strings.TrimSpace(printable.Clean(reason))
+	if len(r) <= maxReason {
+		return r
+	}
+	c := cut(r, maxReason)
+	return strings.TrimRight(strings.TrimSuffix(c, "…"), " ") + "…"
 }

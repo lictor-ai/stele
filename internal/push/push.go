@@ -54,10 +54,19 @@ func cursorName(sink string) string {
 	return filepath.ToSlash(filepath.Join(index.Dir, cursorDir, sink+".json"))
 }
 
+// Answer is what a sink said to one batch: it took the first Accepted
+// records, or, Deferred, it took none and wants them all sent again later,
+// for Reason (ADR-0021).
+type Answer struct {
+	Accepted int
+	Deferred bool
+	Reason   string
+}
+
 // Target is one sink: its name, and how to hand it records.
 type Target struct {
 	Name string
-	Push func(ctx context.Context, project string, records []json.RawMessage) (accepted int, err error)
+	Push func(ctx context.Context, project string, records []json.RawMessage) (Answer, error)
 }
 
 // SinkResult is what one sink got.
@@ -66,6 +75,8 @@ type SinkResult struct {
 	Sent         int  // records it accepted
 	Pending      int  // records left for the next push
 	Partial      bool // it took fewer than it was sent
+	Deferred     bool // it chose to take nothing now: not a failure
+	Reason       string
 	Unverified   int  // lines skipped: not signed by this machine's key
 	OtherProject int  // lines skipped: another project's
 	Gap          bool // lines rotated out of the log before they were sent
@@ -84,6 +95,15 @@ type cursor struct {
 	Pos     journal.Pos `json:"pos"`
 	Pushed  int         `json:"pushed"`
 	TS      time.Time   `json:"ts"`
+	// Deferred is the sink's last answer when it deferred: why, and when.
+	// The next answer that is neither an error nor a deferral clears it
+	// (ADR-0021).
+	Deferred *deferral `json:"deferred,omitempty"`
+}
+
+type deferral struct {
+	Reason string    `json:"reason"`
+	TS     time.Time `json:"ts"`
 }
 
 func cursorPath(root, sink string) string {
@@ -219,8 +239,34 @@ func pushOne(ctx context.Context, root string, key sign.Key, project string, t T
 			recs[i] = lines[i].rec
 		}
 		held()
-		accepted, err := t.Push(ctx, project, recs)
+		a, err := t.Push(ctx, project, recs)
 		held()
+		if err == nil && a.Deferred {
+			// The sink took nothing, by its own choice: the cursor stays,
+			// and only the reason is kept, for stele status.
+			c.Deferred = &deferral{Reason: a.Reason, TS: now().UTC()}
+			r.Deferred, r.Reason, r.Pending = true, a.Reason, len(lines)
+			if r.Gap && r.Sent == 0 && c.Pos.File != "" {
+				// The cursor's line rotated out, and this read already
+				// started at the log's beginning: start there next time
+				// too, so the gap is said once however long the sink
+				// defers.
+				c.Pos = journal.Pos{}
+			}
+			if serr := saveCursor(root, key, c); serr != nil {
+				r.Err = serr
+			}
+			return r
+		}
+		accepted := a.Accepted
+		if err == nil && c.Deferred != nil {
+			c.Deferred = nil
+			if accepted == 0 {
+				if serr := saveCursor(root, key, c); serr != nil {
+					err = serr
+				}
+			}
+		}
 		if accepted > 0 {
 			c.Pos, c.Pushed, c.TS = lines[accepted-1].at, c.Pushed+accepted, now().UTC()
 			if serr := saveCursor(root, key, c); serr != nil && err == nil {
@@ -275,27 +321,48 @@ func One(ctx context.Context, targets []Target, project string, rec json.RawMess
 	var res Result
 	for _, t := range targets {
 		r := SinkResult{Name: t.Name}
-		n, err := t.Push(ctx, project, []json.RawMessage{rec})
-		r.Sent, r.Err = n, err
-		if err == nil && n < 1 {
+		a, err := t.Push(ctx, project, []json.RawMessage{rec})
+		switch {
+		case err != nil:
+			r.Err = err
+		case a.Deferred:
+			r.Deferred, r.Reason = true, a.Reason
+		case a.Accepted < 1:
 			r.Partial, r.Pending = true, 1
+		default:
+			r.Sent = a.Accepted
 		}
 		res.Sinks = append(res.Sinks, r)
 	}
 	return res
 }
 
-// Pending is how many of the log's lines for project wait for sink, and
-// when it last pushed (zero for never). It reads, sends and writes nothing
-// else: stele status.
-func Pending(root string, key sign.Key, project, sink string) (n int, last time.Time, err error) {
+// Waiting is what waits for one sink, for stele status.
+type Waiting struct {
+	Lines    int       // the log's lines not yet sent
+	LastPush time.Time // when it last took a line; zero for never
+	// Deferred is the sink's last answer having been a deferral, and Reason
+	// the reason it gave (ADR-0021).
+	Deferred bool
+	Reason   string
+}
+
+// Pending is what waits for sink: how many of the log's lines for project,
+// when it last took any, and whether its last answer deferred them. It
+// reads, sends and writes nothing else: stele status.
+func Pending(root string, key sign.Key, project, sink string) (Waiting, error) {
+	var w Waiting
 	c, err := loadCursor(root, key, sink, project)
 	if err != nil {
-		return 0, time.Time{}, err
+		return w, err
 	}
 	lines, _, _, err := pending(root, key, project, c)
+	w.Lines = len(lines)
 	if c != nil {
-		last = c.TS
+		w.LastPush = c.TS
+		if c.Deferred != nil {
+			w.Deferred, w.Reason = true, c.Deferred.Reason
+		}
 	}
-	return len(lines), last, err
+	return w, err
 }

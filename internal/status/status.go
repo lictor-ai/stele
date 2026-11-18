@@ -101,7 +101,11 @@ type Sink struct {
 	Name     string `json:"name"`
 	Pending  int    `json:"pending"`
 	LastPush string `json:"last_push,omitempty"`
-	Error    string `json:"error,omitempty"`
+	// Deferred is the sink's last answer having deferred the lines, and
+	// DeferReason the reason it gave (ADR-0021).
+	Deferred    bool   `json:"deferred,omitempty"`
+	DeferReason string `json:"deferred_reason,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // Collect describes the install under root. It writes nothing; with in.Run

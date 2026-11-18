@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,9 +17,9 @@ import (
 )
 
 // runPush sends the log's new lines to every sink stele.json lists (D83).
-// It exits 0 when every sink took everything, or there was nothing to send
-// or no sink; 1 when a sink took fewer lines than it was sent; 2 when stele
-// or a sink could not run.
+// It exits 0 when every sink took everything or deferred (ADR-0021), or
+// there was nothing to send or no sink; 1 when a sink took fewer lines than
+// it was sent; 2 when stele or a sink could not run.
 func runPush(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("stele push", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -55,7 +57,8 @@ func runPush(args []string, stdout, stderr io.Writer) int {
 }
 
 // pushLog pushes root's log to ss and prints a line per sink. It returns the
-// exit code: 0 all sent, 1 a sink took fewer, 2 a sink or the push failed.
+// exit code: 0 all sent or deferred, 1 a sink took fewer, 2 a sink or the
+// push failed.
 func pushLog(root string, key sign.Key, ss []*plugin.Sink, stdout, stderr io.Writer, cmd string) int {
 	f, err := lock.Load(root)
 	if err != nil {
@@ -79,7 +82,10 @@ func pushLog(root string, key sign.Key, ss []*plugin.Sink, stdout, stderr io.Wri
 func pushTargets(ss []*plugin.Sink) []push.Target {
 	out := make([]push.Target, len(ss))
 	for i, s := range ss {
-		out[i] = push.Target{Name: s.Name, Push: s.Push}
+		out[i] = push.Target{Name: s.Name, Push: func(ctx context.Context, project string, recs []json.RawMessage) (push.Answer, error) {
+			a, err := s.Push(ctx, project, recs)
+			return push.Answer{Accepted: a.Accepted, Deferred: a.Deferred, Reason: a.Reason}, err
+		}}
 	}
 	return out
 }
@@ -89,6 +95,9 @@ func printPush(stdout, stderr io.Writer, cmd string, res push.Result) int {
 	code := exitOK
 	for _, r := range res.Sinks {
 		line := fmt.Sprintf("%s: sent %s", r.Name, plural(r.Sent, "line"))
+		if r.Deferred && r.Sent == 0 {
+			line = r.Name + ": nothing sent"
+		}
 		var skipped []string
 		if r.Unverified > 0 {
 			skipped = append(skipped, fmt.Sprintf("%d not signed on this machine", r.Unverified))
@@ -98,6 +107,10 @@ func printPush(stdout, stderr io.Writer, cmd string, res push.Result) int {
 		}
 		if len(skipped) > 0 {
 			line += " (skipped: " + strings.Join(skipped, ", ") + ")"
+		}
+		if r.Deferred && r.Err == nil {
+			// The sink chose to take nothing now: not a failure (ADR-0021).
+			line += " (" + deferredText(r.Reason) + "), " + plural(r.Pending, "line") + " waiting"
 		}
 		fmt.Fprintln(stdout, line)
 		if r.Gap {
@@ -118,4 +131,12 @@ func printPush(stdout, stderr io.Writer, cmd string, res push.Result) int {
 		}
 	}
 	return code
+}
+
+// deferredText is a deferring sink's answer, as push and status say it.
+func deferredText(reason string) string {
+	if reason == "" {
+		return "deferred"
+	}
+	return "deferred: " + reason
 }

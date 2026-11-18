@@ -317,6 +317,35 @@ own use: to read a file of the project, or run `stele` there. It can name the us
 sends the rest again next time. Take them all, or stop at the first you can't
 keep. A number below 0 or above the records sent is an error.
 
+To send nothing now, by your own choice, defer
+([ADR-0021](adr/0021-a-sink-can-defer-a-push.md)):
+
+```
+{"protocol": 1, "accepted": 0, "deferred": true, "reason": "sending is off in this folder"}
+```
+
+For example, when the user hasn't turned sending on in this project yet.
+stele keeps the records and sends them again next time, and it isn't a
+failure: `stele push` prints `<sink>: nothing sent (deferred: <reason>), n
+lines waiting` and exits 0 for your sink, and `stele status` shows your
+reason beside the lines waiting. `reason` is optional, a string, shown to
+the user: stele keeps one line of it, at most 200 bytes.
+
+stele shows the reason until your next answer that is neither an error nor
+another deferral.
+
+`deferred` goes only with `"accepted": 0`. `"deferred": true` with any other
+`accepted`, or with no `accepted`, is an error: stele can't tell whether you
+kept those records. So is a `deferred` that isn't `true`, `false` or `null`, a
+`reason` that isn't a string or `null`, or `"deferred"` spelled in another
+case or given twice. `"deferred": false` or `null` is the same as leaving it
+out. Don't take records you won't send: answering `accepted` makes stele
+move past them, and say they were sent.
+
+A stele older than deferrals (v1.5.1 and before) reads a deferral as
+`"accepted": 0`: a partial push, so `stele push` exits 1, though the records
+are still kept and sent again next time.
+
 stele may send a record twice: when it stops between your answer and saving
 how far it got. Use `mac` to drop a record you already have. At most 500
 records and 4 MiB a call; 1 minute, or the entry's `timeout`. Your answer is

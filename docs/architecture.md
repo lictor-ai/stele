@@ -938,7 +938,7 @@ after it, and exits 0. Fields stele does not know are ignored; a missing one is
 | `read` | `project_dir`, `root`, `config` | `{"fingerprint": "…", "rules": [{file, line, description, tags, scope, body, meta, id}]}` |
 | `validate` | `project_dir`, `config`, `rules: [{id, body, scope, meta}]` | `{"problems": [{"rule_id", "message"}]}` |
 | `check` | `project_dir`, `root`, `config`, `files`, `rules: [{id, body, scope, meta}]` | `{"violations": [{rule_id, file, line, column, message}], "skipped": [{file, reason}]}`, line and column 1-based, column in characters |
-| `push` | `project_dir`, `config`, `project`, `records: [...]` — log entries and check reports, each with its own `v` | `{"accepted": n}` |
+| `push` | `project_dir`, `config`, `project`, `records: [...]` — log entries and check reports, each with its own `v` | `{"accepted": n}`, or `{"accepted": 0, "deferred": true, "reason": "…"}` |
 
 `project_dir` is the project's root, absolute, in this OS's form; `root` is its
 old name, with the same value, kept for plugins that read it (ADR-0016, D87).
@@ -958,7 +958,10 @@ written with their `mac`, from the cursor in `.stele/push/<sink>.json`
 (sealed): the last line's MAC, the byte after it, and the first MAC of its
 file, so it follows a rotation (`journal.ReadAfter`). It advances after each
 batch by what the sink accepted (`{"accepted": n}`, the first `n` in order):
-at least once. `stele check --push` pushes the pending lines where the key
+at least once. A sink may instead defer (`"deferred": true`, only with
+`accepted: 0`, ADR-0021, D92): the cursor stays, the sink stops for the run
+with no failure, and the cursor keeps the reason (`push.Waiting`) for
+`stele status` until the sink's next answer that is neither an error nor a deferral. `stele check --push` pushes the pending lines where the key
 and `.stele/` exist, and in CI sends one record built as the log's `check` line, never the
 report. `share_briefs` is accepted and has no effect: no record holds a brief.
 Neither runs from `stele hook`, `stele stats` or `stele mcp`.
@@ -2136,7 +2139,7 @@ string literals scattered through the code, so they can be revised and diffed.
 | `plugin` protocol | `plugintest`: the test binary itself, hard-linked or copied into a temp directory as `stele-<kind>-<mode>`, answers as its mode says when `TestMain` sees that name — good answer, wrong protocol or kind, `error` field, invalid JSON, more after the answer, non-zero exit, timeout, an answer over the cap, noisy stderr. No plugin is built, on any OS. Most of `internal/plugin` uses an in-memory `Runner`. |
 | `check.Run` | Table-driven with a fake checker. Grouping by `check`, `scope` filtering, `blocking` default, unknown checker, exit codes. |
 | `lock.Reconcile`, ids from a source | Supplied id kept, clash is an error, `Project` minted once and never changed. |
-| sinks / `stele push` | The test plugin as a sink: the cursor advances by what was accepted, no line sent twice, a rotation followed, a bad cursor refused, records exactly the log's lines. |
+| sinks / `stele push` | The test plugin as a sink: the cursor advances by what was accepted and stays on a deferral, no line sent twice, a rotation followed, a bad cursor refused, records exactly the log's lines. |
 | `status` | Temp directory: JSON shape and `v`, plugin found and missing, stale index. |
 | `regex` | Table-driven over `Match`: line and column, multiple matches, multi-line content, CRLF, multibyte text, BOM, invalid UTF-8, binary skip, invalid pattern. |
 | `shell` | Table-driven over `Targets`: redirections, heredoc bodies, quotes, `[[ ]]` and `(( ))`, substitutions, variables, `cd`, `tee`, `sed -i`, `perl -i`, removals and copies, devices, Windows and Git Bash paths, caps. A fuzz test: it never panics, and stays fast. |

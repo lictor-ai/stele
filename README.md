@@ -307,7 +307,7 @@ A non-blocking violation prints `warning` instead of `error`. Lines and columns 
 
 On your machine, `stele check` adds one line to the [log](#what-stele-records). In CI it writes nothing: it only logs where stele already has its key and `.stele/`.
 
-**`--push`** then hands the run to every [sink](#send-the-log-somewhere-stele-push) `stele.json` lists. Where stele has its key and `.stele/`, as on your machine, it pushes the log's new lines, this run's included, as `stele push` does. With no key or no `.stele/`, as in CI, each sink gets one record of the run's counts: how many files and rules, errors and warnings, and how often each rule broke. Never the report: no file lines, no messages, no code. A sink missing from `PATH` fails before the check runs. The exit is the higher of the check's and the push's; with `--format json`, what `--push` says goes to stderr.
+**`--push`** then hands the run to every [sink](#send-the-log-somewhere-stele-push) `stele.json` lists. Where stele has its key and `.stele/`, as on your machine, it pushes the log's new lines, this run's included, as `stele push` does. With no key or no `.stele/`, as in CI, each sink gets one record of the run's counts: how many files and rules, errors and warnings, and how often each rule broke. Never the report: no file lines, no messages, no code. A sink missing from `PATH` fails before the check runs. A sink that chooses to wait is no failure: on your machine the lines wait for the next push, and in CI, with no log to keep it in, the run's record isn't sent. The exit is the higher of the check's and the push's; with `--format json`, what `--push` says goes to stderr.
 
 With `--base`, `stele check` also says when the branch adds, changes or deletes a `stele.md` or `stele.json` (`stele.md: modified on this branch: ...`), or moves a pin of [shared rules](#shared-rules-from-another-repository) in `stele.lock` (`stele.lock: modified on this branch: it pins the shared rules; review the change`), so reviewers see a change to the rules. It doesn't change the exit code; in JSON it is `rule_files_changed`.
 
@@ -789,7 +789,7 @@ index: fresh
 | `--format json` | The same as JSON, with `"v": 1` and the project id |
 | `--offline` | Start no plugin: plugin versions, and whether a plugin source is fresh, show as unknown |
 
-`stele status` writes nothing. To learn a plugin's version it runs the plugin, and it asks each plugin source whether it changed, unless you pass `--offline`. It exits 0 whenever it could describe the install, a missing plugin included, and 2 when it can't run (no project, or a `stele.json` it can't read). With a [sink](#send-the-log-somewhere-stele-push) listed, it also says how many log lines wait for it. Notes at the end say what needs a look, such as a key in `stele.json` stele doesn't know.
+`stele status` writes nothing. To learn a plugin's version it runs the plugin, and it asks each plugin source whether it changed, unless you pass `--offline`. It exits 0 whenever it could describe the install, a missing plugin included, and 2 when it can't run (no project, or a `stele.json` it can't read). With a [sink](#send-the-log-somewhere-stele-push) listed, it also says how many log lines wait for it, and why when the sink chose to wait: `team         3 lines to send (deferred: sending is off in this folder)`. Notes at the end say what needs a look, such as a key in `stele.json` stele doesn't know.
 
 ## The rules, for other tools: stele rules
 
@@ -870,8 +870,16 @@ file: sent 0 lines
 - **It remembers how far it got,** per sink, in `.stele/push/<name>.json`, signed. Each push sends only what is new, and finds its place after the log rotates.
 - **A line can arrive twice,** if stele stops between the sink's answer and saving how far it got. Each record carries its `mac`, a key the sink can drop a repeat by.
 - **A sink that fails stops for that run;** the others still get theirs. The next `stele push` tries again from where it stopped.
+- **A sink can wait.** It can decline to send anything yet, for example until you turn sending on for this project. The lines stay put for the next push, and it isn't a failure:
 
-`stele push` exits 0 when every sink took everything (or there was nothing to send, or no sink), 1 when a sink took only part, and 2 when stele or a sink couldn't run: a sink missing from `PATH` (the others still get their lines), a crash, a bad answer, or another `stele push` running. stele runs a sink only from `stele push` and `stele check --push`, never from the hook. It opens no connection itself: where the lines go is the sink's doing. To write a sink, see [the plugin protocol](docs/plugin-protocol.md#push-sink).
+  ```
+  $ stele push
+  team: nothing sent (deferred: sending is off in this folder), 3 lines waiting
+  ```
+
+  `stele status` shows the reason beside the lines waiting.
+
+`stele push` exits 0 when every sink took everything or chose to wait (or there was nothing to send, or no sink), 1 when a sink took only part, and 2 when stele or a sink couldn't run: a sink missing from `PATH` (the others still get their lines), a crash, a bad answer, or another `stele push` running. stele runs a sink only from `stele push` and `stele check --push`, never from the hook. It opens no connection itself: where the lines go is the sink's doing. To write a sink, see [the plugin protocol](docs/plugin-protocol.md#push-sink).
 
 `share_briefs` is accepted on a sink and does nothing yet: no line holds a brief.
 
@@ -1090,7 +1098,9 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **A sink can get a line twice.** Delivery is at least once: if stele stops between a sink's answer and saving how far it got, the next `stele push` sends those lines again. A sink drops a repeat by its `mac`.
 
-**Lines can rotate out before they're pushed.** The log keeps one older file; a line that rotated out twice since the last `stele push` is never sent, and `stele push` says some lines were lost.
+**Lines can rotate out before they're pushed.** The log keeps one older file; a line that rotated out twice since the last `stele push` is never sent, and `stele push` says some lines were lost. That includes lines a sink keeps choosing to wait on.
+
+**In CI, a sink that chooses to wait gets nothing from that run.** `stele check --push` there has no log to keep the run's record in, so it says the record wasn't kept, and exits as the check does.
 
 **An edited log stops the push to a sink.** If the last line a sink got is no longer in the log, or a log file is too large to read, `stele push` won't guess where to go on: that sink fails (exit 2) until you delete `.stele/push/<name>.json`, which sends the whole log again.
 
