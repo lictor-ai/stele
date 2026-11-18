@@ -303,6 +303,12 @@ func TestTargets(t *testing.T) {
 		{command: "git -C a -C b init", want: []Target{at("a/b/.git", Create)}},
 		{command: "git -c init.defaultBranch=main -C sub init", want: []Target{at("sub/.git", Create)}},
 		{command: "cd sub && git init", want: []Target{at("sub/.git", Create)}},
+		{command: "git --attr-source HEAD init src", want: []Target{at("src/.git", Create)}},
+		{command: "git --attr-source=HEAD --config-env a.b=E --exec-path=/x init src", want: []Target{at("src/.git", Create)}},
+		{command: "git --exec-path init src; git --help init x; git -v clone u y", want: nil},
+		{command: "git clone '~'; git clone '~user'; git clone '~/.git'", unknown: 3},
+		{command: "git clone ~user", unknown: 1},
+		{command: "git clone ~", want: []Target{at("home/.git", Create)}},
 		{command: "git --git-dir=x init", unknown: 1},
 		{command: "git --work-tree w init", unknown: 1},
 		{command: "git -C $D init", unknown: 1},
@@ -1241,6 +1247,7 @@ func FuzzTargets(f *testing.F) {
 		"rm [!", "rm [!]", "rm [!]]x", "rm []", "rm []]*", "rm a/b/[!c]/d", "rm * */*",
 		"touch -d x -- a; mkdir -pm 7 b", "git -C a -C b clone --bare -b x u:/r.git", "git clone ://", "git worktree add",
 		"git submodule -q add -- u", "git --git-dir= init", "git -C",
+		"git --attr-source x init src", "git --exec-path init", "git clone ~u", "git clone '~/.git'",
 	} {
 		f.Add(s)
 	}

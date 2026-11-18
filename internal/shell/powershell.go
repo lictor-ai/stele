@@ -2,7 +2,6 @@ package shell
 
 import (
 	"encoding/base64"
-	"os"
 	"path/filepath"
 	"strings"
 	"unicode/utf16"
@@ -28,15 +27,19 @@ import (
 // powershell, pwsh (-EncodedCommand too), bash, sh, zsh and cmd commands with
 // a literal script, and Invoke-Expression of a literal string are read, and
 // git's commands that make a repository, as in bash.
-// Expressions as paths, splatting, $(...), $env:, unknown variables, paths
-// bound from the pipeline, any other Invoke-Expression, Start-Process and
-// scripts are unknown or not seen.
+// $env:NAME and ${env:NAME} expand from the environment (the name's case
+// matters where it does to the OS: on Windows not), $HOME to the user's home
+// and $PWD to the directory the command has moved to, within the budget
+// bash's variables share; one the command sets is unknown from then on.
+// Expressions as paths, splatting, $(...), other automatic variables such as
+// $PSHOME, unknown variables, paths bound from the pipeline, any other
+// Invoke-Expression, Start-Process and scripts are unknown or not seen.
 func PowerShellTargets(command, cwd string) (ts []Target, unknown int) {
 	if len(command) > maxCommand {
 		return nil, 1
 	}
 	r := &results{seen: map[string]int{}}
-	p := &psReader{res: r, vars: map[string]string{}, dir: cwd, dirOK: cwd != ""}
+	p := &psReader{res: r, vars: map[string]string{}, set: map[string]bool{}, dir: cwd, dirOK: cwd != ""}
 	p.run(command)
 	return r.out, r.unknown
 }
@@ -419,6 +422,7 @@ func psVarName(s string) (string, int) {
 type psReader struct {
 	res   *results
 	vars  map[string]string
+	set   map[string]bool // $env: and automatic variables the command sets: unknown
 	dir   string
 	dirOK bool
 	stack []string // Push-Location's
@@ -453,7 +457,7 @@ func (p *psReader) value(t psTok) (string, bool) {
 			n += len(part)
 			continue
 		}
-		v, ok := p.vars[strings.ToLower(part)]
+		v, ok := p.lookup(part)
 		if !ok {
 			return "", false
 		}
@@ -470,10 +474,72 @@ func (p *psReader) value(t psTok) (string, bool) {
 		if i%2 == 0 {
 			b.WriteString(part)
 		} else {
-			b.WriteString(p.vars[strings.ToLower(part)])
+			v, _ := p.lookup(part) // the environment's value is cached
+			b.WriteString(v)
 		}
 	}
 	return b.String(), true
+}
+
+// lookup is the value of the variable named name, as written: one set to a
+// literal earlier in the command, $env:NAME from the environment, $HOME, the
+// user's home, or $PWD, the directory the command has moved to. ok is false
+// for any other, one the command set otherwise, and an empty one, which
+// stele cannot tell from an unset one. The environment is read once a name
+// (results.env), and not at all once the budget is spent.
+func (p *psReader) lookup(name string) (string, bool) {
+	lower := strings.ToLower(name)
+	if p.set[lower] {
+		return "", false
+	}
+	if v, ok := p.vars[lower]; ok {
+		return v, true
+	}
+	if p.res.grown > maxExpand {
+		return "", false
+	}
+	var v string
+	switch {
+	case strings.HasPrefix(lower, "env:"):
+		// Windows' environment ignores case; elsewhere $env:Path is not $env:PATH.
+		env := name[len("env:"):]
+		if windows {
+			env = strings.ToUpper(env)
+		}
+		if env != "" {
+			v = p.res.env(env)
+		}
+	case lower == "home":
+		v = p.home()
+	case lower == "pwd":
+		if p.dirOK {
+			v = p.dir
+		}
+	}
+	return v, v != ""
+}
+
+// home is PowerShell's $HOME and ~: the user's profile folder on Windows,
+// HOME elsewhere, as os.UserHomeDir reads them.
+func (p *psReader) home() string {
+	if windows {
+		return p.res.env("USERPROFILE")
+	}
+	return p.res.env("HOME")
+}
+
+// unset marks a variable the command sets in a way stele does not follow.
+func (p *psReader) unset(name string) {
+	if p.set == nil {
+		p.set = map[string]bool{}
+	}
+	p.set[name] = true
+}
+
+// automatic reports whether name, lower case, is a variable whose value
+// stele reads from outside the command: $env:NAME, $HOME, $PWD.
+func automatic(name string) bool {
+	return strings.HasPrefix(name, "env:") || name == "home" || name == "pwd"
 }
 
 // varName returns the name of a token that is one variable.
@@ -608,6 +674,11 @@ func (p *psReader) statement(st psStmt) {
 		if name, ok := varName(words[0]); ok {
 			rhs := words[2:]
 			delete(p.vars, name)
+			if automatic(name) {
+				// $env:X = …, or $HOME, which PowerShell refuses: unknown
+				// from then on, rather than read from outside.
+				p.unset(name)
+			}
 			if v, ok := p.value(firstOr(rhs)); ok && words[1].text == "=" && st.depth == 0 && len(rhs) == 1 && rhs[0].kind == psWordK && !strings.Contains(name, ":") {
 				if _, cmd := psCommands[strings.ToLower(v)]; !cmd || rhs[0].quoted {
 					p.vars[name] = v
@@ -1095,7 +1166,12 @@ func (p *psReader) nestedText(script string, bash bool) {
 		p.res.unknown++
 		return
 	}
-	q := &psReader{res: p.res, vars: map[string]string{}, dir: p.dir, dirOK: p.dirOK, depth: p.depth + 1}
+	if p.set == nil {
+		p.set = map[string]bool{}
+	}
+	// The environment variables set so far, and any the script sets, stay
+	// unknown on both sides.
+	q := &psReader{res: p.res, vars: map[string]string{}, set: p.set, dir: p.dir, dirOK: p.dirOK, depth: p.depth + 1}
 	q.run(script)
 }
 
@@ -1220,7 +1296,19 @@ func (p *psReader) addTok(t psTok, k Kind, literal bool) {
 		v = v[i+2:]
 	}
 	if j := strings.IndexByte(v, ':'); j > 1 && !strings.ContainsAny(v[:j], `/\`) {
-		return // env:, variable:, function: …: a drive that is not a disk
+		// env:, variable:, function: …: a drive that is not a disk. Writing
+		// env:X or variable:x sets the variable: unknown from then on.
+		drive, item := strings.ToLower(v[:j]), strings.ToLower(strings.TrimLeft(v[j+1:], `/\`))
+		switch drive {
+		case "env":
+			p.unset("env:" + item)
+		case "variable":
+			delete(p.vars, item)
+			if automatic(item) {
+				p.unset(item)
+			}
+		}
+		return
 	}
 	if device(v) {
 		return
@@ -1264,8 +1352,8 @@ func psPath(v string) string { return filepath.FromSlash(strings.ReplaceAll(v, `
 func (p *psReader) abs(v string) (string, bool) {
 	v = psPath(v)
 	if v == "~" || strings.HasPrefix(v, "~"+string(filepath.Separator)) {
-		home, err := os.UserHomeDir()
-		if err != nil {
+		home := p.home()
+		if home == "" || !p.res.expand(len(home)) {
 			return "", false
 		}
 		return filepath.Join(home, v[1:]), true
