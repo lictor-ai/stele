@@ -87,8 +87,11 @@ func gitMakes(args []word) (made []word, unknown int) {
 			elsewhere = true
 		case strings.HasPrefix(t, "--git-dir="), strings.HasPrefix(t, "--work-tree="):
 			elsewhere = true
-		case t == "-c", t == "--namespace", t == "--config-env", t == "--super-prefix", t == "--list-cmds":
+		case t == "-c", t == "--namespace", t == "--config-env", t == "--super-prefix", t == "--list-cmds", t == "--attr-source":
 			i++
+		case t == "--exec-path", t == "--html-path", t == "--man-path", t == "--info-path",
+			t == "--help", t == "-h", t == "--version", t == "-v":
+			return nil, 0 // git prints a path, help or its version: no command runs
 		case t == "--bare":
 			bare = true
 		}
@@ -197,7 +200,7 @@ func gitDest(ops []word, bare bool) (word, bool) {
 // repoName derives the folder git clone makes from a repository's URL or
 // path, as git does: its last part, without a trailing / or /.git, and
 // without .git or .bundle. A URL with no path is its host's name. ok is false
-// when there is no name.
+// when there is no name, or it is ~ or ~user.
 func repoName(url string) (string, bool) {
 	s := strings.TrimSpace(url)
 	if i := strings.Index(s, "://"); i >= 0 {
@@ -226,7 +229,8 @@ func repoName(url string) (string, bool) {
 	} else {
 		s = strings.TrimSuffix(s, ".git")
 	}
-	if s == "" || s == "." || s == ".." || strings.ContainsAny(s, "\x00\n\r\t") {
+	// ~ or ~user, which git does not expand and a shell may: not a name.
+	if s == "" || s == "." || s == ".." || strings.HasPrefix(s, "~") || strings.ContainsAny(s, "\x00\n\r\t") {
 		return "", false
 	}
 	return s, true

@@ -11,6 +11,7 @@ import (
 )
 
 func TestPowerShellTargets(t *testing.T) {
+	env(t, map[string]string{}) // $env:TEMP below is unset
 	cwd := t.TempDir()
 	at := func(rel string) string { return filepath.Join(cwd, filepath.FromSlash(rel)) }
 	type tg struct {
@@ -94,6 +95,87 @@ func TestPowerShellTargets(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// $env:NAME, ${env:NAME}, $HOME and $PWD expand, bare and in strings (#177):
+// the name's case matters as it does to the OS, and $HOME is the user's
+// profile folder on Windows, HOME elsewhere. One unset, empty, or set by the
+// command is unknown.
+func TestPowerShellTargetsEnv(t *testing.T) {
+	cwd := t.TempDir()
+	data := filepath.Join(cwd, "appdata")
+	env(t, map[string]string{
+		"APPDATA": data, "EMPTY": "",
+		"HOME": filepath.Join(cwd, "home"), "USERPROFILE": filepath.Join(cwd, "profile"),
+	})
+	old := windows
+	t.Cleanup(func() { windows = old })
+	type tg struct {
+		rel  string
+		kind Kind
+	}
+	tests := []struct {
+		os      string // "" for both, else "windows" or "unix": how names and $HOME are read
+		cmd     string
+		want    []tg
+		unknown int
+	}{
+		{"", `Remove-Item -Recurse $env:APPDATA\stele`, []tg{{"appdata/stele", Remove}}, 0},
+		{"", `Set-Content "$env:APPDATA\x.go" x`, []tg{{"appdata/x.go", Redirect}}, 0},
+		{"", `Set-Content ${env:APPDATA}/y.go x`, []tg{{"appdata/y.go", Redirect}}, 0},
+		{"", `echo 1 > "${env:APPDATA}\z.go"`, []tg{{"appdata/z.go", Redirect}}, 0},
+		{"", `Set-Content $Env:APPDATA/a.go x`, []tg{{"appdata/a.go", Redirect}}, 0},
+		{"", `$d = "$env:APPDATA\sub"; Set-Content $d\b.go x`, []tg{{"appdata/sub/b.go", Redirect}}, 0},
+		{"", `cd $env:APPDATA; Set-Content c.go x`, []tg{{"appdata/c.go", Redirect}}, 0},
+		{"", `git init $env:APPDATA\r`, []tg{{"appdata/r/.git", Create}}, 0},
+		{"windows", `Set-Content $env:appdata\w.go x`, []tg{{"appdata/w.go", Redirect}}, 0},
+		{"unix", `Set-Content $env:appdata\w.go x`, nil, 1},
+		{"windows", `Set-Content $HOME\notes\x.go x`, []tg{{"profile/notes/x.go", Redirect}}, 0},
+		{"unix", `Set-Content $HOME\notes\x.go x`, []tg{{"home/notes/x.go", Redirect}}, 0},
+		{"windows", `Set-Content "$home/h.go" x; Set-Content ~/t.go x`, []tg{{"profile/h.go", Redirect}, {"profile/t.go", Redirect}}, 0},
+		{"unix", `Set-Content "$home/h.go" x; Set-Content ~/t.go x`, []tg{{"home/h.go", Redirect}, {"home/t.go", Redirect}}, 0},
+		{"", `cd sub; Set-Content $PWD\p.go x; Set-Content "$pwd/q.go" x`, []tg{{"sub/p.go", Redirect}, {"sub/q.go", Redirect}}, 0},
+		{"", `Push-Location sub; Pop-Location; Set-Content $PWD\r.go x`, []tg{{"r.go", Redirect}}, 0},
+		{"", `cd $unknown; Set-Content $PWD\x.go x`, nil, 1},
+		{"", `Set-Content $env:NOPE\x.go x`, nil, 1},
+		{"", `Set-Content $env:EMPTY\x.go x`, nil, 1},
+		{"", `Set-Content ${env:}\x.go x`, nil, 1},
+		{"", `Set-Content $PSHOME\x.go x`, nil, 1},
+		{"", `Set-Content '$env:APPDATA\x.go' x`, nil, 0}, // a drive $env: that is no disk
+		{"", "Set-Content \"`$env:APPDATA\\x.go\" x", nil, 0}, // a drive $env: that is no disk
+		// Set by the command: unknown from then on, not read from outside.
+		{"", `$env:APPDATA = 'elsewhere'; Set-Content $env:APPDATA\x.go x`, nil, 1},
+		{"", `${env:APPDATA} = 'elsewhere'; Set-Content $env:APPDATA\x.go x`, nil, 1},
+		{"", `Set-Content env:APPDATA x; Set-Content $env:APPDATA\x.go x`, nil, 1},
+		{"", `Remove-Item Env:\APPDATA; Set-Content $env:APPDATA\x.go x`, nil, 1},
+		{"", `iex '$env:APPDATA = 1'; Set-Content $env:APPDATA\x.go x`, nil, 1},
+		{"", `$HOME = 'x'; Set-Content $HOME\x.go x`, nil, 1},
+		{"", `$f = 'v.go'; Remove-Item variable:f; Set-Content $f x`, nil, 1},
+	}
+	for _, tt := range tests {
+		for _, win := range []bool{false, true} {
+			if (tt.os == "windows" && !win) || (tt.os == "unix" && win) {
+				continue
+			}
+			t.Run(fmt.Sprintf("%s/windows=%v", tt.cmd, win), func(t *testing.T) {
+				windows = win
+				defer func() { windows = old }()
+				got, unknown := PowerShellTargets(tt.cmd, cwd)
+				var want []Target
+				for _, w := range tt.want {
+					want = append(want, Target{Path: filepath.Join(cwd, filepath.FromSlash(w.rel)), Kind: w.kind})
+				}
+				if len(got) != len(want) || unknown != tt.unknown {
+					t.Fatalf("got %v (unknown %d), want %v (unknown %d)", got, unknown, want, tt.unknown)
+				}
+				for i := range want {
+					if got[i] != want[i] {
+						t.Errorf("target %d = %v, want %v", i, got[i], want[i])
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -195,6 +277,61 @@ func TestPowerShellTargetsExpandBudget(t *testing.T) {
 			t.Errorf("%.40s…: allocated %d MiB, limit %d MiB", cmd, got>>20, limit>>20)
 		}
 	}
+	// $env: and $HOME share it, and the environment is read once a name,
+	// on Windows whatever case the name is written in: each read there
+	// copies the value.
+	reads := map[string]int{}
+	old, oldWindows := getenv, windows
+	t.Cleanup(func() { getenv, windows = old, oldWindows })
+	getenv = func(k string) string {
+		reads[k]++
+		return map[string]string{"HOME": "/h", "USERPROFILE": "/h", "BIG": strings.Repeat("b", 32<<10)}[k]
+	}
+	spend := "$x = '" + big + "'; echo 1 > \"" + strings.Repeat("$x", 21) + "\"; "
+	for _, win := range []bool{false, true} {
+		windows = win
+		for _, cmd := range []string{
+			"echo 1 > \"" + strings.Repeat("$env:BIG", 7000) + "\"",
+			"echo 1 > \"" + strings.Repeat("${env:BIG}$Env:BIG", 3500) + "\"",
+			spend + "echo 1 > \"" + strings.Repeat("$env:BIG", 7000) + "\"",
+			spend + "echo 1 > \"" + strings.Repeat("$HOME", 7000) + "\"",
+			spend + strings.Repeat("echo 1 > ~/x; ", 7000),
+			"cd '" + big + "'; echo 1 > \"" + strings.Repeat("$PWD", 20000) + "\"",
+		} {
+			clear(reads)
+			r := &results{seen: map[string]int{}}
+			p := &psReader{res: r, vars: map[string]string{}, dir: "/w", dirOK: true}
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			p.run(cmd)
+			runtime.ReadMemStats(&after)
+			if r.unknown == 0 || r.grown != maxExpand+1 {
+				t.Errorf("windows=%v %.40s…: unknown %d, expanded %d: the budget %d was not hit", win, cmd, r.unknown, r.grown, maxExpand)
+			}
+			if got, limit := after.TotalAlloc-before.TotalAlloc, uint64(64<<20); got > limit {
+				t.Errorf("windows=%v %.40s…: allocated %d MiB, limit %d MiB", win, cmd, got>>20, limit>>20)
+			}
+			for k, n := range reads {
+				if n > 1 {
+					t.Errorf("windows=%v %.40s…: %s read %d times", win, cmd, k, n)
+				}
+			}
+		}
+	}
+	// $env:Big and $env:BIG are one variable on Windows, two elsewhere.
+	windows = true
+	clear(reads)
+	PowerShellTargets(`echo 1 > "$env:big$env:Big$ENV:BIG"`, "/w")
+	if len(reads) != 1 || reads["BIG"] != 1 {
+		t.Errorf("windows: reads %v, want BIG once", reads)
+	}
+	windows = false
+	clear(reads)
+	PowerShellTargets(`echo 1 > "$ENV:BIG$env:Big"`, "/w")
+	if len(reads) != 2 || reads["BIG"] != 1 || reads["Big"] != 1 {
+		t.Errorf("unix: reads %v, want BIG and Big", reads)
+	}
+	getenv, windows = old, oldWindows
 	cwd := t.TempDir()
 	// Past the budget, a path that expands is unknown; one written out is
 	// still seen.
@@ -213,6 +350,7 @@ func FuzzPowerShellTargets(f *testing.F) {
 	f.Add("Set-Content -Path a.go -Value x; Remove-Item b.go")
 	f.Add("[IO.File]::WriteAllText('a.go', \"$x\")")
 	f.Add("git -C $d clone u; mkdir -Name x; ni -ItemType Directory a, b")
+	f.Add(`$env:A = 1; sc "${env:HOME}\$env:A$HOME$PWD" x; Remove-Item Env:\A, variable:x; cd ~; ni ${env:}`)
 	f.Fuzz(func(t *testing.T, cmd string) {
 		ts, _ := PowerShellTargets(cmd, "/w")
 		for _, x := range ts {
