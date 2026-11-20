@@ -216,6 +216,29 @@ func TestStaleLockIsTakenOver(t *testing.T) {
 	}
 }
 
+// UpdateWithin gives up when its time is spent, however long lockWait is:
+// the hook passes what is left of the 10 s the agent gives it (#151).
+func TestUpdateWithinGivesUpInTime(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Update(root, "s1", t0, testKey, func(*State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	// Another update holds the lock.
+	if err := os.WriteFile(path(root, "s1")+".lock", []byte("token"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, total := range []time.Duration{300 * time.Millisecond, 0, -time.Second} {
+		start := time.Now()
+		_, err := UpdateWithin(root, "s1", t0, testKey, total, func(*State) error { return nil })
+		if err == nil {
+			t.Errorf("total %v: the update took a held lock", total)
+		}
+		if d := time.Since(start); d >= 3*time.Second {
+			t.Errorf("total %v: waited %v, past its time", total, d)
+		}
+	}
+}
+
 func TestCleanup(t *testing.T) {
 	root := t.TempDir()
 	for _, id := range []string{"old", "recent"} {

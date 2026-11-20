@@ -154,8 +154,9 @@ func bashRoot(ev adapter.Event, sw adapter.Switches, root string, rels []string,
 		return k
 	}
 	var d backstop.BashDecision
-	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
-		in := backstop.BashInput{PromptID: ev.PromptID, AgentID: ev.AgentID, Files: files, Now: now(), Fit: fit}
+	_, err = session.UpdateWithin(root, ev.SessionID, now(), key, sessionWait(), func(st *session.State) error {
+		in := backstop.BashInput{PromptID: ev.PromptID, AgentID: ev.AgentID, Files: files,
+			Start: hookStart(), Now: now(), Window: batchWindow(), Fit: fit}
 		d, *st = backstop.DecideBash(in, *st)
 		return nil
 	})

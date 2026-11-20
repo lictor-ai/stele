@@ -513,12 +513,20 @@ type State struct {
     PromptID  string                          // the turn Shown belongs to
     Shown     map[string]map[string]time.Time // agent id ("" = main) → rule id → when shown
     Denied    map[string]map[string]time.Time // agent id → root-relative file → when its write was last denied
+    BashDenied map[string]map[string]time.Time // agent id → file a shell command was stopped from writing → when
+    Batch     map[string]Batch                // agent id → its batch of parallel denies this turn (#151)
     Primed    map[string]map[string]string    // agent id → rule id → hash of its block in the rules file the agent loaded
     UpdatedAt time.Time
 }
 
+type Batch struct {
+    Start, End time.Time // the batch's first deny and its last
+    Chain      time.Time // the first deny of its current chain
+}
+
 func Load(root, id string, key sign.Key) (State, error) // no file yet: a zero State carrying id
 func Update(root, id string, now time.Time, key sign.Key, fn func(*State) error) (State, error)
+func UpdateWithin(root, id string, now time.Time, key sign.Key, total time.Duration, fn func(*State) error) (State, error)
 func SetCurrent(root, id string) error     // for the team milestone's request; unused in v1
 func Current(root string) (string, error)  // "" when no session has blocked; unused in v1
 ```
@@ -538,11 +546,14 @@ fail every update of that session.
 **`Shown` is what the hook needs to show each rule once per turn** (ADR-0004).
 It is keyed by agent because a subagent has its own context: rules shown to the
 main agent do not count as shown to a subagent, or the other way round. A new
-`prompt_id` empties it. Each entry keeps when it was shown, which is what lets the
-hook deny a whole batch of parallel writes (`backstop.Window`). `Denied`, keyed
-and emptied the same way, records the files whose write was denied, so a later
-write to one of them is recognised as the agent's retry (#51). Both fields are
-`omitempty`, and an older state file loads with them empty. In v1 only `stele
+`prompt_id` empties it. Each entry keeps when it was shown, which tells a rule
+shown in the current batch of parallel writes from one shown in an earlier one.
+`Denied`, keyed and emptied the same way, records the files whose write was
+denied, so a later write to one of them is recognised as the agent's retry
+(#51). `Batch`, keyed and emptied the same way, records each agent's current
+batch of denies (#151): see `internal/backstop`. The fields are `omitempty`,
+and an older state file loads with them empty; with no `Batch`, every rule
+already shown counts as read. In v1 only `stele
 hook` writes session state; the arm-and-fetch fields of the spec (`Armed`,
 `Touched`, `Blocks`, `LastError`) belonged to the MCP exchange and are gone.
 
@@ -552,10 +563,16 @@ treatment as `journal.Append` in §7. In practice they rarely overlap, since the
 agent does one thing at a time. "Rarely" is not a concurrency design.
 
 `Update` is that read-modify-write: it takes `state/<id>.json.lock` with
-`safefile.Lock`, loads, applies `fn`, saves through the crash-safe replace, and
-releases the lock. It waits at most 2 seconds for another holder, since the hook
-runs on every write, and takes over a lock older than 10 seconds as left by a
-crashed process.
+`safefile.LockInTurn`, loads, applies `fn`, saves through the crash-safe
+replace, and releases the lock. It waits at most 5 seconds, and takes over a
+lock older than 10 seconds as left by a crashed process. A batch of parallel
+writes queues on this lock, and an update that gives up lets its write
+through with a warning, so the wait is not short. `UpdateWithin` bounds the
+whole wait by `total` instead: the hook passes what is left of 8.5 s from its
+start, at most 5 s (`cmd/stele` `sessionWait`), since `compile.EnsureFresh`
+may already have waited for the compile lock and rebuilt the index, and the
+agent kills the hook at 10 s, letting the write through with no word. Past
+it the update fails, and `block_on_error` decides.
 
 `safefile.Lock` creates the lock file exclusively, which works alike everywhere,
 and writes a token unique to its holder into it. Unlocking removes the file only
@@ -736,19 +753,27 @@ type Rule struct {
 }
 
 type Input struct {
-    PromptID string    // the turn
-    AgentID  string    // "" for the main agent
-    File     string    // the root-relative file written; "" disables retry detection
-    Rules    []Rule    // every rule that applies to the file, by scope
-    Now      time.Time
+    PromptID string        // the turn
+    AgentID  string        // "" for the main agent
+    File     string        // the root-relative file written; "" disables retry detection
+    Rules    []Rule        // every rule that applies to the file, by scope
+    Start    time.Time     // when the hook started, before any lock wait; zero is Now
+    Now      time.Time     // when it decides, holding the session lock
+    Window   time.Duration // replaces Window when positive (a test build only)
+    Fit      func([]Rule) int
 }
 
 type Decision struct {
     Deny  bool
     Rules []Rule // when denying, the rules to show
+    More  int    // rules left out of the message
 }
 
-const Window = 3 * time.Second
+const (
+    Window     = 3 * time.Second        // a batch, from its first deny
+    RetryAfter = 500 * time.Millisecond // a chain's gap; a retry's least delay
+    Lead       = 10 * time.Second       // how early a hook of a batch can have started
+)
 
 func Decide(in Input, st session.State) (Decision, session.State)
 ```
@@ -768,8 +793,8 @@ the whole session, in `Decide` and `DecideBash` alike, when
 scope have not changed since the agent read them. That test comes before the
 turn's `Shown`, the retry and the window, and the turn reset keeps `Primed`. A
 subagent uses only its own record. A Bash write of a file with scoped rules is
-still denied once when every rule is loaded, listing none: the write would go
-unchecked.
+still denied once when every rule is loaded or read, listing none: the write
+would go unchecked. Its message then says the agent has been given the rules.
 
 The order is the whole behaviour:
 
@@ -777,11 +802,14 @@ The order is the whole behaviour:
 1. no rules apply to the file           → allow
 2. PromptID differs from the state      → a new turn: forget what was shown and denied
 3. for each rule: not shown to AgentID  → show it, record it at Now
-                  a retry (File denied ≥ RetryAfter ago), and the rule
+                  a retry (File denied ≥ RetryAfter before Start, and
+                  not in the chain that deny is in), and the rule
                   shown at or before that deny          → read: skip it
-                  0 ≤ Now − shown < Window → show it again (same batch)
+                  the write in the batch, and the rule shown
+                  in the batch                          → show it again
 4. nothing to show                      → allow
-5. otherwise                            → DENY with those rules, record File at Now
+5. otherwise                            → DENY with those rules, record File at
+                                          Now, and extend the batch (or start one)
 ```
 
 `Decide` returns the state to save, and `cmd/` saves it **before** answering:
@@ -789,21 +817,50 @@ The order is the whole behaviour:
 recorded would repeat on every retry, and there is no circuit breaker to stop it,
 so a save that fails goes through the failure policy instead.
 
-**The window** exists for parallel writes. The agent often issues several writes
-in one message, and their hooks run before it reads any deny reason; within the
-window every write that needs the same rules is denied too, so the agent reads
-them once and retries the batch. It does not slide: a rule is stamped when first
-shown. A model can retry within three seconds, so a retry is recognised by its
-file: a write to a file whose write was denied at least `RetryAfter` (500 ms)
-ago comes after that deny's reason, which held every rule for the file shown at
-or before it (#51). The hooks of parallel tool calls run within milliseconds of
-each other, and a retry needs a model round trip (the fastest seen took 1.2 s),
-so a second write to the same file sooner than that is a parallel one, denied
-as any other in the window. A deny dated in the future, after the clock moved
-back, is not a retry either. A first write to a third file while the window is
-open is still denied once. A time before a rule was shown means the clock moved
-back, and counts as outside the window, so a jump back never causes a deny loop
-(#53).
+**The batch** exists for parallel writes. The agent often issues several
+writes in one message, and their hooks run before it reads any deny reason;
+every write of the batch that needs a rule the batch showed is denied too, so
+the agent reads the rules once and retries the batch. The turn cannot tell a
+batch, since one turn holds many model round trips, so the hook's times do
+(#151). `Start` is taken when the hook has read the event, before it waits
+for the compile or session lock: in a batch of many, a hook can wait seconds
+for the others, and its `Now` says nothing of when the agent sent it. A write
+is in the agent's batch when
+
+- it started before the batch's last deny (`Batch.End`) was answered, or less
+  than `RetryAfter` (500 ms) after it, and not more than `Lead` (10 s) before
+  the batch's first deny (chained); or
+- it started less than `Window` (3 s) after the batch's first deny
+  (`Batch.Start`), for the hooks of a batch the agent starts slowly.
+
+A deny in the batch extends it; one outside starts a new one. A chain is a run
+of denies each less than `RetryAfter` after the one before; `Batch.Chain` is
+where the current one began. A rule shown in the batch is one stamped between
+`Batch.Start` and `Batch.End`.
+
+A retry is recognised by its file: a write to a file whose write was denied
+at least `RetryAfter` before the hook started comes after that deny's reason,
+which held every rule for the file shown at or before it (#51), unless the
+write is chained to the chain that deny is in: then it is a second write to
+the file in one message. A retry sent together with a write that needs a new
+rule is chained to that write's deny, a new chain begun after the retried
+deny, and stays a retry. The hooks of parallel tool calls run within
+milliseconds of each other, and a retry needs a model round trip (the fastest
+seen took 1.2 s). A deny dated in the future, after the clock moved back, is
+not a retry. A first write to a third file within `Window` of the batch's
+first deny is still denied once. A hook that started more than `Lead` before
+the batch's first deny, or before it and outside the chain, means the clock
+moved back: it is outside the batch, so a jump back never causes a deny loop
+(#53). After a jump back, `Batch.End` moves back with the next deny, which
+only shortens the chain.
+
+`DecideBash` shares the batch: a shell command lists the rules never shown,
+and those shown in the batch.
+
+The window can be set only in a test build: `stele` built with `-tags
+steletest` reads `STELE_TEST_BATCH_WINDOW` (a Go duration up to a minute; `0`
+leaves the chain alone), and the functional tests build it so. A release build
+never reads it.
 
 **The message holds what fits.** Claude Code passes a hook text on in full only
 up to 10,000 characters. A deny reason holds the rules that fit, kept whole and

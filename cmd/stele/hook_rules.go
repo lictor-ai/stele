@@ -72,7 +72,7 @@ func invalidRules(ev adapter.Event, file string, room int) (warning, context str
 		return "", context
 	}
 	warn := true
-	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
+	_, err = session.UpdateWithin(root, ev.SessionID, now(), key, sessionWait(), func(st *session.State) error {
 		warn = st.RulesWarned != mark
 		st.RulesWarned = mark
 		return nil

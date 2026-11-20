@@ -32,7 +32,7 @@ func TestMeasureHookLatency(t *testing.T) {
 		bad := "package a\n\nfunc f() { fmt.Println(1) }\n"
 		p.write("cmd/a.go", src)
 		p.write("cmd/b.go", bad)
-		time.Sleep(3100 * time.Millisecond)
+		time.Sleep(pastBatch)
 		for i := range runs {
 			preAllow = append(preAllow, p.hook(pre("cmd/a.go", src)).Duration)
 			e := pre("cmd/a.go", src)

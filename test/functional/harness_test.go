@@ -38,7 +38,9 @@ func TestMain(m *testing.M) {
 		os.Exit(2)
 	}
 	bin = filepath.Join(dir, "stele"+exe())
-	build := exec.Command("go", "build", "-o", bin, "../../cmd/stele")
+	// steletest: the hook reads its batch window from batchEnv, which a
+	// release build never does.
+	build := exec.Command("go", "build", "-tags", "steletest", "-o", bin, "../../cmd/stele")
 	build.Stdout, build.Stderr = os.Stdout, os.Stderr
 	if err := build.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "building stele:", err)
@@ -80,7 +82,7 @@ func newProject(t *testing.T, md string) *project {
 		t.Fatal(err)
 	}
 	key := t.TempDir()
-	p := &project{t: t, dir: dir, env: keyEnv(key)}
+	p := &project{t: t, dir: dir, env: append(keyEnv(key), batchEnv+"=0")}
 	p.git("init", "-q")
 	p.git("config", "user.email", "t@example.com")
 	p.git("config", "user.name", "t")
@@ -89,6 +91,25 @@ func newProject(t *testing.T, md string) *project {
 		p.write("stele.md", md)
 	}
 	return p
+}
+
+// batchEnv sets the hook's batch window, for tests only. newProject sets it
+// to 0, so only a batch's chain counts: a test steps past a batch of denies
+// by waiting pastBatch, not the 3 s window (#151). window sets another.
+const batchEnv = "STELE_TEST_BATCH_WINDOW"
+
+// pastBatch is a wait longer than backstop.RetryAfter: a hook started this
+// long after the last one answered is the agent's next step, as after a
+// model round trip.
+const pastBatch = time.Second
+
+// window sets the hook's batch window: "" for the real one.
+func (p *project) window(d string) {
+	if d == "" {
+		p.env = append(p.env, batchEnv+"=") // empty: the real window
+		return
+	}
+	p.env = append(p.env, batchEnv+"="+d)
 }
 
 // keyEnv points os.UserConfigDir, where stele keeps its key, at dir.
@@ -419,7 +440,7 @@ func (p *project) writeVia(e event) (pre, post answer) {
 }
 
 // agentWrite writes as an agent does: on a deny it reads the rules (a model
-// round trip, longer than the batch window) and retries once. It returns the
+// round trip) and retries once. It returns the
 // post-write answer.
 func (p *project) agentWrite(e event) answer {
 	p.t.Helper()
@@ -427,7 +448,7 @@ func (p *project) agentWrite(e event) answer {
 	if !pre.Deny {
 		return post
 	}
-	time.Sleep(3100 * time.Millisecond)
+	time.Sleep(pastBatch)
 	pre, post = p.writeVia(e)
 	if pre.Deny {
 		p.t.Fatalf("retry after reading the rules was denied:\n%s", pre.Reason)

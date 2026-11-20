@@ -54,6 +54,8 @@ const maxShown = 20
 // would block the write whatever the JSON says, and a hook that cannot make
 // sense of its input must never stop the agent.
 func runHook(args []string, stdout, _ io.Writer) (code int) {
+	defer func(prev time.Time) { startedWall = prev }(startedWall)
+	startedWall = time.Now() // the agent's timeout runs from about here
 	who, ok := hookAgent(args)
 	if !ok {
 		return exitOK
@@ -78,6 +80,10 @@ func runHook(args []string, stdout, _ io.Writer) (code int) {
 			code = exitOK
 		}
 	}()
+	// Right after reading the event, before any lock wait: a batch is told
+	// by it (#151). Inside the recover, as now can panic in a test.
+	defer func(prev time.Time) { started = prev }(started)
+	started = now()
 	// The version and switches stele init wrote on the command (ADR-0006).
 	installed, sw := agent.HookArgs(args)
 	var a adapter.Answer
@@ -242,8 +248,9 @@ func beforeRoot(ev adapter.Event, root string, rels []string, budget int) (a ada
 	// Decide inside the update, so the rules shown are saved before the deny
 	// is answered: a deny that was not recorded would repeat forever.
 	var d backstop.Decision
-	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
-		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, File: file, Rules: rules, Now: now(),
+	_, err = session.UpdateWithin(root, ev.SessionID, now(), key, sessionWait(), func(st *session.State) error {
+		in := backstop.Input{PromptID: ev.PromptID, AgentID: ev.AgentID, File: file, Rules: rules,
+			Start: hookStart(), Now: now(), Window: batchWindow(),
 			Fit: func(rs []backstop.Rule) int {
 				// At least one: a rule too long for any message would
 				// otherwise be denied forever.
@@ -563,7 +570,7 @@ func versionWarning(ev adapter.Event, file, installed string) string {
 		return msg
 	}
 	mark, warn := installed+" "+running, true
-	_, err = session.Update(root, ev.SessionID, now(), key, func(st *session.State) error {
+	_, err = session.UpdateWithin(root, ev.SessionID, now(), key, sessionWait(), func(st *session.State) error {
 		warn = st.VersionWarned != mark
 		st.VersionWarned = mark
 		return nil

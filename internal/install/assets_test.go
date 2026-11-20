@@ -89,6 +89,24 @@ func TestBashMessage(t *testing.T) {
 	if note := BashMessage(ccWords, []string{"a.go"}, nil, "stele.md:3: rule has no body"); !strings.Contains(note, "Note: stele.md:3: rule has no body") || strings.Contains(note, "---") {
 		t.Errorf("with a note and no rule:\n%s", note)
 	}
+	if s := BashMessage(ccWords, []string{"a.go"}, nil, ""); !strings.Contains(s, "already been given its rules") {
+		t.Errorf("with no rule to list, the message does not say the agent has them:\n%s", s)
+	}
+	if s := BashMessage(ccWords, []string{"a.go"}, []BlockRule{{Text: "r"}}, ""); strings.Contains(s, "already been given") {
+		t.Errorf("with a rule listed, the message says the agent has them all:\n%s", s)
+	}
+	if s := BashMessageMore(ccWords, []string{"a.go"}, nil, 2, ""); strings.Contains(s, "already been given") {
+		t.Errorf("with rules left out, the message says the agent has them all:\n%s", s)
+	}
+}
+
+// A deny lists what it says the agent has not read: it never claims rules
+// and lists none (#151).
+func TestBlockMessageSaysNotRead(t *testing.T) {
+	s := BlockMessage(ccWords, "a.go", []BlockRule{{Text: "r"}}, "")
+	if !strings.Contains(s, "not read yet") || strings.Contains(s, "not seen") {
+		t.Errorf("block message:\n%s", s)
+	}
 }
 
 // The templates are embedded as checked out; .gitattributes keeps them LF on

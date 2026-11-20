@@ -30,7 +30,7 @@ func TestPreShowsRulesOncePerTurn(t *testing.T) {
 		t.Errorf("deny reason shows the migrations/ rule for a .go file outside migrations/:\n%s", a.Reason)
 	}
 
-	time.Sleep(3100 * time.Millisecond) // past the batch window
+	time.Sleep(pastBatch) // the agent reads the rules
 	if b := p.hook(pre("cmd/main.go", "package main")); b.Deny {
 		t.Fatalf("retry after reading the rules was denied again:\n%s", b.Reason)
 	}
@@ -74,7 +74,7 @@ func TestPrePerAgent(t *testing.T) {
 			t.Errorf("agent %q was not shown the rules", agent)
 		}
 	}
-	time.Sleep(3100 * time.Millisecond)
+	time.Sleep(pastBatch)
 	for _, agent := range []string{"", "agent-a", "agent-b"} {
 		e := pre("a.go", "package a")
 		e.Agent = agent
@@ -99,7 +99,10 @@ func TestPrePerSession(t *testing.T) {
 // The agent sends a batch of writes in one message, and Claude Code runs
 // their hooks at once. Every write in the batch must be denied (the agent
 // has read nothing yet), the session state must survive the race, and the
-// retry of the whole batch must go through.
+// retry of the whole batch must go through. The hooks wait for each other's
+// lock, the last for seconds on a loaded machine: each is in the batch
+// because it started before the deny before it was answered (#151), with
+// no window at all.
 func TestPreParallelBatch(t *testing.T) {
 	p := newProject(t, goRules)
 	p.compile()
@@ -127,7 +130,7 @@ func TestPreParallelBatch(t *testing.T) {
 		t.Errorf("%d of %d parallel writes denied; the whole batch must be, or some go through unread", denied, n)
 	}
 
-	time.Sleep(3100 * time.Millisecond)
+	time.Sleep(pastBatch)
 	for i := range n {
 		wg.Add(1)
 		go func() {
@@ -149,6 +152,7 @@ func TestPreParallelBatch(t *testing.T) {
 // if the agent can be held in a loop past the window.
 func TestPreFastRetryCostsAtMostOneExtraDeny(t *testing.T) {
 	p := newProject(t, goRules)
+	p.window("") // the real window
 	p.compile()
 	p.hook(pre("a.go", "package a"))
 	denies := 1

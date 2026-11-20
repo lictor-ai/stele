@@ -151,7 +151,7 @@ func TestCodexDenyCheckAndRetry(t *testing.T) {
 		t.Fatalf("first patch: %+v", a)
 	}
 	// Codex's retry comes seconds later, after the model read the reason.
-	time.Sleep(3100 * time.Millisecond)
+	time.Sleep(pastBatch)
 	if a := p.hookRaw(p.codexEvent("PreToolUse", "turn-1", patch, "", "")); !a.silent() {
 		t.Errorf("retry: %+v", a)
 	}
