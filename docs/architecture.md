@@ -1829,9 +1829,10 @@ body written with `if`, `case`, `for` or `while` moves the tracked directory for
 what follows.
 A command that writes nothing costs a parse: no key, no index, no file. A
 target that is one of stele's own files, a `.git` below the root, or stele's
-signing key, its folder or one above it, asks, as a Write does (#52, #152). A target a scoped rule covers that the command writes
-content to (`Kind.Writes`: not a removal, a copy or a file or folder made) is
-denied, once per file, per agent and per turn
+signing key, its folder or one above it, asks, as a Write does (#52, #152). A
+target a scoped rule covers that the command writes content to
+(`Kind.Writes`: not a removal, a copy or a file or folder made) is denied,
+once per file, per agent and per turn
 (`backstop.DecideBash`, `State.BashDenied`), with the rules not yet shown and
 a pointer to Write and Edit (`bash-message.tmpl`); the same command run at
 least `RetryAfter` later goes through, with a note to run `stele check`. Only a
