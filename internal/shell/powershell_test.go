@@ -179,6 +179,152 @@ func TestPowerShellTargetsEnv(t *testing.T) {
 	}
 }
 
+// A variable the command sets in a way stele does not follow is unknown from
+// then on, never read from outside, and a path that is no file is no target
+// (#181).
+func TestPowerShellTargetsSetByCommand(t *testing.T) {
+	cwd := t.TempDir()
+	env(t, map[string]string{
+		"APPDATA": filepath.Join(cwd, "appdata"),
+		"HOME":    filepath.Join(cwd, "home"), "USERPROFILE": filepath.Join(cwd, "profile"),
+	})
+	old := windows
+	t.Cleanup(func() { windows = old })
+	type tg struct {
+		rel  string
+		kind Kind
+	}
+	use := `; Set-Content $env:APPDATA\x.go x`
+	tests := []struct {
+		os      string // "" for both, else "windows", "unix", or "host" for the OS the test runs on
+		cmd     string
+		want    []tg
+		unknown int
+	}{
+		// Set-Item and the like on env: or variable:, any argument.
+		{"", `Set-Item env:APPDATA C:\other` + use, nil, 1},
+		{"", `si env:APPDATA q` + use, nil, 1},
+		{"", `Set-Item -Path Env:APPDATA -Value q` + use, nil, 1},
+		{"", `Set-Item -Path:Env:\APPDATA -Value q` + use, nil, 1},
+		{"", `Set-Item -LiteralPath env:APPDATA q` + use, nil, 1},
+		{"", `Clear-Item env:APPDATA` + use, nil, 1},
+		{"", `Microsoft.PowerShell.Management\Set-Item Environment::APPDATA q` + use, nil, 1},
+		{"", `Rename-Item env:FOO APPDATA` + use, nil, 1},
+		{"", `Rename-Item -Path env:FOO -NewName APPDATA` + use, nil, 1},
+		{"", `Copy-Item env:FOO -Destination env:APPDATA` + use, nil, 1},
+		{"", `Move-Item env:FOO env:APPDATA` + use, nil, 1},
+		{"", `Copy-Item env:FOO dst.go`, nil, 1},
+		{"", `New-Item -Path env: -Name APPDATA -Value q` + use, nil, 1},
+		{"", `Set-Item env:APPDATA, env:B q` + use, nil, 1},
+		{"", `$p = 'env:APPDATA'; Set-Item $p q` + use, nil, 1},
+		{"", `Set-Item env:$n q` + use, nil, 1},
+		{"", `Remove-Item env:*` + use, nil, 1},
+		{"", `[Environment]::SetEnvironmentVariable('APPDATA', 'q')` + use, nil, 1},
+		{"", `[System.Environment]::SetEnvironmentVariable($n, 'q')` + use, nil, 1},
+		{"", `$f = 'v.go'; Set-Item variable:f w.go; Set-Content $f x`, nil, 1},
+		{"", `Set-Item variable:HOME q; Set-Content $HOME\x.go x`, nil, 1},
+		{"", `Set-Item env:OTHER q` + use, []tg{{"appdata/x.go", Redirect}}, 0},
+		{"", `Get-ChildItem env:; Get-Item env:APPDATA; Test-Path variable:x` + use, []tg{{"appdata/x.go", Redirect}}, 0},
+		{"", `cd env:; cd C:\; Push-Location variable:` + use, []tg{{"appdata/x.go", Redirect}}, 0},
+		{"windows", `Set-Item env:appdata q` + use, nil, 1},
+		// A nested bash reads the environment this command left.
+		{"host", `bash -c 'echo > $APPDATA/x.go'`, []tg{{"appdata/x.go", Redirect}}, 0},
+		{"", `$env:APPDATA = 'q'; bash -c 'echo > $APPDATA/x.go'`, nil, 1},
+		{"", `$env:appdata = 'q'; bash -c 'echo > $APPDATA/x.go'`, nil, 1},
+		{"", `Set-Item env:APPDATA q; sh -c 'echo > "${APPDATA}/x.go"'`, nil, 1},
+		{"", `Remove-Item env:*; bash -c 'echo > $APPDATA/x.go'`, nil, 1},
+		{"", `$env:HOME = 'q'; bash -c 'echo > ~/x.go'`, nil, 1},
+		{"", `$env:APPDATA = 'q'; bash -c 'APPDATA=w; echo > $APPDATA/x.go'`, []tg{{"w/x.go", Redirect}}, 0},
+		{"", `$env:APPDATA = 'q'; bash -c 'eval "echo > \$APPDATA/x.go"'`, nil, 1},
+		{"", `$env:APPDATA = 'q'; bash -c 'bash -c "echo > \$APPDATA/x.go"'`, nil, 1},
+		// cmd's own variables.
+		{"", `cmd /c "echo x > %APPDATA%\x.go"`, nil, 1},
+		{"", `cmd /v:on /c "echo x > !APPDATA!\x.go"`, nil, 1},
+		{"", `cmd /c "echo x! > y.go"`, []tg{{"y.go", Redirect}}, 0},
+		// foreach sets its variable.
+		{"", `foreach ($env:APPDATA in 'a', 'b') { }` + use, nil, 1},
+		{"", `$f = 'v.go'; foreach ($f in 'a', 'b') { Get-Item $f }; Set-Content $f x`, nil, 1},
+		{"", `$f = 'v.go'; foreach ($g in 'a') { }; Set-Content $f x`, []tg{{"v.go", Redirect}}, 0},
+		// Set-Variable and the rest forget the variables they name.
+		{"", `$f = 'v.go'; Set-Variable f w.go; Set-Content $f x`, nil, 1},
+		{"", `$f = 'v.go'; sv -Name f -Value w.go; Set-Content $f x`, nil, 1},
+		{"", `$f = 'v.go'; New-Variable -Name f -Value w.go -Force; Set-Content $f x`, nil, 1},
+		{"", `$f = 'v.go'; nv f w.go; Set-Content $f x`, nil, 1},
+		{"", `$f = 'v.go'; Clear-Variable f; Set-Content $f x`, nil, 1},
+		{"", `$f = 'v.go'; clv -Name f; Set-Content $f x`, nil, 1},
+		{"", `$f = 'v.go'; Remove-Variable -Name g, f; Set-Content $f x`, nil, 1},
+		{"", `$f = 'v.go'; rv f; Set-Content $f x`, nil, 1},
+		{"", `$f = 'v.go'; Set-Variable -Name global:f -Value w.go; Set-Content $f x`, nil, 1},
+		{"", `$f = 'v.go'; Remove-Variable *; Set-Content $f x`, nil, 1},
+		{"", `$f = 'v.go'; Remove-Variable $n; Set-Content $f x`, nil, 1},
+		{"", `$f = 'v.go'; Set-Variable HOME q; Set-Content $HOME\x.go x`, nil, 1},
+		{"", `$f = 'v.go'; Remove-Variable g; Set-Content $f x`, []tg{{"v.go", Redirect}}, 0},
+		// An argument that starts with a variable and a member is an
+		// expression; in a string, or after other text, it is not.
+		{"", `Set-Content $env:APPDATA.bak x`, nil, 1},
+		{"", `$f = 'v'; Set-Content $f.bak x`, nil, 1},
+		{"", `$f = 'v'; Set-Content ${f}.bak x`, nil, 1},
+		{"", `$f = 'v'; Set-Content $f[0] x`, nil, 1},
+		{"", `$f = 'v'; Set-Content $f.Substring(0) x`, nil, 1},
+		{"", `$f = 'v'; Set-Content "$f.bak" x`, []tg{{"v.bak", Redirect}}, 0},
+		{"", `$f = 'v'; Set-Content a$f.bak x`, []tg{{"av.bak", Redirect}}, 0},
+		{"", `$f = 'v'; Set-Content $f/a.go x`, []tg{{"v/a.go", Redirect}}, 0},
+		{"", `Set-Content "$env:APPDATA.bak" x`, []tg{{"appdata.bak", Redirect}}, 0},
+		{"", `$f = 'v'; [IO.File]::WriteAllText($f.go, 'x')`, nil, 1},
+		// cd to a drive that is no disk: a relative path is no file there.
+		{"", `cd env:; Set-Content APPDATA x` + use, nil, 1},
+		{"", `Set-Location Env:\; Rename-Item FOO APPDATA` + use, nil, 1},
+		{"", `$f = 'v.go'; Push-Location variable:; Set-Content f w.go; Pop-Location; Set-Content $f x; Set-Content a.go x`, []tg{{"a.go", Redirect}}, 1},
+		{"", `cd HKLM:\Software; Set-Content a.go x`, nil, 1},
+		{"", `cd function:; Set-Content a.go x`, nil, 1},
+		{"", `Push-Location Cert:\; Pop-Location; Set-Content a.go x`, []tg{{"a.go", Redirect}}, 0},
+	}
+	for _, tt := range tests {
+		for _, win := range []bool{false, true} {
+			if (tt.os == "windows" && !win) || (tt.os == "unix" && win) || (tt.os == "host" && win != (runtime.GOOS == "windows")) {
+				continue
+			}
+			t.Run(fmt.Sprintf("%s/windows=%v", tt.cmd, win), func(t *testing.T) {
+				windows = win
+				defer func() { windows = old }()
+				got, unknown := PowerShellTargets(tt.cmd, cwd)
+				var want []Target
+				for _, w := range tt.want {
+					want = append(want, Target{Path: filepath.Join(cwd, filepath.FromSlash(w.rel)), Kind: w.kind})
+				}
+				if len(got) != len(want) || unknown != tt.unknown {
+					t.Fatalf("got %v (unknown %d), want %v (unknown %d)", got, unknown, want, tt.unknown)
+				}
+				for i := range want {
+					if got[i] != want[i] {
+						t.Errorf("target %d = %v, want %v", i, got[i], want[i])
+					}
+				}
+			})
+		}
+	}
+}
+
+// bash's ~ is USERPROFILE on Windows when HOME is unset: unknown once the
+// command sets it (#181).
+func TestTargetsTildeUserProfile(t *testing.T) {
+	cwd := t.TempDir()
+	profile := filepath.Join(cwd, "profile")
+	env(t, map[string]string{"USERPROFILE": profile})
+	old := windows
+	t.Cleanup(func() { windows = old })
+	windows = true
+	if got, unknown := Targets("echo > ~/a.go", cwd); runtime.GOOS == "windows" && (len(got) != 1 || got[0].Path != filepath.Join(profile, "a.go") || unknown != 0) {
+		t.Errorf("~: %v, unknown %d", got, unknown) // elsewhere the profile's path is no Windows path
+	}
+	if got, unknown := Targets("USERPROFILE=/q; echo > ~/a.go", cwd); len(got) != 0 || unknown != 1 {
+		t.Errorf("USERPROFILE set: %v, unknown %d", got, unknown)
+	}
+	if got, unknown := PowerShellTargets(`$env:USERPROFILE = 'q'; bash -c 'echo > ~/a.go'`, cwd); len(got) != 0 || unknown != 1 {
+		t.Errorf("USERPROFILE set in PowerShell: %v, unknown %d", got, unknown)
+	}
+}
+
 func TestPowerShellTargetsAbsoluteAndHome(t *testing.T) {
 	cwd := t.TempDir()
 	abs := filepath.Join(t.TempDir(), "abs.go")
@@ -351,6 +497,8 @@ func FuzzPowerShellTargets(f *testing.F) {
 	f.Add("[IO.File]::WriteAllText('a.go', \"$x\")")
 	f.Add("git -C $d clone u; mkdir -Name x; ni -ItemType Directory a, b")
 	f.Add(`$env:A = 1; sc "${env:HOME}\$env:A$HOME$PWD" x; Remove-Item Env:\A, variable:x; cd ~; ni ${env:}`)
+	f.Add(`si -Path:env:A 1; Rename-Item env:B C; foreach ($env:A in 1) {}; sv -Name x, $y; bash -c 'echo > ~/$A'; cmd /v /c "echo > %A%!B!"`)
+	f.Add(`cd env:; sc A x; pushd HKLM:\x; popd; sc $x.a[0].b(1)::c x; sc $x.'y' x; [Environment]::SetEnvironmentVariable($n)`)
 	f.Fuzz(func(t *testing.T, cmd string) {
 		ts, _ := PowerShellTargets(cmd, "/w")
 		for _, x := range ts {

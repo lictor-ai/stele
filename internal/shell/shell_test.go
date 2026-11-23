@@ -367,6 +367,13 @@ func TestTargets(t *testing.T) {
 		{command: `bash -c "sh -c 'echo > a'"`, want: []Target{at("a", R)}},
 		{command: "bash -c 'echo > $HOME/a'", want: []Target{{Path: filepath.Join(home, "a"), Kind: R}}},
 		{command: "X=a.go; bash -c 'echo > $X'", unknown: 1},
+		// ~ is HOME: once the command sets it, unknown, not the old home (#181).
+		{command: "echo > ~/t.go", want: []Target{{Path: filepath.Join(home, "t.go"), Kind: R}}},
+		{command: "HOME=/q; echo > ~/t.go", unknown: 1},
+		{command: "export HOME=/q; echo > ~/t.go", unknown: 1},
+		{command: "HOME=$(pwd); echo > ~", unknown: 1},
+		{command: "HOME=/q; bash -c 'echo > ~/t.go'", unknown: 1},
+		{command: "USERPROFILE=/q; echo > ~/t.go", want: []Target{{Path: filepath.Join(home, "t.go"), Kind: R}}},
 		{command: `bash -c "$cmd"`, unknown: 1},
 		{command: `bash -c 'echo "x > a'`, unknown: 1},
 		{command: "bash -c 'echo > a; echo \"x > b'", want: []Target{at("a", R)}, unknown: 1},
@@ -1242,7 +1249,7 @@ func TestAbs(t *testing.T) {
 func FuzzTargets(f *testing.F) {
 	for _, s := range []string{
 		"cat > a.go <<'EOF'\nx > y\nEOF", "echo $(echo `a > b` > c) > d", "[[ a > b ]] && (( 1 > 2 ))",
-		"sed -i -e s/a/b/ f", "perl -0777 -pi -e x f", "cd a; (cd b && tee c) | tee d", "${", "$((", "<(", "'",
+		"HOME=/q; echo > ~/x; export HOME; bash -c 'echo > ~/y'", "sed -i -e s/a/b/ f", "perl -0777 -pi -e x f", "cd a; (cd b && tee c) | tee d", "${", "$((", "<(", "'",
 		"a=(", "a[", "a[b]+=(1) x", "f() (", "function f (", "time -p", "time -p --", "cp a/* b/",
 		"rm [!", "rm [!]", "rm [!]]x", "rm []", "rm []]*", "rm a/b/[!c]/d", "rm * */*",
 		"touch -d x -- a; mkdir -pm 7 b", "git -C a -C b clone --bare -b x u:/r.git", "git clone ://", "git worktree add",

@@ -21,6 +21,9 @@ type parser struct {
 	res  *results
 	vars map[string]string // NAME=literal assignments seen so far
 	dyn  map[string]bool   // variables assigned something unknown
+	// fold are the environment variables a PowerShell command around this
+	// script set, lower case: unknown here in any case. "\x00" stands for all.
+	fold map[string]bool
 
 	dir   string // the directory relative paths resolve against
 	dirOK bool   // false once a cd went somewhere unknown
@@ -684,6 +687,10 @@ func (p *parser) expand(b *strings.Builder, w *word, name string) {
 	}
 	v, ok := p.vars[name]
 	if !ok {
+		if p.folded(name) { // set by the PowerShell command around this script
+			w.dynamic = true
+			return
+		}
 		if p.res.grown > maxExpand { // spent: not even looked up
 			w.dynamic = true
 			return
@@ -742,7 +749,7 @@ func (p *parser) backtick(w *word) {
 		case c == '`':
 			p.i = j + 1
 			w.dynamic = true
-			q := &parser{src: inner.String(), res: p.res, vars: p.vars, dyn: p.dyn, dir: p.dir, dirOK: p.dirOK, depth: p.depth}
+			q := &parser{src: inner.String(), res: p.res, vars: p.vars, dyn: p.dyn, fold: p.fold, dir: p.dir, dirOK: p.dirOK, depth: p.depth}
 			q.list("")
 			if q.err {
 				p.err = true
@@ -878,18 +885,20 @@ func (p *parser) nestedShell(s word) {
 	for k := range p.dyn {
 		dyn[k] = true
 	}
-	if !readBash(p.res, s.text, p.dir, p.dirOK, p.depth, dyn) {
+	if !readBash(p.res, s.text, p.dir, p.dirOK, p.depth, dyn, p.fold) {
 		p.res.unknown++
 	}
 }
 
 // readBash reads script as bash, from dir, adding what it writes to res. It
-// reports whether it read the script whole, within the nesting budget.
-func readBash(res *results, script, dir string, dirOK bool, depth int, dyn map[string]bool) bool {
+// reports whether it read the script whole, within the nesting budget. dyn
+// are the variables unknown in it; fold, the environment variables a
+// PowerShell command set, in lower case, unknown in any case.
+func readBash(res *results, script, dir string, dirOK bool, depth int, dyn, fold map[string]bool) bool {
 	if !res.reread(len(script)) {
 		return false
 	}
-	q := &parser{src: script, res: res, vars: map[string]string{}, dyn: dyn, dir: dir, dirOK: dirOK, depth: depth}
+	q := &parser{src: script, res: res, vars: map[string]string{}, dyn: dyn, fold: fold, dir: dir, dirOK: dirOK, depth: depth}
 	q.list("")
 	return !q.err
 }
@@ -929,7 +938,7 @@ func (p *parser) eval(args []word, inPipe bool) {
 		}
 		b.WriteString(a.text)
 	}
-	q := &parser{src: b.String(), res: p.res, vars: p.vars, dyn: p.dyn, dir: p.dir, dirOK: p.dirOK, depth: p.depth}
+	q := &parser{src: b.String(), res: p.res, vars: p.vars, dyn: p.dyn, fold: p.fold, dir: p.dir, dirOK: p.dirOK, depth: p.depth}
 	if !inPipe {
 		defer func() { p.dir, p.dirOK = q.dir, q.dirOK }()
 	} else {
@@ -1517,13 +1526,33 @@ func matchPattern(seg string) string {
 	return b.String()
 }
 
-// home is the home directory ~ stands for.
+// home is the home directory ~ stands for, or "" when the command set it:
+// HOME, or USERPROFILE on Windows where HOME is unset (#181).
 func (p *parser) home() string {
+	if p.setHere("HOME") {
+		return ""
+	}
 	h := p.res.env("HOME")
 	if h == "" && windows {
+		if p.setHere("USERPROFILE") {
+			return ""
+		}
 		h = p.res.env("USERPROFILE")
 	}
 	return h
+}
+
+// setHere reports whether the command, or a PowerShell command around it,
+// set the variable name.
+func (p *parser) setHere(name string) bool {
+	_, ok := p.vars[name]
+	return ok || p.dyn[name] || p.folded(name)
+}
+
+// folded reports whether a PowerShell command around this script set the
+// environment variable name.
+func (p *parser) folded(name string) bool {
+	return len(p.fold) > 0 && (p.fold["\x00"] || p.fold[strings.ToLower(name)])
 }
 
 func digits(s string) bool {
