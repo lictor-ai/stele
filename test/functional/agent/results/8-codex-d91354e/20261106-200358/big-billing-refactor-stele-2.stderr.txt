@@ -1,0 +1,3 @@
+2026-11-06T19:22:12.396464Z ERROR codex_core::tools::router: error=stele checked your write to internal/billing/billing.go: it breaks these project rules. The write was saved; fix these lines now, without changing code outside your task. Write files with apply_patch only, not through shell.
+
+internal/billing/billing.go:35:88: rule 4b86b37b-89d2-4eb4-a425-4bbab4a2a9c5 "Never call time.Now() under internal/. Take a clock.Clock (e…": read time from the injected clock.Clock

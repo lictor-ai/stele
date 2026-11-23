@@ -1,0 +1,122 @@
+diff --git a/internal/cmds/registry.go b/internal/cmds/registry.go
+index b04ca94..83b07b5 100644
+--- a/internal/cmds/registry.go
++++ b/internal/cmds/registry.go
+@@ -18,4 +18,5 @@ var All = []Command{
+ 	{"cache", "show cache statistics", Cache},
+ 	{"tenants", "list tenants", Tenants},
+ 	{"flags", "list feature flags", Flags},
++	{"version", "show the app and Go versions", Version},
+ }
+diff --git a/internal/cmds/version.go b/internal/cmds/version.go
+new file mode 100644
+index 0000000..b255f2d
+--- /dev/null
++++ b/internal/cmds/version.go
+@@ -0,0 +1,43 @@
++package cmds
++
++import (
++	"runtime"
++
++	"example.com/app/internal/log"
++)
++
++// appName is the name the version command reports.
++const appName = "app"
++
++// BuildVersion is the app version. It is set at build time:
++//
++//	go build -ldflags "-X example.com/app/internal/cmds.BuildVersion=1.2.3"
++//
++// It is a variable only because the linker can only set variables.
++var BuildVersion = "dev"
++
++// VersionInfo describes the running build.
++type VersionInfo struct {
++	App       string
++	Version   string
++	GoVersion string
++}
++
++// ReadVersion returns the build information of the running binary.
++func ReadVersion() VersionInfo {
++	return VersionInfo{
++		App:       appName,
++		Version:   BuildVersion,
++		GoVersion: runtime.Version(),
++	}
++}
++
++// Version reports the app name, the app version and the Go version.
++func Version(args []string) error {
++	info := ReadVersion()
++	log.Info("version", "app", info.App, "version", info.Version, "go", info.GoVersion)
++	if len(args) > 0 {
++		log.Warn("ignoring arguments", "count", len(args))
++	}
++	return nil
++}
+diff --git a/internal/cmds/version_test.go b/internal/cmds/version_test.go
+new file mode 100644
+index 0000000..0dab945
+--- /dev/null
++++ b/internal/cmds/version_test.go
+@@ -0,0 +1,57 @@
++package cmds
++
++import (
++	"runtime"
++	"testing"
++)
++
++func TestReadVersion(t *testing.T) {
++	tests := []struct {
++		name  string
++		build string
++		want  VersionInfo
++	}{
++		{"default", "dev", VersionInfo{"app", "dev", runtime.Version()}},
++		{"release", "1.2.3", VersionInfo{"app", "1.2.3", runtime.Version()}},
++		{"empty", "", VersionInfo{"app", "", runtime.Version()}},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			old := BuildVersion
++			t.Cleanup(func() { BuildVersion = old })
++			BuildVersion = tt.build
++			if got := ReadVersion(); got != tt.want {
++				t.Errorf("ReadVersion() = %+v, want %+v", got, tt.want)
++			}
++		})
++	}
++}
++
++func TestVersionCommand(t *testing.T) {
++	tests := []struct {
++		name string
++		args []string
++	}{
++		{"no args", nil},
++		{"extra args", []string{"a", "b"}},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if err := Version(tt.args); err != nil {
++				t.Errorf("Version(%q) = %v, want nil", tt.args, err)
++			}
++		})
++	}
++}
++
++func TestVersionRegistered(t *testing.T) {
++	for _, c := range All {
++		if c.Name == "version" {
++			if c.Run == nil || c.Usage == "" {
++				t.Errorf("version command incomplete: %+v", c)
++			}
++			return
++		}
++	}
++	t.Errorf("All has no %q command", "version")
++}

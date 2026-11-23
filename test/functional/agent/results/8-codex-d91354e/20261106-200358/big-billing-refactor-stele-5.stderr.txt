@@ -1,0 +1,7 @@
+2026-11-06T19:49:14.233856Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in C:\Users\Nacer\AppData\Local\Temp\stele-eval-big-billing-refactor-stele-5-957002023\repo\internal\billing\errors.go:
+var (
+	ErrInvalidDiscount = errors.New("invalid discount code")
+	ErrDiscountExpired = errors.New("discount code expired")
+	ErrDiscountUsed = errors.New("discount code already used by customer")
+	ErrInvalidTaxRate = errors.New("invalid tax rate")
+)

@@ -1,0 +1,7 @@
+diff --git a/migrations/002_add_users_email.sql b/migrations/002_add_users_email.sql
+new file mode 100644
+index 0000000..79fc1d8
+--- /dev/null
++++ b/migrations/002_add_users_email.sql
+@@ -0,0 +1 @@
++ALTER TABLE users ADD COLUMN email TEXT;

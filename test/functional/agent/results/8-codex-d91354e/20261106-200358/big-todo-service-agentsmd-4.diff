@@ -1,0 +1,608 @@
+diff --git a/cmd/server/main.go b/cmd/server/main.go
+new file mode 100644
+index 0000000..7823b02
+--- /dev/null
++++ b/cmd/server/main.go
+@@ -0,0 +1,60 @@
++package main
++
++import (
++	"context"
++	"errors"
++	"flag"
++	"fmt"
++	"io"
++	"net/http"
++	"os"
++	"os/signal"
++	"syscall"
++	"time"
++
++	"example.com/app/internal/api"
++	"example.com/app/internal/clock"
++	"example.com/app/internal/todo"
++)
++
++func run(args []string, stdout, stderr io.Writer) error {
++	flags := flag.NewFlagSet("server", flag.ContinueOnError)
++	flags.SetOutput(stderr)
++	addr := flags.String("addr", ":8080", "listen address")
++	if err := flags.Parse(args); err != nil {
++		return err
++	}
++	if flags.NArg() != 0 {
++		return fmt.Errorf("unexpected arguments: %v", flags.Args())
++	}
++	store := todo.NewStore(clock.Real{})
++	server := &http.Server{Addr: *addr, Handler: api.NewHandler(store), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
++	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
++	defer stop()
++	serveErr := make(chan error, 1)
++	go func() { serveErr <- server.ListenAndServe() }()
++	select {
++	case err := <-serveErr:
++		if !errors.Is(err, http.ErrServerClosed) {
++			return fmt.Errorf("serve HTTP: %w", err)
++		}
++		return nil
++	case <-ctx.Done():
++	}
++	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	if err := server.Shutdown(shutdownCtx); err != nil {
++		return fmt.Errorf("shutdown HTTP server: %w", err)
++	}
++	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
++		return fmt.Errorf("serve HTTP: %w", err)
++	}
++	return nil
++}
++
++func main() {
++	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
++		fmt.Fprintln(os.Stderr, err)
++		os.Exit(1)
++	}
++}
+diff --git a/internal/api/todos.go b/internal/api/todos.go
+new file mode 100644
+index 0000000..06abefd
+--- /dev/null
++++ b/internal/api/todos.go
+@@ -0,0 +1,171 @@
++// Package api holds the HTTP handlers.
++package api
++
++import (
++	"encoding/json"
++	"errors"
++	"io"
++	"net/http"
++	"strconv"
++	"strings"
++
++	"example.com/app/internal/todo"
++)
++
++// Handler serves the TODO HTTP API.
++type Handler struct{ store *todo.Store }
++
++// NewHandler creates a handler backed by store.
++func NewHandler(store *todo.Store) http.Handler {
++	h := &Handler{store: store}
++	mux := http.NewServeMux()
++	mux.HandleFunc("POST /todos", h.create)
++	mux.HandleFunc("GET /todos", h.list)
++	mux.HandleFunc("GET /todos/{id}", h.get)
++	mux.HandleFunc("PATCH /todos/{id}", h.update)
++	mux.HandleFunc("DELETE /todos/{id}", h.delete)
++	mux.HandleFunc("/todos", func(w http.ResponseWriter, r *http.Request) {
++		Error(w, http.StatusMethodNotAllowed, "method not allowed")
++	})
++	mux.HandleFunc("/todos/{id}", func(w http.ResponseWriter, r *http.Request) {
++		Error(w, http.StatusMethodNotAllowed, "method not allowed")
++	})
++	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { Error(w, http.StatusNotFound, "not found") })
++	return mux
++}
++
++func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
++	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
++	d := json.NewDecoder(r.Body)
++	d.DisallowUnknownFields()
++	if err := d.Decode(dst); err != nil {
++		Error(w, http.StatusBadRequest, "invalid JSON request")
++		return false
++	}
++	var extra any
++	if err := d.Decode(&extra); err != io.EOF {
++		Error(w, http.StatusBadRequest, "invalid JSON request")
++		return false
++	}
++	return true
++}
++
++func validTitle(title string) (string, bool) {
++	title = strings.TrimSpace(title)
++	n := len([]rune(title))
++	return title, n >= 1 && n <= 200
++}
++
++func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
++	var body struct {
++		Title string `json:"title"`
++	}
++	if !decode(w, r, &body) {
++		return
++	}
++	title, ok := validTitle(body.Title)
++	if !ok {
++		Error(w, http.StatusBadRequest, "title must contain 1 to 200 characters")
++		return
++	}
++	t, err := h.store.Create(r.Context(), title)
++	if err != nil {
++		Error(w, http.StatusInternalServerError, "could not create todo")
++		return
++	}
++	JSON(w, http.StatusCreated, t)
++}
++
++func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
++	q := r.URL.Query()
++	var done *bool
++	if values, ok := q["done"]; ok {
++		if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
++			Error(w, http.StatusBadRequest, "done must be true or false")
++			return
++		}
++		v := values[0] == "true"
++		done = &v
++	}
++	limit, offset := 20, 0
++	for key, target := range map[string]*int{"limit": &limit, "offset": &offset} {
++		values, ok := q[key]
++		if !ok {
++			continue
++		}
++		if len(values) != 1 {
++			Error(w, http.StatusBadRequest, "invalid pagination")
++			return
++		}
++		v, err := strconv.Atoi(values[0])
++		if err != nil || (key == "limit" && (v < 1 || v > 100)) || (key == "offset" && v < 0) {
++			Error(w, http.StatusBadRequest, "invalid pagination")
++			return
++		}
++		*target = v
++	}
++	items, err := h.store.List(r.Context(), done, limit, offset)
++	if err != nil {
++		Error(w, http.StatusInternalServerError, "could not list todos")
++		return
++	}
++	JSON(w, http.StatusOK, items)
++}
++
++func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
++	t, err := h.store.Get(r.Context(), r.PathValue("id"))
++	if errors.Is(err, todo.ErrNotFound) {
++		Error(w, http.StatusNotFound, "todo not found")
++		return
++	}
++	if err != nil {
++		Error(w, http.StatusInternalServerError, "could not get todo")
++		return
++	}
++	JSON(w, http.StatusOK, t)
++}
++
++func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
++	var body struct {
++		Title *string `json:"title"`
++		Done  *bool   `json:"done"`
++	}
++	if !decode(w, r, &body) {
++		return
++	}
++	if body.Title == nil && body.Done == nil {
++		Error(w, http.StatusBadRequest, "provide title and/or done")
++		return
++	}
++	if body.Title != nil {
++		title, ok := validTitle(*body.Title)
++		if !ok {
++			Error(w, http.StatusBadRequest, "title must contain 1 to 200 characters")
++			return
++		}
++		body.Title = &title
++	}
++	t, err := h.store.Update(r.Context(), r.PathValue("id"), todo.UpdateInput{Title: body.Title, Done: body.Done})
++	if errors.Is(err, todo.ErrNotFound) {
++		Error(w, http.StatusNotFound, "todo not found")
++		return
++	}
++	if err != nil {
++		Error(w, http.StatusInternalServerError, "could not update todo")
++		return
++	}
++	JSON(w, http.StatusOK, t)
++}
++
++func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
++	err := h.store.Delete(r.Context(), r.PathValue("id"))
++	if errors.Is(err, todo.ErrNotFound) {
++		Error(w, http.StatusNotFound, "todo not found")
++		return
++	}
++	if err != nil {
++		Error(w, http.StatusInternalServerError, "could not delete todo")
++		return
++	}
++	w.WriteHeader(http.StatusNoContent)
++}
+diff --git a/internal/api/todos_test.go b/internal/api/todos_test.go
+new file mode 100644
+index 0000000..62b896a
+--- /dev/null
++++ b/internal/api/todos_test.go
+@@ -0,0 +1,92 @@
++package api
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	"example.com/app/internal/clock"
++	"example.com/app/internal/todo"
++)
++
++func TestTodoRoutes(t *testing.T) {
++	cases := []struct {
++		name, method, path, body string
++		want                     int
++	}{
++		{name: "create", method: "POST", path: "/todos", body: `{"title":" buy milk "}`, want: http.StatusCreated},
++		{name: "create empty title", method: "POST", path: "/todos", body: `{"title":"  "}`, want: http.StatusBadRequest},
++		{name: "create too long", method: "POST", path: "/todos", body: `{"title":"` + strings.Repeat("x", 201) + `"}`, want: http.StatusBadRequest},
++		{name: "create malformed", method: "POST", path: "/todos", body: `{`, want: http.StatusBadRequest},
++		{name: "create unknown field", method: "POST", path: "/todos", body: `{"title":"x","extra":1}`, want: http.StatusBadRequest},
++		{name: "create trailing JSON", method: "POST", path: "/todos", body: `{"title":"x"} {}`, want: http.StatusBadRequest},
++		{name: "list", method: "GET", path: "/todos", want: http.StatusOK},
++		{name: "list done", method: "GET", path: "/todos?done=true&limit=1&offset=0", want: http.StatusOK},
++		{name: "bad done", method: "GET", path: "/todos?done=yes", want: http.StatusBadRequest},
++		{name: "bad limit", method: "GET", path: "/todos?limit=101", want: http.StatusBadRequest},
++		{name: "bad offset", method: "GET", path: "/todos?offset=-1", want: http.StatusBadRequest},
++		{name: "bad integer", method: "GET", path: "/todos?limit=no", want: http.StatusBadRequest},
++		{name: "get missing", method: "GET", path: "/todos/missing", want: http.StatusNotFound},
++		{name: "patch missing", method: "PATCH", path: "/todos/missing", body: `{"done":true}`, want: http.StatusNotFound},
++		{name: "delete missing", method: "DELETE", path: "/todos/missing", want: http.StatusNotFound},
++		{name: "method not allowed", method: "PUT", path: "/todos", want: http.StatusMethodNotAllowed},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			h := NewHandler(todo.NewStore(clock.Fixed{T: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}))
++			rr := httptest.NewRecorder()
++			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
++			h.ServeHTTP(rr, req)
++			if rr.Code != tc.want {
++				t.Fatalf("%s %s returned %d, want %d: %s", tc.method, tc.path, rr.Code, tc.want, rr.Body.String())
++			}
++			if tc.want == http.StatusBadRequest || tc.want == http.StatusNotFound || tc.want == http.StatusMethodNotAllowed {
++				var envelope map[string]string
++				if err := json.Unmarshal(rr.Body.Bytes(), &envelope); err != nil || envelope["error"] == "" {
++					t.Errorf("error response = %q, %v; want JSON error envelope", rr.Body.String(), err)
++				}
++			}
++		})
++	}
++}
++
++func TestTodoRouteLifecycle(t *testing.T) {
++	h := NewHandler(todo.NewStore(clock.Fixed{T: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}))
++	request := func(method, path, body string, want int) *httptest.ResponseRecorder {
++		t.Helper()
++		rr := httptest.NewRecorder()
++		h.ServeHTTP(rr, httptest.NewRequest(method, path, strings.NewReader(body)))
++		if rr.Code != want {
++			t.Fatalf("%s %s returned %d, want %d: %s", method, path, rr.Code, want, rr.Body.String())
++		}
++		return rr
++	}
++	created := request("POST", "/todos", `{"title":" first "}`, http.StatusCreated)
++	var item todo.Todo
++	if err := json.Unmarshal(created.Body.Bytes(), &item); err != nil {
++		t.Fatal(err)
++	}
++	if item.Title != "first" {
++		t.Fatalf("created title = %q, want first", item.Title)
++	}
++	got := request("GET", "/todos/"+item.ID, "", http.StatusOK)
++	if !strings.Contains(got.Body.String(), item.ID) {
++		t.Errorf("GET body = %q, want id", got.Body.String())
++	}
++	updated := request("PATCH", "/todos/"+item.ID, `{"done":true,"title":" second "}`, http.StatusOK)
++	if !strings.Contains(updated.Body.String(), `"done":true`) || !strings.Contains(updated.Body.String(), `"title":"second"`) {
++		t.Errorf("PATCH body = %q, want updated fields", updated.Body.String())
++	}
++	request("PATCH", "/todos/"+item.ID, `{}`, http.StatusBadRequest)
++	request("PATCH", "/todos/"+item.ID, `{"title":"  "}`, http.StatusBadRequest)
++	request("PATCH", "/todos/"+item.ID, `{"other":true}`, http.StatusBadRequest)
++	list := request("GET", "/todos?done=true", "", http.StatusOK)
++	if !strings.Contains(list.Body.String(), item.ID) {
++		t.Errorf("filtered list = %q, want todo", list.Body.String())
++	}
++	request("DELETE", "/todos/"+item.ID, "", http.StatusNoContent)
++	request("GET", "/todos/"+item.ID, "", http.StatusNotFound)
++}
+diff --git a/internal/todo/errors.go b/internal/todo/errors.go
+new file mode 100644
+index 0000000..5adef17
+--- /dev/null
++++ b/internal/todo/errors.go
+@@ -0,0 +1,8 @@
++package todo
++
++import "errors"
++
++var (
++	// ErrNotFound means the requested TODO does not exist.
++	ErrNotFound = errors.New("todo not found")
++)
+diff --git a/internal/todo/todo.go b/internal/todo/todo.go
+new file mode 100644
+index 0000000..ec24c8d
+--- /dev/null
++++ b/internal/todo/todo.go
+@@ -0,0 +1,131 @@
++// Package todo provides concurrent in-memory TODO storage.
++package todo
++
++import (
++	"context"
++	"sort"
++	"sync"
++	"time"
++
++	"example.com/app/internal/clock"
++	"example.com/app/internal/id"
++)
++
++// Todo is a task with timestamps managed by Store.
++type Todo struct {
++	ID        string    `json:"id"`
++	Title     string    `json:"title"`
++	Done      bool      `json:"done"`
++	CreatedAt time.Time `json:"created_at"`
++	UpdatedAt time.Time `json:"updated_at"`
++}
++
++// Store holds TODO records safely across concurrent callers.
++type Store struct {
++	mu    sync.RWMutex // guards items
++	items map[string]Todo
++	clock clock.Clock
++}
++
++// NewStore creates an empty store using the supplied clock.
++func NewStore(c clock.Clock) *Store {
++	return &Store{items: make(map[string]Todo), clock: c}
++}
++
++// UpdateInput contains optional fields to update. Nil means unchanged.
++type UpdateInput struct {
++	Title *string
++	Done  *bool
++}
++
++// Create stores a new TODO with its title and returns it.
++func (s *Store) Create(ctx context.Context, title string) (Todo, error) {
++	if err := ctx.Err(); err != nil {
++		return Todo{}, err
++	}
++	now := s.clock.Now()
++	t := Todo{ID: id.New(), Title: title, CreatedAt: now, UpdatedAt: now}
++	s.mu.Lock()
++	s.items[t.ID] = t
++	s.mu.Unlock()
++	return t, nil
++}
++
++// Get returns the TODO with id.
++func (s *Store) Get(ctx context.Context, id string) (Todo, error) {
++	if err := ctx.Err(); err != nil {
++		return Todo{}, err
++	}
++	s.mu.RLock()
++	t, ok := s.items[id]
++	s.mu.RUnlock()
++	if !ok {
++		return Todo{}, ErrNotFound
++	}
++	return t, nil
++}
++
++// Update changes the supplied fields of a TODO.
++func (s *Store) Update(ctx context.Context, id string, input UpdateInput) (Todo, error) {
++	if err := ctx.Err(); err != nil {
++		return Todo{}, err
++	}
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	t, ok := s.items[id]
++	if !ok {
++		return Todo{}, ErrNotFound
++	}
++	if input.Title != nil {
++		t.Title = *input.Title
++	}
++	if input.Done != nil {
++		t.Done = *input.Done
++	}
++	t.UpdatedAt = s.clock.Now()
++	s.items[id] = t
++	return t, nil
++}
++
++// Delete removes a TODO.
++func (s *Store) Delete(ctx context.Context, id string) error {
++	if err := ctx.Err(); err != nil {
++		return err
++	}
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if _, ok := s.items[id]; !ok {
++		return ErrNotFound
++	}
++	delete(s.items, id)
++	return nil
++}
++
++// List returns TODOs newest first, with an optional done filter and pagination.
++func (s *Store) List(ctx context.Context, done *bool, limit, offset int) ([]Todo, error) {
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
++	s.mu.RLock()
++	items := make([]Todo, 0, len(s.items))
++	for _, t := range s.items {
++		if done == nil || t.Done == *done {
++			items = append(items, t)
++		}
++	}
++	s.mu.RUnlock()
++	sort.Slice(items, func(i, j int) bool {
++		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
++			return items[i].ID > items[j].ID
++		}
++		return items[i].CreatedAt.After(items[j].CreatedAt)
++	})
++	if offset >= len(items) {
++		return []Todo{}, nil
++	}
++	items = items[offset:]
++	if limit < len(items) {
++		items = items[:limit]
++	}
++	return items, nil
++}
+diff --git a/internal/todo/todo_test.go b/internal/todo/todo_test.go
+new file mode 100644
+index 0000000..0dda7a9
+--- /dev/null
++++ b/internal/todo/todo_test.go
+@@ -0,0 +1,110 @@
++package todo
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"sync"
++	"testing"
++	"time"
++
++	"example.com/app/internal/clock"
++)
++
++func TestStoreOperations(t *testing.T) {
++	cases := []struct {
++		name string
++		run  func(*testing.T)
++	}{
++		{name: "create get update delete and missing", run: func(t *testing.T) {
++			s := NewStore(clock.Fixed{T: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)})
++			created, err := s.Create(context.Background(), "Task")
++			if err != nil {
++				t.Fatalf("Create() error = %v", err)
++			}
++			got, err := s.Get(context.Background(), created.ID)
++			if err != nil || got.Title != "Task" {
++				t.Fatalf("Get() = %+v, %v; want Task", got, err)
++			}
++			title, done := "Renamed", true
++			got, err = s.Update(context.Background(), created.ID, UpdateInput{Title: &title, Done: &done})
++			if err != nil || got.Title != title || !got.Done {
++				t.Fatalf("Update() = %+v, %v", got, err)
++			}
++			if err := s.Delete(context.Background(), created.ID); err != nil {
++				t.Fatalf("Delete() error = %v", err)
++			}
++			if _, err := s.Get(context.Background(), created.ID); !errors.Is(err, ErrNotFound) {
++				t.Errorf("Get(missing) error = %v, want ErrNotFound", err)
++			}
++			if err := s.Delete(context.Background(), created.ID); !errors.Is(err, ErrNotFound) {
++				t.Errorf("Delete(missing) error = %v, want ErrNotFound", err)
++			}
++		}},
++		{name: "list filter and pagination", run: func(t *testing.T) {
++			s := NewStore(clock.Fixed{T: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)})
++			for i := 0; i < 4; i++ {
++				if _, err := s.Create(context.Background(), fmt.Sprint(i)); err != nil {
++					t.Fatal(err)
++				}
++			}
++			done := true
++			if _, err := s.Update(context.Background(), "", UpdateInput{}); !errors.Is(err, ErrNotFound) {
++				t.Fatal(err)
++			}
++			all, err := s.List(context.Background(), nil, 2, 1)
++			if err != nil || len(all) != 2 {
++				t.Fatalf("List() = %d, %v; want 2", len(all), err)
++			}
++			if all[0].ID <= all[1].ID {
++				t.Errorf("List() IDs = %q, %q; want newest first", all[0].ID, all[1].ID)
++			}
++			items, err := s.List(context.Background(), &done, 20, 0)
++			if err != nil || len(items) != 0 {
++				t.Errorf("List(done) = %d, %v; want empty", len(items), err)
++			}
++			items, err = s.List(context.Background(), nil, 20, 100)
++			if err != nil || len(items) != 0 {
++				t.Errorf("List(offset) = %d, %v; want empty", len(items), err)
++			}
++		}},
++		{name: "cancelled context", run: func(t *testing.T) {
++			s := NewStore(clock.Real{})
++			ctx, cancel := context.WithCancel(context.Background())
++			cancel()
++			if _, err := s.List(ctx, nil, 10, 0); !errors.Is(err, context.Canceled) {
++				t.Errorf("List(cancelled) error = %v, want context.Canceled", err)
++			}
++		}},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, tc.run)
++	}
++}
++
++func TestStoreConcurrentUse(t *testing.T) {
++	s := NewStore(clock.Real{})
++	const workers = 24
++	var wg sync.WaitGroup
++	for i := 0; i < workers; i++ {
++		wg.Add(1)
++		go func(i int) {
++			defer wg.Done()
++			ctx := context.Background()
++			item, err := s.Create(ctx, fmt.Sprintf("task-%d", i))
++			if err != nil {
++				return
++			}
++			_, _ = s.Get(ctx, item.ID)
++			done := true
++			_, _ = s.Update(ctx, item.ID, UpdateInput{Done: &done})
++			_, _ = s.List(ctx, nil, 100, 0)
++			_ = s.Delete(ctx, item.ID)
++		}(i)
++	}
++	wg.Wait()
++	items, err := s.List(context.Background(), nil, 100, 0)
++	if err != nil || len(items) != 0 {
++		t.Errorf("List() after concurrent operations = %d, %v; want empty", len(items), err)
++	}
++}

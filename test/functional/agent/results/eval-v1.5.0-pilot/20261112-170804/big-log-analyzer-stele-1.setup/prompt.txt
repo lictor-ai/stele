@@ -1,0 +1,18 @@
+Build a command-line log analyzer in this Go module (standard library only).
+
+cmd/loga reads nginx access logs in the "combined" format with the request time appended as the last field, for example:
+
+203.0.113.9 - - [10/Oct/2026:13:55:36 +0000] "GET /api/items?id=3 HTTP/1.1" 200 512 "-" "curl/8.0" 0.042
+
+It reads the files named as arguments, or stdin if none, and prints a report:
+- total requests, and the number of malformed lines (counted and skipped, never fatal);
+- the top N paths by request count (-top, default 10), with the query string removed;
+- requests per status class (2xx, 3xx, 4xx, 5xx);
+- p50, p95 and p99 request time in milliseconds;
+- the 5xx error count per hour.
+With -json it prints the same report as JSON instead of a text table.
+Exit code 0 on success, 1 if a file cannot be read, 2 on bad flags.
+
+Put the parsing in internal/logparse and the statistics in internal/stats, with thorough tests for both (malformed lines, empty input, a single request, percentile edge cases) and a test of the command itself.
+
+When you are done, go vet ./... and go test ./... must pass.

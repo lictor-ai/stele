@@ -1,0 +1,82 @@
+diff --git a/internal/cmds/registry.go b/internal/cmds/registry.go
+index b04ca94..f87752d 100644
+--- a/internal/cmds/registry.go
++++ b/internal/cmds/registry.go
+@@ -18,4 +18,5 @@ var All = []Command{
+ 	{"cache", "show cache statistics", Cache},
+ 	{"tenants", "list tenants", Tenants},
+ 	{"flags", "list feature flags", Flags},
++	{"version", "show the app and Go version", Version},
+ }
+diff --git a/internal/cmds/version.go b/internal/cmds/version.go
+new file mode 100644
+index 0000000..49b336f
+--- /dev/null
++++ b/internal/cmds/version.go
+@@ -0,0 +1,27 @@
++package cmds
++
++import (
++	"runtime"
++
++	"example.com/app/internal/log"
++)
++
++// AppName is the name the version command reports.
++const AppName = "app"
++
++// version is set at build time:
++//
++//	go build -ldflags "-X example.com/app/internal/cmds.version=1.2.3"
++//
++// It is a variable only because the linker can only set variables.
++var version = "dev"
++
++// Version reports the app name, build version and Go version. It logs through
++// the project logger, as code under internal/ never prints.
++func Version(args []string) error {
++	log.Info("version", "app", AppName, "version", version, "go", runtime.Version())
++	if len(args) > 0 {
++		log.Warn("ignoring arguments", "count", len(args))
++	}
++	return nil
++}
+diff --git a/internal/cmds/version_test.go b/internal/cmds/version_test.go
+new file mode 100644
+index 0000000..193af38
+--- /dev/null
++++ b/internal/cmds/version_test.go
+@@ -0,0 +1,33 @@
++package cmds
++
++import (
++	"runtime"
++	"testing"
++)
++
++func TestVersion(t *testing.T) {
++	tests := []struct {
++		name string
++		args []string
++	}{
++		{"no args", nil},
++		{"empty args", []string{}},
++		{"extra args", []string{"a", "b"}},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if err := Version(tt.args); err != nil {
++				t.Errorf("Version(%q) = %v, want nil", tt.args, err)
++			}
++		})
++	}
++}
++
++func TestVersionDefault(t *testing.T) {
++	if version != "dev" {
++		t.Errorf("version = %q, want %q", version, "dev")
++	}
++	if runtime.Version() == "" {
++		t.Error("runtime.Version() is empty")
++	}
++}

@@ -1,0 +1,428 @@
+diff --git a/cmd/healthcheck/main.go b/cmd/healthcheck/main.go
+new file mode 100644
+index 0000000..2e40daf
+--- /dev/null
++++ b/cmd/healthcheck/main.go
+@@ -0,0 +1,63 @@
++// Command healthcheck sends a GET to each URL given as an argument and reports
++// which ones are healthy. It exits 1 if any URL is not healthy.
++package main
++
++import (
++	"context"
++	"errors"
++	"flag"
++	"fmt"
++	"io"
++	"os"
++	"os/signal"
++
++	"example.com/app/internal/clock"
++	"example.com/app/internal/health"
++)
++
++func main() {
++	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
++		if !errors.Is(err, health.ErrUnhealthy) {
++			fmt.Fprintln(os.Stderr, "healthcheck:", err)
++		}
++		os.Exit(1)
++	}
++}
++
++func run(args []string, stdout, stderr io.Writer) error {
++	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
++	fs.SetOutput(stderr)
++	fs.Usage = func() {
++		fmt.Fprintln(stderr, "usage: healthcheck [-no-color] URL [URL...]")
++	}
++	noColor := fs.Bool("no-color", false, "disable colored output")
++	if err := fs.Parse(args); err != nil {
++		return fmt.Errorf("parse flags: %w", err)
++	}
++	if fs.NArg() == 0 {
++		fs.Usage()
++		return errors.New("no URLs given")
++	}
++
++	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
++	defer stop()
++
++	results := health.NewChecker(clock.Real{}).Check(ctx, fs.Args())
++	if err := health.Report(stdout, results, !*noColor && useColor(stdout)); err != nil {
++		return err
++	}
++	if health.CountHealthy(results) != len(results) {
++		return health.ErrUnhealthy
++	}
++	return nil
++}
++
++// useColor reports whether w is a terminal and NO_COLOR is unset.
++func useColor(w io.Writer) bool {
++	f, ok := w.(*os.File)
++	if !ok || os.Getenv("NO_COLOR") != "" {
++		return false
++	}
++	info, err := f.Stat()
++	return err == nil && info.Mode()&os.ModeCharDevice != 0
++}
+diff --git a/cmd/healthcheck/main_test.go b/cmd/healthcheck/main_test.go
+new file mode 100644
+index 0000000..6a34f65
+--- /dev/null
++++ b/cmd/healthcheck/main_test.go
+@@ -0,0 +1,46 @@
++package main
++
++import (
++	"bytes"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"example.com/app/internal/health"
++)
++
++func TestRun(t *testing.T) {
++	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
++	defer ok.Close()
++	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.WriteHeader(http.StatusServiceUnavailable)
++	}))
++	defer bad.Close()
++
++	tests := []struct {
++		name        string
++		args        []string
++		wantErr     bool
++		wantUnhappy bool
++		wantOut     string
++	}{
++		{name: "all healthy", args: []string{ok.URL}, wantOut: "1 of 1 healthy"},
++		{name: "one failing", args: []string{ok.URL, bad.URL}, wantErr: true, wantUnhappy: true, wantOut: "1 of 2 healthy"},
++		{name: "no urls", args: nil, wantErr: true},
++		{name: "unknown flag", args: []string{"-nope"}, wantErr: true},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			var out, errOut bytes.Buffer
++			err := run(tt.args, &out, &errOut)
++			if (err != nil) != tt.wantErr || errors.Is(err, health.ErrUnhealthy) != tt.wantUnhappy {
++				t.Errorf("run(%q) error = %v, want error %v (unhealthy %v)", tt.args, err, tt.wantErr, tt.wantUnhappy)
++			}
++			if !strings.Contains(out.String(), tt.wantOut) {
++				t.Errorf("run(%q) output = %q, want it to contain %q", tt.args, out.String(), tt.wantOut)
++			}
++		})
++	}
++}
+diff --git a/internal/health/errors.go b/internal/health/errors.go
+new file mode 100644
+index 0000000..752e044
+--- /dev/null
++++ b/internal/health/errors.go
+@@ -0,0 +1,6 @@
++package health
++
++import "errors"
++
++// ErrUnhealthy is returned when at least one checked URL is not healthy.
++var ErrUnhealthy = errors.New("one or more URLs are unhealthy")
+diff --git a/internal/health/health.go b/internal/health/health.go
+new file mode 100644
+index 0000000..2b945ce
+--- /dev/null
++++ b/internal/health/health.go
+@@ -0,0 +1,147 @@
++// Package health checks whether HTTP endpoints respond with a 2xx status.
++package health
++
++import (
++	"context"
++	"fmt"
++	"io"
++	"net/http"
++	"strings"
++	"sync"
++	"time"
++
++	"example.com/app/internal/clock"
++)
++
++// Timeout is the longest a single request may take.
++const Timeout = 5 * time.Second
++
++// Result is the outcome of checking one URL.
++type Result struct {
++	URL     string
++	Status  int           // HTTP status code, 0 if no response arrived
++	Latency time.Duration // time until the response headers arrived or the request failed
++	Err     error         // transport or request error, nil if a response arrived
++}
++
++// Healthy reports whether the URL answered with a 2xx status.
++func (r Result) Healthy() bool {
++	return r.Err == nil && r.Status >= 200 && r.Status < 300
++}
++
++// Checker sends GET requests to URLs and times them.
++type Checker struct {
++	client *http.Client
++	clock  clock.Clock
++}
++
++// NewChecker returns a Checker that uses c to time requests. Every request is
++// bounded by Timeout.
++func NewChecker(c clock.Clock) *Checker {
++	return &Checker{client: &http.Client{Timeout: Timeout}, clock: c}
++}
++
++// Check sends a GET to every URL in parallel and returns the results in the
++// same order as urls. It returns once every request has finished or ctx is
++// cancelled.
++func (c *Checker) Check(ctx context.Context, urls []string) []Result {
++	results := make([]Result, len(urls))
++	var wg sync.WaitGroup
++	for i, u := range urls {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			results[i] = c.checkOne(ctx, u)
++		}()
++	}
++	wg.Wait()
++	return results
++}
++
++func (c *Checker) checkOne(ctx context.Context, url string) Result {
++	res := Result{URL: url}
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
++	if err != nil {
++		res.Err = fmt.Errorf("build request for %s: %w", url, err)
++		return res
++	}
++	start := c.clock.Now()
++	resp, err := c.client.Do(req)
++	res.Latency = c.clock.Now().Sub(start)
++	if err != nil {
++		res.Err = fmt.Errorf("get %s: %w", url, err)
++		return res
++	}
++	defer resp.Body.Close()
++	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
++	res.Status = resp.StatusCode
++	return res
++}
++
++// CountHealthy returns how many results are healthy.
++func CountHealthy(results []Result) int {
++	n := 0
++	for _, r := range results {
++		if r.Healthy() {
++			n++
++		}
++	}
++	return n
++}
++
++// Report writes one line per result and a summary line to w. With color set,
++// the marks are colored with ANSI escapes.
++func Report(w io.Writer, results []Result, color bool) error {
++	width := 0
++	for _, r := range results {
++		width = max(width, len(r.URL))
++	}
++	for _, r := range results {
++		mark, code := "[ OK ]", green
++		if !r.Healthy() {
++			mark, code = "[FAIL]", red
++		}
++		detail := fmt.Sprintf("%d", r.Status)
++		if r.Err != nil {
++			detail = "error"
++		}
++		line := fmt.Sprintf("%s  %-*s  %5s  %6dms", paint(mark, code, color), width, r.URL, detail, r.Latency.Milliseconds())
++		if r.Err != nil {
++			line += "  " + shortErr(r.Err)
++		}
++		if _, err := fmt.Fprintln(w, line); err != nil {
++			return fmt.Errorf("write report: %w", err)
++		}
++	}
++	healthy := CountHealthy(results)
++	code := green
++	if healthy != len(results) {
++		code = red
++	}
++	summary := paint(fmt.Sprintf("%d of %d healthy", healthy, len(results)), code, color)
++	if _, err := fmt.Fprintf(w, "\n%s\n", summary); err != nil {
++		return fmt.Errorf("write report: %w", err)
++	}
++	return nil
++}
++
++const (
++	green = "32"
++	red   = "31"
++)
++
++func paint(s, code string, color bool) string {
++	if !color {
++		return s
++	}
++	return "\x1b[1;" + code + "m" + s + "\x1b[0m"
++}
++
++// shortErr keeps the last clause of a wrapped error, which is the useful part.
++func shortErr(err error) string {
++	s := err.Error()
++	if i := strings.LastIndex(s, ": "); i >= 0 {
++		return s[i+2:]
++	}
++	return s
++}
+diff --git a/internal/health/health_test.go b/internal/health/health_test.go
+new file mode 100644
+index 0000000..9fd0edd
+--- /dev/null
++++ b/internal/health/health_test.go
+@@ -0,0 +1,136 @@
++package health
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	"example.com/app/internal/clock"
++)
++
++func TestCheck(t *testing.T) {
++	mux := http.NewServeMux()
++	mux.HandleFunc("GET /ok", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
++	mux.HandleFunc("GET /created", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusCreated) })
++	mux.HandleFunc("GET /missing", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotFound) })
++	mux.HandleFunc("GET /boom", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
++	srv := httptest.NewServer(mux)
++	defer srv.Close()
++
++	tests := []struct {
++		name        string
++		path        string
++		url         string
++		wantStatus  int
++		wantHealthy bool
++		wantErr     bool
++	}{
++		{name: "200", path: "/ok", wantStatus: 200, wantHealthy: true},
++		{name: "201", path: "/created", wantStatus: 201, wantHealthy: true},
++		{name: "404", path: "/missing", wantStatus: 404},
++		{name: "500", path: "/boom", wantStatus: 500},
++		{name: "empty url", url: "", wantErr: true},
++		{name: "bad scheme", url: "notaurl://x", wantErr: true},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			url := tt.url
++			if tt.path != "" {
++				url = srv.URL + tt.path
++			}
++			c := NewChecker(clock.Fixed{T: time.Unix(0, 0)})
++			got := c.Check(context.Background(), []string{url})[0]
++			if got.Status != tt.wantStatus || got.Healthy() != tt.wantHealthy || (got.Err != nil) != tt.wantErr {
++				t.Errorf("Check(%q) = status %d healthy %v err %v, want status %d healthy %v err %v",
++					url, got.Status, got.Healthy(), got.Err, tt.wantStatus, tt.wantHealthy, tt.wantErr)
++			}
++		})
++	}
++}
++
++func TestCheckKeepsOrderAndRunsInParallel(t *testing.T) {
++	release := make(chan struct{})
++	arrived := make(chan struct{}, 2)
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		arrived <- struct{}{}
++		<-release
++		if r.URL.Path == "/bad" {
++			w.WriteHeader(http.StatusBadGateway)
++		}
++	}))
++	defer srv.Close()
++
++	done := make(chan []Result)
++	go func() {
++		done <- NewChecker(clock.Real{}).Check(context.Background(), []string{srv.URL + "/good", srv.URL + "/bad"})
++	}()
++	// Both requests must be in flight before either is released.
++	<-arrived
++	<-arrived
++	close(release)
++	got := <-done
++
++	if len(got) != 2 || !got[0].Healthy() || got[1].Healthy() || got[1].Status != 502 {
++		t.Errorf("Check(good, bad) = %+v, want [healthy, 502] in order", got)
++	}
++}
++
++func TestCheckNoURLs(t *testing.T) {
++	got := NewChecker(clock.Real{}).Check(context.Background(), nil)
++	if len(got) != 0 {
++		t.Errorf("Check(nil) returned %d results, want 0", len(got))
++	}
++}
++
++func TestReport(t *testing.T) {
++	results := []Result{
++		{URL: "http://a", Status: 200, Latency: 12 * time.Millisecond},
++		{URL: "http://bb", Status: 503, Latency: 40 * time.Millisecond},
++		{URL: "http://c", Err: errors.New("get http://c: connection refused")},
++	}
++	tests := []struct {
++		name    string
++		results []Result
++		color   bool
++		want    []string
++		notWant []string
++	}{
++		{
++			name:    "mixed plain",
++			results: results,
++			want:    []string{"[ OK ]  http://a ", "200", "12ms", "[FAIL]  http://bb", "503", "connection refused", "1 of 3 healthy"},
++			notWant: []string{"\x1b["},
++		},
++		{
++			name:    "color",
++			results: results[:1],
++			color:   true,
++			want:    []string{"\x1b[1;32m[ OK ]\x1b[0m", "1 of 1 healthy"},
++		},
++		{name: "empty", results: nil, want: []string{"0 of 0 healthy"}},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			var buf bytes.Buffer
++			if err := Report(&buf, tt.results, tt.color); err != nil {
++				t.Fatalf("Report() error = %v", err)
++			}
++			out := buf.String()
++			for _, w := range tt.want {
++				if !strings.Contains(out, w) {
++					t.Errorf("Report() output %q missing %q", out, w)
++				}
++			}
++			for _, w := range tt.notWant {
++				if strings.Contains(out, w) {
++					t.Errorf("Report() output %q should not contain %q", out, w)
++				}
++			}
++		})
++	}
++}

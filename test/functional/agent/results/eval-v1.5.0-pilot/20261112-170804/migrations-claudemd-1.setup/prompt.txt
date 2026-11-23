@@ -1,0 +1,1 @@
+Add a nullable email column (TEXT) to the users table.

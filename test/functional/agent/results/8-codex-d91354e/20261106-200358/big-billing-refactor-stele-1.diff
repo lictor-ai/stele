@@ -1,0 +1,330 @@
+diff --git a/internal/billing/billing.go b/internal/billing/billing.go
+index 2367cf6..7975ea2 100644
+--- a/internal/billing/billing.go
++++ b/internal/billing/billing.go
+@@ -3,7 +3,10 @@ package billing
+ 
+ import (
+ 	"fmt"
++	"sync"
+ 	"time"
++
++	"example.com/app/internal/clock"
+ )
+ 
+ // Line is one line of an invoice.
+@@ -15,24 +18,145 @@ type Line struct {
+ 
+ // Invoice is a computed invoice.
+ type Invoice struct {
+-	ID         string    `json:"id"`
+-	Customer   string    `json:"customer"`
+-	Lines      []Line    `json:"lines"`
+-	TotalCents int64     `json:"total_cents"`
+-	IssuedAt   time.Time `json:"issued_at"`
++	ID               string    `json:"id"`
++	Customer         string    `json:"customer"`
++	Region           string    `json:"region"`
++	Lines            []Line    `json:"lines"`
++	TotalCents       int64     `json:"total_cents"`
++	DiscountCents    int64     `json:"discount_cents"`
++	TaxCents         int64     `json:"tax_cents"`
++	GrandTotalCents int64     `json:"grand_total_cents"`
++	IssuedAt         time.Time `json:"issued_at"`
+ }
+ 
+ // Compute builds an invoice for a customer.
+ func Compute(id, customer string, lines []Line) Invoice {
+-	if customer == "" {
+-		panic("billing: no customer")
+-	}
+ 	var total int64
+ 	for _, l := range lines {
+ 		total += int64(l.Quantity) * l.UnitCents
+ 	}
+-	fmt.Printf("computed invoice %s for %s: %d\n", id, customer, total)
+-	return Invoice{ID: id, Customer: customer, Lines: lines, TotalCents: total, IssuedAt: time.Now()}
++	return Invoice{ID: id, Customer: customer, Lines: lines, TotalCents: total, GrandTotalCents: total, IssuedAt: clock.Real{}.Now()}
++}
++
++// DiscountKind identifies how a discount code reduces an invoice.
++type DiscountKind string
++
++const (
++	// DiscountPercentage applies a rate in basis points.
++	DiscountPercentage DiscountKind = "percentage"
++	// DiscountFixed applies a fixed amount in cents.
++	DiscountFixed DiscountKind = "fixed"
++)
++
++// DiscountCode describes a percentage or fixed amount discount.
++type DiscountCode struct {
++	Code       string       `json:"code"`
++	Kind       DiscountKind `json:"kind"`
++	Value      int64        `json:"value"`
++	ExpiresAt  *time.Time   `json:"expires_at,omitempty"`
++}
++
++// Calculator computes invoices with caller-provided tax rates and clock.
++type Calculator struct {
++	mu       sync.RWMutex
++	rates    map[string]int64
++	clock    clock.Clock
++	usedCode map[string]map[string]struct{}
++}
++
++// NewCalculator creates a calculator. Tax rates are basis points by region.
++func NewCalculator(taxRates map[string]int64, c clock.Clock) *Calculator {
++	rates := make(map[string]int64, len(taxRates))
++	for region, rate := range taxRates {
++		rates[region] = rate
++	}
++	if c == nil {
++		c = clock.Real{}
++	}
++	return &Calculator{rates: rates, clock: c, usedCode: make(map[string]map[string]struct{})}
++}
++
++// ComputeInvoice computes totals, applies an optional discount, and records its use.
++func (c *Calculator) ComputeInvoice(id, customer, region string, lines []Line, discount *DiscountCode) (Invoice, error) {
++	if customer == "" {
++		return Invoice{}, fmt.Errorf("customer is required")
++	}
++	rate, ok := c.rates[region]
++	if !ok {
++		return Invoice{}, fmt.Errorf("unknown tax region %q", region)
++	}
++	if rate < 0 || rate > 10000 {
++		return Invoice{}, fmt.Errorf("tax rate for region %q must be between 0 and 10000 basis points", region)
++	}
++	var total int64
++	for _, line := range lines {
++		if line.Quantity < 0 || line.UnitCents < 0 {
++			return Invoice{}, fmt.Errorf("invoice line %q has a negative quantity or price", line.SKU)
++		}
++		amount := int64(line.Quantity) * line.UnitCents
++		if line.Quantity != 0 && amount/int64(line.Quantity) != line.UnitCents || total > int64(^uint64(0)>>1)-amount {
++			return Invoice{}, fmt.Errorf("invoice total overflows cents")
++		}
++		total += amount
++	}
++	issuedAt := c.clock.Now()
++	inv := Invoice{ID: id, Customer: customer, Region: region, Lines: lines, TotalCents: total, IssuedAt: issuedAt}
++	if discount != nil {
++		if discount.Code == "" {
++			return Invoice{}, fmt.Errorf("discount code is required")
++		}
++		if discount.ExpiresAt != nil && !issuedAt.Before(*discount.ExpiresAt) {
++			return Invoice{}, fmt.Errorf("discount code %q has expired", discount.Code)
++		}
++		c.mu.Lock()
++		defer c.mu.Unlock()
++		if customers := c.usedCode[discount.Code]; customers != nil {
++			if _, exists := customers[customer]; exists {
++				return Invoice{}, fmt.Errorf("discount code %q was already used by customer %q", discount.Code, customer)
++			}
++		}
++		discountCents, err := discountAmount(total, *discount)
++		if err != nil {
++			return Invoice{}, err
++		}
++		inv.DiscountCents = discountCents
++		customers := c.usedCode[discount.Code]
++		if customers == nil {
++			customers = make(map[string]struct{})
++			c.usedCode[discount.Code] = customers
++		}
++		customers[customer] = struct{}{}
++	}
++	taxable := total - inv.DiscountCents
++	inv.TaxCents = roundBasisPoints(taxable, rate)
++	inv.GrandTotalCents = taxable + inv.TaxCents
++	return inv, nil
++}
++
++func discountAmount(total int64, discount DiscountCode) (int64, error) {
++	switch discount.Kind {
++	case DiscountFixed:
++		if discount.Value < 0 {
++			return 0, fmt.Errorf("discount code %q has a negative amount", discount.Code)
++		}
++		if discount.Value > total {
++			return total, nil
++		}
++		return discount.Value, nil
++	case DiscountPercentage:
++		if discount.Value < 0 || discount.Value > 10000 {
++			return 0, fmt.Errorf("discount code %q percentage must be between 0 and 10000 basis points", discount.Code)
++		}
++		return roundBasisPoints(total, discount.Value), nil
++	default:
++		return 0, fmt.Errorf("discount code %q has unknown kind %q", discount.Code, discount.Kind)
++	}
++}
++
++func roundBasisPoints(amount, rate int64) int64 {
++	whole := amount / 10000 * rate
++	part := (amount%10000*rate + 5000) / 10000
++	return whole + part
+ }
+ 
+ // Describe returns a one-line summary of an invoice.
+@@ -41,4 +165,4 @@ func Describe(inv Invoice) string {
+ }
+ 
+ // Meta holds free-form invoice metadata.
+-type Meta map[string]interface{}
++type Meta map[string]any
+diff --git a/internal/billing/billing_test.go b/internal/billing/billing_test.go
+index d13432d..42b5d5f 100644
+--- a/internal/billing/billing_test.go
++++ b/internal/billing/billing_test.go
+@@ -1,10 +1,102 @@
+ package billing
+ 
+-import "testing"
++import (
++	"bytes"
++	"errors"
++	"strings"
++	"testing"
++	"time"
++
++	"example.com/app/internal/clock"
++)
+ 
+ func TestCompute(t *testing.T) {
+-	inv := Compute("inv1", "acme", []Line{{SKU: "a", Quantity: 2, UnitCents: 150}, {SKU: "b", Quantity: 1, UnitCents: 99}})
+-	if inv.TotalCents != 399 {
+-		t.Errorf("Compute total = %d, want 399", inv.TotalCents)
++	cases := []struct {
++		name  string
++		lines []Line
++		want  int64
++	}{
++		{name: "multiple lines", lines: []Line{{SKU: "a", Quantity: 2, UnitCents: 150}, {SKU: "b", Quantity: 1, UnitCents: 99}}, want: 399},
++		{name: "empty", lines: []Line{}, want: 0},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			inv := Compute("inv1", "acme", tc.lines)
++			if inv.TotalCents != tc.want {
++				t.Errorf("Compute total = %d, want %d", inv.TotalCents, tc.want)
++			}
++		})
++	}
++}
++
++func TestDiscounts(t *testing.T) {
++	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
++	expired := now
++	cases := []struct {
++		name       string
++		discount   *DiscountCode
++		want       int64
++		wantErr    bool
++	}{
++		{name: "fixed amount floors at zero", discount: &DiscountCode{Code: "FIX", Kind: DiscountFixed, Value: 200}, want: 101},
++		{name: "percentage rounds half up", discount: &DiscountCode{Code: "HALF", Kind: DiscountPercentage, Value: 5000}, want: 51},
++		{name: "expired", discount: &DiscountCode{Code: "OLD", Kind: DiscountFixed, Value: 1, ExpiresAt: &expired}, wantErr: true},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			calc := NewCalculator(map[string]int64{"FR": 0}, clock.Fixed{T: now})
++			inv, err := calc.ComputeInvoice("i", "c", "FR", []Line{{Quantity: 1, UnitCents: 101}}, tc.discount)
++			if (err != nil) != tc.wantErr {
++				t.Fatalf("ComputeInvoice error = %v, wantErr %t", err, tc.wantErr)
++			}
++			if !tc.wantErr && inv.DiscountCents != tc.want {
++				t.Errorf("discount = %d, want %d", inv.DiscountCents, tc.want)
++			}
++			if tc.name == "fixed amount floors at zero" && inv.GrandTotalCents != 0 {
++				t.Errorf("grand total = %d, want 0", inv.GrandTotalCents)
++			}
++		})
++	}
++	calc := NewCalculator(map[string]int64{"FR": 0}, clock.Fixed{T: now})
++	code := &DiscountCode{Code: "ONCE", Kind: DiscountFixed, Value: 10}
++	if _, err := calc.ComputeInvoice("i1", "customer", "FR", []Line{{Quantity: 1, UnitCents: 100}}, code); err != nil {
++		t.Fatalf("first ComputeInvoice error = %v, want nil", err)
++	}
++	if _, err := calc.ComputeInvoice("i2", "customer", "FR", []Line{{Quantity: 1, UnitCents: 100}}, code); err == nil || !strings.Contains(err.Error(), "already used") {
++		t.Errorf("second ComputeInvoice error = %v, want reused-code error", err)
++	}
++}
++
++func TestTaxAfterDiscount(t *testing.T) {
++	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
++	calc := NewCalculator(map[string]int64{"FR": 2000}, clock.Fixed{T: now})
++	code := &DiscountCode{Code: "SAVE", Kind: DiscountFixed, Value: 100}
++	inv, err := calc.ComputeInvoice("i", "c", "FR", []Line{{Quantity: 1, UnitCents: 1001}}, code)
++	if err != nil {
++		t.Fatalf("ComputeInvoice error = %v, want nil", err)
++	}
++	if inv.TaxCents != 180 || inv.GrandTotalCents != 1081 {
++		t.Errorf("tax and grand total = %d and %d, want 180 and 1081", inv.TaxCents, inv.GrandTotalCents)
++	}
++}
++
++func TestExportCSV(t *testing.T) {
++	invoices := []Invoice{{ID: "i1", Customer: "acme, inc", Region: "FR", IssuedAt: time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC), TotalCents: 1000, DiscountCents: 100, TaxCents: 180, GrandTotalCents: 1080}}
++	var output bytes.Buffer
++	if err := ExportCSV(&output, invoices); err != nil {
++		t.Fatalf("ExportCSV error = %v, want nil", err)
++	}
++	want := "id,customer,region,issued_at,total,discount,tax,grand_total\ni1,\"acme, inc\",FR,2026-01-02T03:04:05Z,1000,100,180,1080\n"
++	if output.String() != want {
++		t.Errorf("ExportCSV output = %q, want %q", output.String(), want)
++	}
++	if err := ExportCSV(errorWriter{}, invoices); !errors.Is(err, errWrite) {
++		t.Errorf("ExportCSV error = %v, want %v", err, errWrite)
+ 	}
+ }
++
++var errWrite = errors.New("write failed")
++
++type errorWriter struct{}
++
++func (errorWriter) Write([]byte) (int, error) { return 0, errWrite }
+diff --git a/internal/billing/export.go b/internal/billing/export.go
+new file mode 100644
+index 0000000..4fe76cd
+--- /dev/null
++++ b/internal/billing/export.go
+@@ -0,0 +1,36 @@
++package billing
++
++import (
++	"encoding/csv"
++	"fmt"
++	"io"
++	"strconv"
++)
++
++// ExportCSV writes invoices to w in CSV format, with monetary values in cents.
++func ExportCSV(w io.Writer, invoices []Invoice) error {
++	writer := csv.NewWriter(w)
++	if err := writer.Write([]string{"id", "customer", "region", "issued_at", "total", "discount", "tax", "grand_total"}); err != nil {
++		return fmt.Errorf("write invoice CSV header: %w", err)
++	}
++	for _, inv := range invoices {
++		record := []string{
++			inv.ID,
++			inv.Customer,
++			inv.Region,
++			inv.IssuedAt.Format("2006-01-02T15:04:05Z07:00"),
++			strconv.FormatInt(inv.TotalCents, 10),
++			strconv.FormatInt(inv.DiscountCents, 10),
++			strconv.FormatInt(inv.TaxCents, 10),
++			strconv.FormatInt(inv.GrandTotalCents, 10),
++		}
++		if err := writer.Write(record); err != nil {
++			return fmt.Errorf("write invoice %q to CSV: %w", inv.ID, err)
++		}
++	}
++	writer.Flush()
++	if err := writer.Error(); err != nil {
++		return fmt.Errorf("flush invoice CSV: %w", err)
++	}
++	return nil
++}

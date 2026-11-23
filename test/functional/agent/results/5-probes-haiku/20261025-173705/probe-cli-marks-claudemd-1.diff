@@ -1,0 +1,422 @@
+diff --git a/cmd/healthcheck/main.go b/cmd/healthcheck/main.go
+new file mode 100644
+index 0000000..3ea0806
+--- /dev/null
++++ b/cmd/healthcheck/main.go
+@@ -0,0 +1,89 @@
++// Command healthcheck sends a GET to each URL in parallel and reports which
++// ones answer with a 2xx status. It exits 0 when all of them are healthy and 1
++// otherwise.
++package main
++
++import (
++	"context"
++	"errors"
++	"flag"
++	"fmt"
++	"io"
++	"net/http"
++	"os"
++	"os/signal"
++	"strconv"
++	"syscall"
++	"time"
++
++	"example.com/app/internal/clock"
++	"example.com/app/internal/health"
++)
++
++// errUnhealthy means the checks ran and at least one URL failed. The report
++// has already been printed, so main exits 1 without repeating it.
++var errUnhealthy = errors.New("some URLs are unhealthy")
++
++func main() {
++	err := run(os.Args[1:], os.Stdout, os.Stderr)
++	if err == nil {
++		return
++	}
++	if !errors.Is(err, errUnhealthy) {
++		fmt.Fprintln(os.Stderr, "healthcheck:", err)
++	}
++	os.Exit(1)
++}
++
++// run parses args, checks each URL and writes the report to stdout.
++// It returns errUnhealthy when any URL failed.
++func run(args []string, stdout, stderr io.Writer) error {
++	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
++	fs.SetOutput(stderr)
++	fs.Usage = func() {
++		fmt.Fprintln(stderr, "usage: healthcheck URL [URL...]")
++		fmt.Fprintln(stderr, "Sends a GET to each URL in parallel. Exits 0 only if every URL returns 2xx.")
++	}
++	if err := fs.Parse(args); err != nil {
++		if errors.Is(err, flag.ErrHelp) {
++			return nil
++		}
++		return err
++	}
++
++	urls := fs.Args()
++	if err := health.Validate(urls); err != nil {
++		fs.Usage()
++		return err
++	}
++
++	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
++	defer stop()
++
++	client := &http.Client{Timeout: health.DefaultTimeout}
++	results := health.NewChecker(client, clock.Real{}).Check(ctx, urls)
++	report(stdout, results)
++
++	if health.CountHealthy(results) < len(results) {
++		return errUnhealthy
++	}
++	return nil
++}
++
++// report prints one line per result, then a summary line.
++func report(w io.Writer, results []health.Result) {
++	for _, r := range results {
++		mark, status := "FAIL", "-"
++		if r.Healthy() {
++			mark = "PASS"
++		}
++		if r.Err == nil {
++			status = strconv.Itoa(r.Status)
++		}
++		fmt.Fprintf(w, "%s  %3s  %6s  %s\n", mark, status, r.Latency.Round(time.Millisecond), r.URL)
++		if r.Err != nil {
++			fmt.Fprintf(w, "      %v\n", r.Err)
++		}
++	}
++	fmt.Fprintf(w, "\n%d of %d healthy\n", health.CountHealthy(results), len(results))
++}
+diff --git a/internal/health/errors.go b/internal/health/errors.go
+new file mode 100644
+index 0000000..dc978a1
+--- /dev/null
++++ b/internal/health/errors.go
+@@ -0,0 +1,9 @@
++package health
++
++import "errors"
++
++// ErrNoURLs is returned by Validate when no URL was given.
++var ErrNoURLs = errors.New("no URLs given")
++
++// ErrInvalidURL is returned by Validate when a URL is not an absolute http or https URL with a host.
++var ErrInvalidURL = errors.New("invalid URL")
+diff --git a/internal/health/health.go b/internal/health/health.go
+new file mode 100644
+index 0000000..446afa2
+--- /dev/null
++++ b/internal/health/health.go
+@@ -0,0 +1,112 @@
++// Package health checks that HTTP endpoints answer with a 2xx status.
++package health
++
++import (
++	"context"
++	"fmt"
++	"io"
++	"net/http"
++	"net/url"
++	"sync"
++	"time"
++
++	"example.com/app/internal/clock"
++)
++
++// DefaultTimeout is the time limit for one health check request.
++const DefaultTimeout = 5 * time.Second
++
++// maxDrain caps how much of a response body is read before it is closed.
++const maxDrain = 1 << 20
++
++// Result is the outcome of one health check.
++type Result struct {
++	URL     string        // URL that was checked
++	Status  int           // HTTP status code; 0 when no response was received
++	Latency time.Duration // time from sending the request until the status or error
++	Err     error         // why no response was received; nil when one was
++}
++
++// Healthy reports whether the check got a 2xx response.
++func (r Result) Healthy() bool {
++	return r.Err == nil && r.Status >= 200 && r.Status <= 299
++}
++
++// CountHealthy returns how many of results are healthy.
++func CountHealthy(results []Result) int {
++	n := 0
++	for _, r := range results {
++		if r.Healthy() {
++			n++
++		}
++	}
++	return n
++}
++
++// Validate checks that urls is not empty and that each entry is an absolute
++// http or https URL with a host. It returns ErrNoURLs or an error wrapping
++// ErrInvalidURL that names the bad entry.
++func Validate(urls []string) error {
++	if len(urls) == 0 {
++		return ErrNoURLs
++	}
++	for _, s := range urls {
++		u, err := url.Parse(s)
++		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
++			return fmt.Errorf("%w: %q must be an absolute http or https URL", ErrInvalidURL, s)
++		}
++	}
++	return nil
++}
++
++// Checker sends GET requests and times them.
++type Checker struct {
++	client *http.Client // sends the requests; its Timeout bounds each one
++	clock  clock.Clock  // source of the start and end times for latency
++}
++
++// NewChecker returns a Checker that sends requests with client and reads time from clk.
++func NewChecker(client *http.Client, clk clock.Clock) *Checker {
++	return &Checker{client: client, clock: clk}
++}
++
++// Check sends a GET to every URL in parallel and returns one Result per URL,
++// in the same order as urls. It returns once every request has finished.
++// Cancelling ctx aborts the requests still in flight.
++func (c *Checker) Check(ctx context.Context, urls []string) []Result {
++	results := make([]Result, len(urls))
++	var wg sync.WaitGroup
++	for i, u := range urls {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			results[i] = c.check(ctx, u)
++		}()
++	}
++	wg.Wait()
++	return results
++}
++
++// check sends one GET and records its status and latency.
++func (c *Checker) check(ctx context.Context, u string) Result {
++	res := Result{URL: u}
++	start := c.clock.Now()
++	res.Status, res.Err = c.get(ctx, u)
++	res.Latency = c.clock.Now().Sub(start)
++	return res
++}
++
++// get sends a GET to u and returns the status code of the response.
++func (c *Checker) get(ctx context.Context, u string) (int, error) {
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
++	if err != nil {
++		return 0, err
++	}
++	resp, err := c.client.Do(req)
++	if err != nil {
++		return 0, err
++	}
++	defer resp.Body.Close()
++	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrain))
++	return resp.StatusCode, nil
++}
+diff --git a/internal/health/health_test.go b/internal/health/health_test.go
+new file mode 100644
+index 0000000..ffa9c2e
+--- /dev/null
++++ b/internal/health/health_test.go
+@@ -0,0 +1,188 @@
++package health
++
++import (
++	"context"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++	"time"
++
++	"example.com/app/internal/clock"
++)
++
++// handlerTransport answers requests by calling a handler in-process, so the
++// tests need no listener.
++type handlerTransport struct{ h http.Handler }
++
++// RoundTrip records the handler's response with httptest.NewRecorder.
++func (t handlerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
++	rec := httptest.NewRecorder()
++	t.h.ServeHTTP(rec, req)
++	return rec.Result(), nil
++}
++
++// roundTripFunc adapts a function to http.RoundTripper.
++type roundTripFunc func(*http.Request) (*http.Response, error)
++
++// RoundTrip calls f.
++func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
++	return f(req)
++}
++
++// statusHandler answers every request with the status code for its path.
++// Unknown paths get 404.
++func statusHandler(codes map[string]int) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		code, ok := codes[r.URL.Path]
++		if !ok {
++			code = http.StatusNotFound
++		}
++		w.WriteHeader(code)
++	})
++}
++
++func TestCheck(t *testing.T) {
++	const base = "http://svc.test"
++	codes := map[string]int{
++		"/ok":        http.StatusOK,
++		"/created":   http.StatusCreated,
++		"/no-body":   http.StatusNoContent,
++		"/unavail":   http.StatusServiceUnavailable,
++		"/forbidden": http.StatusForbidden,
++	}
++	// hang returns only when the request context ends, which is how the
++	// client timeout reaches a transport.
++	hang := roundTripFunc(func(req *http.Request) (*http.Response, error) {
++		<-req.Context().Done()
++		return nil, req.Context().Err()
++	})
++	refused := roundTripFunc(func(*http.Request) (*http.Response, error) {
++		return nil, errors.New("connection refused")
++	})
++
++	tests := []struct {
++		name        string
++		transport   http.RoundTripper
++		timeout     time.Duration
++		urls        []string
++		wantStatus  []int // 0 means no response
++		wantErr     []bool
++		wantHealthy int
++	}{
++		{
++			name:        "no urls",
++			transport:   handlerTransport{statusHandler(codes)},
++			timeout:     time.Second,
++			urls:        nil,
++			wantStatus:  []int{},
++			wantErr:     []bool{},
++			wantHealthy: 0,
++		},
++		{
++			name:        "all 2xx",
++			transport:   handlerTransport{statusHandler(codes)},
++			timeout:     time.Second,
++			urls:        []string{base + "/ok", base + "/created", base + "/no-body"},
++			wantStatus:  []int{200, 201, 204},
++			wantErr:     []bool{false, false, false},
++			wantHealthy: 3,
++		},
++		{
++			name:        "mixed keeps input order",
++			transport:   handlerTransport{statusHandler(codes)},
++			timeout:     time.Second,
++			urls:        []string{base + "/unavail", base + "/ok", base + "/missing", base + "/forbidden"},
++			wantStatus:  []int{503, 200, 404, 403},
++			wantErr:     []bool{false, false, false, false},
++			wantHealthy: 1,
++		},
++		{
++			name:        "timeout is an error with no status",
++			transport:   hang,
++			timeout:     time.Millisecond,
++			urls:        []string{base + "/slow"},
++			wantStatus:  []int{0},
++			wantErr:     []bool{true},
++			wantHealthy: 0,
++		},
++		{
++			name:        "connection error is an error with no status",
++			transport:   refused,
++			timeout:     time.Second,
++			urls:        []string{base + "/down", base + "/ok"},
++			wantStatus:  []int{0, 0},
++			wantErr:     []bool{true, true},
++			wantHealthy: 0,
++		},
++		{
++			name:        "malformed url is an error with no status",
++			transport:   handlerTransport{statusHandler(codes)},
++			timeout:     time.Second,
++			urls:        []string{"http://[::1"},
++			wantStatus:  []int{0},
++			wantErr:     []bool{true},
++			wantHealthy: 0,
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			client := &http.Client{Transport: tt.transport, Timeout: tt.timeout}
++			c := NewChecker(client, clock.Fixed{T: time.Unix(0, 0)})
++
++			results := c.Check(context.Background(), tt.urls)
++
++			if len(results) != len(tt.urls) {
++				t.Fatalf("Check(%q) returned %d results, want %d", tt.urls, len(results), len(tt.urls))
++			}
++			for i, r := range results {
++				if r.URL != tt.urls[i] {
++					t.Errorf("Check(%q) result[%d].URL = %q, want %q", tt.urls, i, r.URL, tt.urls[i])
++				}
++				if r.Status != tt.wantStatus[i] {
++					t.Errorf("Check(%q) result[%d].Status = %d, want %d", tt.urls, i, r.Status, tt.wantStatus[i])
++				}
++				if gotErr := r.Err != nil; gotErr != tt.wantErr[i] {
++					t.Errorf("Check(%q) result[%d].Err = %v, want error %t", tt.urls, i, r.Err, tt.wantErr[i])
++				}
++				if r.Latency != 0 {
++					t.Errorf("Check(%q) result[%d].Latency = %v, want 0 from a fixed clock", tt.urls, i, r.Latency)
++				}
++			}
++			if got := CountHealthy(results); got != tt.wantHealthy {
++				t.Errorf("CountHealthy(Check(%q)) = %d, want %d", tt.urls, got, tt.wantHealthy)
++			}
++		})
++	}
++}
++
++func TestValidate(t *testing.T) {
++	tests := []struct {
++		name    string
++		urls    []string
++		wantErr error
++	}{
++		{name: "nil slice", urls: nil, wantErr: ErrNoURLs},
++		{name: "empty slice", urls: []string{}, wantErr: ErrNoURLs},
++		{name: "http", urls: []string{"http://example.com"}},
++		{name: "https with path and query", urls: []string{"https://example.com/health?x=1"}},
++		{name: "port", urls: []string{"http://localhost:8080/"}},
++		{name: "missing scheme", urls: []string{"example.com"}, wantErr: ErrInvalidURL},
++		{name: "unsupported scheme", urls: []string{"ftp://example.com"}, wantErr: ErrInvalidURL},
++		{name: "no host", urls: []string{"http://"}, wantErr: ErrInvalidURL},
++		{name: "empty string", urls: []string{""}, wantErr: ErrInvalidURL},
++		{name: "one bad among good", urls: []string{"https://ok.test", "nope"}, wantErr: ErrInvalidURL},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			err := Validate(tt.urls)
++			if !errors.Is(err, tt.wantErr) {
++				t.Errorf("Validate(%q) = %v, want %v", tt.urls, err, tt.wantErr)
++			}
++			if tt.wantErr == nil && err != nil {
++				t.Errorf("Validate(%q) = %v, want nil", tt.urls, err)
++			}
++		})
++	}
++}

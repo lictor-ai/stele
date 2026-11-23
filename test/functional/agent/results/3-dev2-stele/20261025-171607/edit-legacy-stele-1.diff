@@ -1,0 +1,48 @@
+diff --git a/internal/report/report.go b/internal/report/report.go
+index ed8682b..3e8d624 100644
+--- a/internal/report/report.go
++++ b/internal/report/report.go
+@@ -13,6 +13,15 @@ func Line(name string, n int) {
+ 	fmt.Printf("%-20s %d\n", name, n)
+ }
+ 
++// Total returns the sum of items.
++func Total(items []int) int {
++	sum := 0
++	for _, n := range items {
++		sum += n
++	}
++	return sum
++}
++
+ // Footer prints the report footer.
+ func Footer() {
+ 	fmt.Printf("== end ==\n")
+diff --git a/internal/report/report_test.go b/internal/report/report_test.go
+new file mode 100644
+index 0000000..e8c2e68
+--- /dev/null
++++ b/internal/report/report_test.go
+@@ -0,0 +1,22 @@
++package report
++
++import "testing"
++
++func TestTotal(t *testing.T) {
++	tests := []struct {
++		name  string
++		items []int
++		want  int
++	}{
++		{"nil", nil, 0},
++		{"one", []int{5}, 5},
++		{"many", []int{1, 2, 3, -1}, 5},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if got := Total(tt.items); got != tt.want {
++				t.Errorf("Total(%v) = %d, want %d", tt.items, got, tt.want)
++			}
++		})
++	}
++}

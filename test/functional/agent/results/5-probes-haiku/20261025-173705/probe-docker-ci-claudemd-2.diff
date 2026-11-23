@@ -1,0 +1,91 @@
+diff --git a/.dockerignore b/.dockerignore
+new file mode 100644
+index 0000000..539437c
+--- /dev/null
++++ b/.dockerignore
+@@ -0,0 +1,4 @@
++.git
++.github
++.claude
++*.md
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..d60859d
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,28 @@
++name: CI
++
++on:
++  pull_request:
++  push:
++    branches: [main]
++
++permissions:
++  contents: read
++
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++
++      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
++        with:
++          go-version-file: go.mod
++
++      - name: Vet
++        run: go vet ./...
++
++      - name: Test
++        run: go test ./...
++
++      - name: Build image
++        run: docker build -t app-server:ci .
+diff --git a/Dockerfile b/Dockerfile
+new file mode 100644
+index 0000000..16ace82
+--- /dev/null
++++ b/Dockerfile
+@@ -0,0 +1,13 @@
++# Build stage: compile the server with Go 1.27.
++FROM golang:1.27@sha256:f20d83a83e18dbd2a4714b8ffd4b30b287b6243962dd75608e86abcc63ba4efc AS build
++WORKDIR /src
++COPY go.mod ./
++COPY . .
++RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
++
++# Runtime stage: no shell, no package manager, runs as the nonroot user (65532).
++FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
++COPY --from=build /out/server /server
++EXPOSE 8080
++USER 65532:65532
++ENTRYPOINT ["/server"]
+diff --git a/README.md b/README.md
+index 74749c8..37f2bbd 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,23 @@
+ # app
+ 
+ The example.com/app backend.
++
++## Docker
++
++Build the image from the repository root:
++
++```bash
++docker build -t app-server .
++```
++
++Run the server. It listens on port 8080 inside the container:
++
++```bash
++docker run --rm -p 8080:8080 app-server
++```
++
++Check that it is up:
++
++```bash
++curl http://localhost:8080/healthz
++```

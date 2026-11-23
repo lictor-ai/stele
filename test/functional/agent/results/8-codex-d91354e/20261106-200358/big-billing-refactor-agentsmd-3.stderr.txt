@@ -1,0 +1,6 @@
+2026-11-06T19:29:30.489038Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in C:\Users\Nacer\AppData\Local\Temp\stele-eval-big-billing-refactor-agentsmd-3-533091068\repo\internal\billing\billing.go:
+	tax := roundRatio((total-discount)*rate, 10000)
+	inv := Invoice{ID: id, Customer: customer, Region: options.Region, Lines: append([]Line(nil), lines...), TotalCents: total, DiscountCents: discount, TaxCents: tax, GrandTotalCents: total - discount + tax, IssuedAt: options.Clock.Now()}
+	if options.Discount != nil {
+		options.DiscountUsage.markUsed(options.Discount.Code, customer)
+	}

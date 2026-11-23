@@ -1,0 +1,127 @@
+diff --git a/internal/cmds/registry.go b/internal/cmds/registry.go
+index b04ca94..dc6fd55 100644
+--- a/internal/cmds/registry.go
++++ b/internal/cmds/registry.go
+@@ -18,4 +18,5 @@ var All = []Command{
+ 	{"cache", "show cache statistics", Cache},
+ 	{"tenants", "list tenants", Tenants},
+ 	{"flags", "list feature flags", Flags},
++	{"version", "print the app version", Version},
+ }
+diff --git a/internal/cmds/version.go b/internal/cmds/version.go
+new file mode 100644
+index 0000000..157a343
+--- /dev/null
++++ b/internal/cmds/version.go
+@@ -0,0 +1,30 @@
++package cmds
++
++import (
++	"fmt"
++	"runtime"
++)
++
++const appName = "app"
++
++// version is the build version. Set it at build time with
++// -ldflags "-X example.com/app/internal/cmds.version=1.2.3". It stays "dev"
++// for builds that do not set it.
++var version = "dev"
++
++// Version prints the app name, the build version and the Go version.
++func Version(args []string) error {
++	fmt.Printf("%s", versionReport(args))
++	return nil
++}
++
++// versionReport returns the text Version prints.
++func versionReport(args []string) string {
++	s := fmt.Sprintf("%-10s %s\n", "app:", appName)
++	s += fmt.Sprintf("%-10s %s\n", "version:", version)
++	s += fmt.Sprintf("%-10s %s\n", "go:", runtime.Version())
++	if len(args) > 0 {
++		s += fmt.Sprintf("(ignoring %d arguments)\n", len(args))
++	}
++	return s
++}
+diff --git a/internal/cmds/version_test.go b/internal/cmds/version_test.go
+new file mode 100644
+index 0000000..4c21f2b
+--- /dev/null
++++ b/internal/cmds/version_test.go
+@@ -0,0 +1,75 @@
++package cmds
++
++import (
++	"runtime"
++	"strings"
++	"testing"
++)
++
++func TestVersionReport(t *testing.T) {
++	cases := []struct {
++		name    string
++		version string
++		args    []string
++		want    []string
++		notWant []string
++	}{
++		{
++			name:    "default version is dev",
++			version: "dev",
++			want: []string{
++				"app:       app\n",
++				"version:   dev\n",
++				"go:        " + runtime.Version() + "\n",
++			},
++			notWant: []string{"ignoring"},
++		},
++		{
++			name:    "build-time version is reported",
++			version: "1.2.3",
++			want:    []string{"version:   1.2.3\n"},
++		},
++		{
++			name:    "extra arguments are reported as ignored",
++			version: "dev",
++			args:    []string{"--json", "extra"},
++			want:    []string{"(ignoring 2 arguments)\n"},
++		},
++		{
++			name:    "empty version string is shown as is",
++			version: "",
++			want:    []string{"version:   \n"},
++		},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			prev := version
++			t.Cleanup(func() { version = prev })
++			version = tc.version
++
++			got := versionReport(tc.args)
++			for _, w := range tc.want {
++				if !strings.Contains(got, w) {
++					t.Errorf("versionReport(%q) = %q, want it to contain %q", tc.args, got, w)
++				}
++			}
++			for _, nw := range tc.notWant {
++				if strings.Contains(got, nw) {
++					t.Errorf("versionReport(%q) = %q, want it not to contain %q", tc.args, got, nw)
++				}
++			}
++		})
++	}
++}
++
++func TestVersionRegistered(t *testing.T) {
++	for _, c := range All {
++		if c.Name == "version" {
++			if c.Run == nil {
++				t.Fatalf("version command has nil Run")
++			}
++			return
++		}
++	}
++	t.Errorf("All has no command named %q", "version")
++}

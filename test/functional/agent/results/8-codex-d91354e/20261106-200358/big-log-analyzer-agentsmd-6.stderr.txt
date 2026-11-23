@@ -1,0 +1,2 @@
+2026-11-06T19:52:39.810328Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in C:\Users\Nacer\AppData\Local\Temp\stele-eval-big-log-analyzer-agentsmd-6-1141536287\repo\internal\stats\stats_test.go:
+			wantP95:   42,

@@ -1,0 +1,149 @@
+diff --git a/cmd/app/main.go b/cmd/app/main.go
+index bfd18ad..048141c 100644
+--- a/cmd/app/main.go
++++ b/cmd/app/main.go
+@@ -8,14 +8,19 @@ import (
+ 	"example.com/app/internal/cmds"
+ )
+ 
++// version is the build version. Set it at build time with
++// -ldflags "-X main.version=1.2.3".
++var version = "dev"
++
+ func main() {
++	all := cmds.All(version)
+ 	if len(os.Args) < 2 {
+-		for _, c := range cmds.All {
++		for _, c := range all {
+ 			fmt.Printf("  %-10s %s\n", c.Name, c.Usage)
+ 		}
+ 		os.Exit(2)
+ 	}
+-	for _, c := range cmds.All {
++	for _, c := range all {
+ 		if c.Name == os.Args[1] {
+ 			if err := c.Run(os.Args[2:]); err != nil {
+ 				fmt.Fprintln(os.Stderr, err)
+diff --git a/internal/cmds/registry.go b/internal/cmds/registry.go
+index b04ca94..a0062fb 100644
+--- a/internal/cmds/registry.go
++++ b/internal/cmds/registry.go
+@@ -8,14 +8,18 @@ type Command struct {
+ 	Run   func(args []string) error
+ }
+ 
+-// All lists the subcommands, in the order help shows them.
+-var All = []Command{
+-	{"status", "show the service status", Status},
+-	{"users", "list users", Users},
+-	{"config", "print the effective config", Config},
+-	{"jobs", "list background jobs", Jobs},
+-	{"queues", "show queue depths", Queues},
+-	{"cache", "show cache statistics", Cache},
+-	{"tenants", "list tenants", Tenants},
+-	{"flags", "list feature flags", Flags},
++// All lists the subcommands, in the order help shows them. version is the
++// build version, passed to the version subcommand.
++func All(version string) []Command {
++	return []Command{
++		{"status", "show the service status", Status},
++		{"users", "list users", Users},
++		{"config", "print the effective config", Config},
++		{"jobs", "list background jobs", Jobs},
++		{"queues", "show queue depths", Queues},
++		{"cache", "show cache statistics", Cache},
++		{"tenants", "list tenants", Tenants},
++		{"flags", "list feature flags", Flags},
++		NewVersion(version),
++	}
+ }
+diff --git a/internal/cmds/version.go b/internal/cmds/version.go
+new file mode 100644
+index 0000000..b4a6169
+--- /dev/null
++++ b/internal/cmds/version.go
+@@ -0,0 +1,22 @@
++package cmds
++
++import (
++	"runtime"
++
++	"example.com/app/internal/log"
++)
++
++// AppName is the name the version subcommand reports.
++const AppName = "app"
++
++// NewVersion returns the version subcommand. version is the build version,
++// set by main with -ldflags, and is reported with the Go toolchain version.
++func NewVersion(version string) Command {
++	return Command{"version", "show the app version and Go version", func(args []string) error {
++		if len(args) > 0 {
++			log.Warn("version ignores arguments", "count", len(args))
++		}
++		log.Info("version", "app", AppName, "version", version, "go", runtime.Version())
++		return nil
++	}}
++}
+diff --git a/internal/cmds/version_test.go b/internal/cmds/version_test.go
+new file mode 100644
+index 0000000..35a7df6
+--- /dev/null
++++ b/internal/cmds/version_test.go
+@@ -0,0 +1,56 @@
++package cmds
++
++import "testing"
++
++func TestNewVersion(t *testing.T) {
++	tests := []struct {
++		name    string
++		version string
++		args    []string
++	}{
++		{name: "default version", version: "dev", args: nil},
++		{name: "release version", version: "1.2.3", args: nil},
++		{name: "empty version", version: "", args: nil},
++		{name: "extra arguments are ignored", version: "dev", args: []string{"extra"}},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			c := NewVersion(tt.version)
++			if c.Name != "version" {
++				t.Errorf("NewVersion(%q).Name = %q, want %q", tt.version, c.Name, "version")
++			}
++			if c.Usage == "" {
++				t.Errorf("NewVersion(%q).Usage is empty, want a short description", tt.version)
++			}
++			if err := c.Run(tt.args); err != nil {
++				t.Errorf("NewVersion(%q).Run(%q) = %v, want nil", tt.version, tt.args, err)
++			}
++		})
++	}
++}
++
++func TestAllRegistersVersion(t *testing.T) {
++	tests := []struct {
++		name    string
++		version string
++	}{
++		{name: "default version", version: "dev"},
++		{name: "release version", version: "1.2.3"},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			var found []Command
++			for _, c := range All(tt.version) {
++				if c.Name == "version" {
++					found = append(found, c)
++				}
++			}
++			if len(found) != 1 {
++				t.Fatalf("All(%q) has %d version commands, want 1", tt.version, len(found))
++			}
++			if err := found[0].Run(nil); err != nil {
++				t.Errorf("All(%q) version Run(nil) = %v, want nil", tt.version, err)
++			}
++		})
++	}
++}

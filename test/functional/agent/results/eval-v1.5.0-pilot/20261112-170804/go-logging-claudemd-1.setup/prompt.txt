@@ -1,0 +1,1 @@
+Add a function Greet(name string) in a new package internal/greet that prints a greeting to the user, and call it from cmd/app/main.go with the name "world".

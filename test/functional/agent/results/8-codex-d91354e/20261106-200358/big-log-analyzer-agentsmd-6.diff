@@ -1,0 +1,441 @@
+diff --git a/cmd/loga/main.go b/cmd/loga/main.go
+new file mode 100644
+index 0000000..27614c9
+--- /dev/null
++++ b/cmd/loga/main.go
+@@ -0,0 +1,124 @@
++package main
++
++import (
++	"bufio"
++	"encoding/json"
++	"errors"
++	"flag"
++	"fmt"
++	"io"
++	"os"
++	"sort"
++
++	"example.com/app/internal/logparse"
++	"example.com/app/internal/stats"
++)
++
++func main() {
++	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
++		var flagErr *flagError
++		if errors.As(err, &flagErr) {
++			os.Exit(2)
++		}
++		fmt.Fprintln(os.Stderr, err)
++		os.Exit(1)
++	}
++}
++
++type flagError struct{ err error }
++
++func (e *flagError) Error() string { return e.err.Error() }
++func (e *flagError) Unwrap() error { return e.err }
++
++func run(args []string, stdout, stderr io.Writer) error {
++	set := flag.NewFlagSet("loga", flag.ContinueOnError)
++	set.SetOutput(stderr)
++	top := set.Int("top", 10, "number of paths to show")
++	jsonOutput := set.Bool("json", false, "write report as JSON")
++	if err := set.Parse(args); err != nil {
++		return &flagError{err: err}
++	}
++	if *top < 0 {
++		return &flagError{err: fmt.Errorf("-top must not be negative")}
++	}
++	files := set.Args()
++	var readers []io.Reader
++	var closers []io.Closer
++	if len(files) == 0 {
++		readers = append(readers, os.Stdin)
++	} else {
++		for _, name := range files {
++			f, err := os.Open(name)
++			if err != nil {
++				for _, c := range closers {
++					_ = c.Close()
++				}
++				return fmt.Errorf("open %s: %w", name, err)
++			}
++			readers = append(readers, f)
++			closers = append(closers, f)
++		}
++	}
++	defer func() {
++		for _, c := range closers {
++			_ = c.Close()
++		}
++	}()
++	entries := make([]logparse.Entry, 0)
++	malformed := 0
++	for _, reader := range readers {
++		scanner := bufio.NewScanner(reader)
++		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
++		for scanner.Scan() {
++			entry, err := logparse.Parse(scanner.Text())
++			if err != nil {
++				malformed++
++				continue
++			}
++			entries = append(entries, entry)
++		}
++		if err := scanner.Err(); err != nil {
++			return fmt.Errorf("read log: %w", err)
++		}
++	}
++	report := stats.Calculate(entries, malformed, *top)
++	if *jsonOutput {
++		enc := json.NewEncoder(stdout)
++		enc.SetIndent("", "  ")
++		return enc.Encode(report)
++	}
++	return writeText(stdout, report)
++}
++
++func writeText(w io.Writer, r stats.Report) error {
++	if _, err := fmt.Fprintf(w, "Total requests: %d\nMalformed lines: %d\n\nTop paths\n", r.Total, r.Malformed); err != nil {
++		return err
++	}
++	for _, p := range r.TopPaths {
++		if _, err := fmt.Fprintf(w, "%-40s %d\n", p.Path, p.Count); err != nil {
++			return err
++		}
++	}
++	if _, err := fmt.Fprintln(w, "\nStatus classes"); err != nil {
++		return err
++	}
++	for _, k := range []string{"2xx", "3xx", "4xx", "5xx"} {
++		if _, err := fmt.Fprintf(w, "%s %d\n", k, r.StatusClasses[k]); err != nil {
++			return err
++		}
++	}
++	if _, err := fmt.Fprintf(w, "\nRequest time (ms)\np50 %.3f\np95 %.3f\np99 %.3f\n\n5xx per hour\n", r.P50MS, r.P95MS, r.P99MS); err != nil {
++		return err
++	}
++	hours := make([]string, 0, len(r.ErrorsPerHour))
++	for hour := range r.ErrorsPerHour {
++		hours = append(hours, hour)
++	}
++	sort.Strings(hours)
++	for _, hour := range hours {
++		if _, err := fmt.Fprintf(w, "%s %d\n", hour, r.ErrorsPerHour[hour]); err != nil {
++			return err
++		}
++	}
++	return nil
++}
+diff --git a/cmd/loga/main_test.go b/cmd/loga/main_test.go
+new file mode 100644
+index 0000000..5f7db2b
+--- /dev/null
++++ b/cmd/loga/main_test.go
+@@ -0,0 +1,50 @@
++package main
++
++import (
++	"bytes"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func TestRun(t *testing.T) {
++	line := `203.0.113.9 - - [10/Oct/2026:13:55:36 +0000] "GET /api/items?id=3 HTTP/1.1" 200 512 "-" "curl/8.0" 0.042` + "\n"
++	cases := []struct {
++		name    string
++		args    []string
++		input   string
++		want    string
++		wantErr bool
++	}{
++		{name: "stdin text", input: line + "bad\n", want: "Total requests: 1"},
++		{name: "stdin json", args: []string{"-json"}, input: line, want: `"total_requests": 1`},
++		{name: "bad flag", args: []string{"-top=-1"}, wantErr: true},
++		{name: "unreadable file", args: []string{filepath.Join(t.TempDir(), "missing.log")}, wantErr: true},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			old := os.Stdin
++			if tc.input != "" {
++				file := filepath.Join(t.TempDir(), "input.log")
++				if err := os.WriteFile(file, []byte(tc.input), 0600); err != nil {
++					t.Fatal(err)
++				}
++				f, err := os.Open(file)
++				if err != nil {
++					t.Fatal(err)
++				}
++				os.Stdin = f
++				t.Cleanup(func() { os.Stdin = old; _ = f.Close() })
++			}
++			var out, stderr bytes.Buffer
++			err := run(tc.args, &out, &stderr)
++			if (err != nil) != tc.wantErr {
++				t.Fatalf("run(%v) error = %v, wantErr %v", tc.args, err, tc.wantErr)
++			}
++			if tc.want != "" && !strings.Contains(out.String(), tc.want) {
++				t.Errorf("run output = %q, want containing %q", out.String(), tc.want)
++			}
++		})
++	}
++}
+diff --git a/internal/logparse/logparse.go b/internal/logparse/logparse.go
+new file mode 100644
+index 0000000..76585d5
+--- /dev/null
++++ b/internal/logparse/logparse.go
+@@ -0,0 +1,81 @@
++// Package logparse parses nginx combined access log records with a trailing request time.
++package logparse
++
++import (
++	"fmt"
++	"math"
++	"strconv"
++	"strings"
++	"time"
++)
++
++// Entry is one parsed access log record.
++type Entry struct {
++	Path        string
++	Status      int
++	RequestTime float64
++	Time        time.Time
++}
++
++// Parse parses one combined access log line with a trailing duration in seconds.
++func Parse(line string) (Entry, error) {
++	var entry Entry
++	fields, err := splitFields(line)
++	if err != nil || len(fields) != 10 {
++		return entry, fmt.Errorf("invalid combined access log line")
++	}
++	stamp := strings.Trim(fields[3], "[]")
++	entry.Time, err = time.Parse("02/Jan/2006:15:04:05 -0700", stamp)
++	if err != nil {
++		return Entry{}, fmt.Errorf("invalid timestamp")
++	}
++	request := strings.Fields(strings.Trim(fields[4], `"`))
++	if len(request) != 3 {
++		return Entry{}, fmt.Errorf("invalid request")
++	}
++	entry.Path = strings.SplitN(request[1], "?", 2)[0]
++	entry.Status, err = strconv.Atoi(fields[5])
++	if err != nil || entry.Status < 100 || entry.Status > 599 {
++		return Entry{}, fmt.Errorf("invalid status")
++	}
++	entry.RequestTime, err = strconv.ParseFloat(fields[9], 64)
++	if err != nil || entry.RequestTime < 0 || math.IsNaN(entry.RequestTime) || math.IsInf(entry.RequestTime, 0) {
++		return Entry{}, fmt.Errorf("invalid request time")
++	}
++	return entry, nil
++}
++
++func splitFields(line string) ([]string, error) {
++	var fields []string
++	for i := 0; i < len(line); {
++		for i < len(line) && line[i] == ' ' {
++			i++
++		}
++		if i == len(line) {
++			break
++		}
++		if line[i] == '"' || line[i] == '[' {
++			end := byte('"')
++			if line[i] == '[' {
++				end = ']'
++			}
++			start := i
++			i++
++			for i < len(line) && line[i] != end {
++				i++
++			}
++			if i == len(line) {
++				return nil, fmt.Errorf("unterminated field")
++			}
++			i++
++			fields = append(fields, line[start:i])
++		} else {
++			start := i
++			for i < len(line) && line[i] != ' ' {
++				i++
++			}
++			fields = append(fields, line[start:i])
++		}
++	}
++	return fields, nil
++}
+diff --git a/internal/logparse/logparse_test.go b/internal/logparse/logparse_test.go
+new file mode 100644
+index 0000000..428b551
+--- /dev/null
++++ b/internal/logparse/logparse_test.go
+@@ -0,0 +1,31 @@
++package logparse
++
++import "testing"
++
++func TestParse(t *testing.T) {
++	cases := []struct {
++		name, line string
++		wantPath   string
++		wantStatus int
++		wantBad    bool
++	}{
++		{name: "valid query removed", line: `203.0.113.9 - - [10/Oct/2026:13:55:36 +0000] "GET /api/items?id=3 HTTP/1.1" 200 512 "-" "curl/8.0" 0.042`, wantPath: "/api/items", wantStatus: 200},
++		{name: "empty", line: "", wantBad: true},
++		{name: "bad timestamp", line: `203.0.113.9 - - [bad] "GET / HTTP/1.1" 200 12 "-" "agent" 0.1`, wantBad: true},
++		{name: "bad status", line: `203.0.113.9 - - [10/Oct/2026:13:55:36 +0000] "GET / HTTP/1.1" nope 12 "-" "agent" 0.1`, wantBad: true},
++		{name: "bad duration", line: `203.0.113.9 - - [10/Oct/2026:13:55:36 +0000] "GET / HTTP/1.1" 200 12 "-" "agent" nope`, wantBad: true},
++		{name: "non-finite duration", line: `203.0.113.9 - - [10/Oct/2026:13:55:36 +0000] "GET / HTTP/1.1" 200 12 "-" "agent" NaN`, wantBad: true},
++		{name: "malformed request", line: `203.0.113.9 - - [10/Oct/2026:13:55:36 +0000] "bad" 200 12 "-" "agent" 0.1`, wantBad: true},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			got, err := Parse(tc.line)
++			if (err != nil) != tc.wantBad {
++				t.Fatalf("Parse(%q) error = %v, wantBad %v", tc.line, err, tc.wantBad)
++			}
++			if err == nil && (got.Path != tc.wantPath || got.Status != tc.wantStatus) {
++				t.Errorf("Parse(%q) = path %q status %d, want path %q status %d", tc.line, got.Path, got.Status, tc.wantPath, tc.wantStatus)
++			}
++		})
++	}
++}
+diff --git a/internal/stats/stats.go b/internal/stats/stats.go
+new file mode 100644
+index 0000000..23e38d7
+--- /dev/null
++++ b/internal/stats/stats.go
+@@ -0,0 +1,77 @@
++// Package stats aggregates parsed access log records into a report.
++package stats
++
++import (
++	"math"
++	"sort"
++
++	"example.com/app/internal/logparse"
++)
++
++// PathCount records the request count for a path.
++type PathCount struct {
++	Path  string `json:"path"`
++	Count int    `json:"count"`
++}
++
++// Report contains aggregate access log statistics.
++type Report struct {
++	Total         int            `json:"total_requests"`
++	Malformed     int            `json:"malformed_lines"`
++	TopPaths      []PathCount    `json:"top_paths"`
++	StatusClasses map[string]int `json:"status_classes"`
++	P50MS         float64        `json:"p50_ms"`
++	P95MS         float64        `json:"p95_ms"`
++	P99MS         float64        `json:"p99_ms"`
++	ErrorsPerHour map[string]int `json:"errors_per_hour"`
++}
++
++// Calculate builds a report from records, malformed line count, and top path limit.
++func Calculate(entries []logparse.Entry, malformed, top int) Report {
++	counts := make(map[string]int)
++	classes := map[string]int{"2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0}
++	hours := make(map[string]int)
++	times := make([]float64, 0, len(entries))
++	for _, e := range entries {
++		counts[e.Path]++
++		class := e.Status / 100
++		if class >= 2 && class <= 5 {
++			key := string(rune('0'+class)) + "xx"
++			classes[key]++
++		}
++		if class == 5 {
++			hours[e.Time.Format("2006-01-02T15:00:00-07:00")]++
++		}
++		times = append(times, e.RequestTime*1000)
++	}
++	paths := make([]PathCount, 0, len(counts))
++	for path, count := range counts {
++		paths = append(paths, PathCount{Path: path, Count: count})
++	}
++	sort.Slice(paths, func(i, j int) bool {
++		if paths[i].Count != paths[j].Count {
++			return paths[i].Count > paths[j].Count
++		}
++		return paths[i].Path < paths[j].Path
++	})
++	if top < 0 {
++		top = 0
++	}
++	if top < len(paths) {
++		paths = paths[:top]
++	}
++	sort.Float64s(times)
++	return Report{Total: len(entries), Malformed: malformed, TopPaths: paths, StatusClasses: classes,
++		P50MS: percentile(times, .50), P95MS: percentile(times, .95), P99MS: percentile(times, .99), ErrorsPerHour: hours}
++}
++
++func percentile(values []float64, p float64) float64 {
++	if len(values) == 0 {
++		return 0
++	}
++	index := int(math.Ceil(p*float64(len(values)))) - 1
++	if index < 0 {
++		index = 0
++	}
++	return values[index]
++}
+diff --git a/internal/stats/stats_test.go b/internal/stats/stats_test.go
+new file mode 100644
+index 0000000..5fea1b9
+--- /dev/null
++++ b/internal/stats/stats_test.go
+@@ -0,0 +1,42 @@
++package stats
++
++import (
++	"testing"
++	"time"
++
++	"example.com/app/internal/logparse"
++)
++
++func TestCalculate(t *testing.T) {
++	base, _ := time.Parse(time.RFC3339, "2026-10-10T13:00:00Z")
++	cases := []struct {
++		name                      string
++		entries                   []logparse.Entry
++		malformed, top            int
++		wantTotal                 int
++		wantP50, wantP95, wantP99 float64
++		wantPaths                 int
++		want5xx                   int
++	}{
++		{name: "empty", malformed: 2, top: 10, wantTotal: 0},
++		{name: "single", entries: []logparse.Entry{{Path: "/a", Status: 200, RequestTime: .042, Time: base}}, top: 10, wantTotal: 1, wantP50: 42, wantP95: 42, wantP99: 42, wantPaths: 1},
++		{name: "percentile edges and top", entries: []logparse.Entry{{Path: "/b", Status: 500, RequestTime: .01, Time: base}, {Path: "/a", Status: 404, RequestTime: .02, Time: base}, {Path: "/a", Status: 503, RequestTime: .03, Time: base}, {Path: "/c", Status: 302, RequestTime: .04, Time: base}}, malformed: 1, top: 2, wantTotal: 4, wantP50: 20, wantP95: 40, wantP99: 40, wantPaths: 2, want5xx: 2},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			got := Calculate(tc.entries, tc.malformed, tc.top)
++			if got.Total != tc.wantTotal {
++				t.Errorf("Calculate total = %d, want %d", got.Total, tc.wantTotal)
++			}
++			if got.P50MS != tc.wantP50 || got.P95MS != tc.wantP95 || got.P99MS != tc.wantP99 {
++				t.Errorf("Calculate percentiles = %.3f/%.3f/%.3f, want %.3f/%.3f/%.3f", got.P50MS, got.P95MS, got.P99MS, tc.wantP50, tc.wantP95, tc.wantP99)
++			}
++			if len(got.TopPaths) != tc.wantPaths {
++				t.Errorf("Calculate top paths = %d, want %d", len(got.TopPaths), tc.wantPaths)
++			}
++			if got.StatusClasses["5xx"] != tc.want5xx {
++				t.Errorf("Calculate 5xx = %d, want %d", got.StatusClasses["5xx"], tc.want5xx)
++			}
++		})
++	}
++}

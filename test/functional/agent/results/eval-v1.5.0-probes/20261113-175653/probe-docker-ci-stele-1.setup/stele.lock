@@ -1,0 +1,450 @@
+{
+  "version": 1,
+  "project": "0ede65c7-c0a2-4822-a033-be83b89732a9",
+  "rules": [
+    {
+      "id": "614a47d2-07e0-4ee8-b405-2746aecd9885",
+      "source": "stelemd",
+      "hash": "f64bc756ac4a52e515a3f757026770ab3299925db588179cea0fc9cc6b4f5106",
+      "position": 0
+    },
+    {
+      "id": "82000039-a1d4-43ef-8f80-b517db8df80b",
+      "source": "stelemd",
+      "hash": "63839bca80e14aaf38b0c76688da2dcb9a1a118fd7bcf3364ccb7b80442492ee",
+      "position": 1
+    },
+    {
+      "id": "640c7f9c-b55c-472a-b034-59b59193f1b8",
+      "source": "stelemd",
+      "hash": "fe488e5d42720e7d7498b10443c0c57595be3708d32cfa380b81c6b8b4450a22",
+      "position": 2
+    },
+    {
+      "id": "fef9ab04-e408-480d-bf07-35d2ce0bfcf0",
+      "source": "stelemd",
+      "hash": "0669560ff39b1c1d74994df9b4b6176dbb2a8f84ad3885a2172c156635e63a6c",
+      "position": 3
+    },
+    {
+      "id": "a3c20c8b-bf62-45ac-8d66-dd4f6b729924",
+      "source": "stelemd",
+      "hash": "ddb33b23e3dabf7727d90c92a3a8349fdcc81577d63e4d87eb99854614070fe5",
+      "position": 4
+    },
+    {
+      "id": "a647ed9d-f7ec-4576-89e0-5503afda97c1",
+      "source": "stelemd",
+      "hash": "b7c758cd61e9bb6b73864379c87f0185bbebebdf4864bdd91fe55e48eb36eb61",
+      "position": 5
+    },
+    {
+      "id": "7ad83d73-73dd-4d1e-86ab-5c2c26ebe912",
+      "source": "stelemd",
+      "hash": "15e2b7c71e6dc54c49335a24045c08ce8a3a06485f5aa82504b154d3647efe6a",
+      "position": 6
+    },
+    {
+      "id": "eb0d9319-5893-431a-bdb0-0a9e44daa88b",
+      "source": "stelemd",
+      "hash": "942a55ee6baf0d28fa6662af430515607f10a73a2b224ac73db9187208cadee3",
+      "position": 7
+    },
+    {
+      "id": "5dd4e39c-4f76-4430-bab6-1e199f2140b2",
+      "source": "stelemd",
+      "hash": "6fa7063bd67671e42c8b92585415e60d2292c9d47ff2116237e32368a854bf6a",
+      "position": 8
+    },
+    {
+      "id": "9cecd748-a7db-4e29-852c-254e896d2b20",
+      "source": "stelemd",
+      "hash": "bdae10d2efd2787ad9e6b9e2a2c64318bfd520f4bcfa502d6a634ac850d27916",
+      "position": 9
+    },
+    {
+      "id": "52e0179c-f862-4c9d-9575-b40188eaf99b",
+      "source": "stelemd",
+      "hash": "9dd77a6f15892073984b10e5da8a92f12f2ce02b11009971756debdaada9678f",
+      "position": 10
+    },
+    {
+      "id": "10733645-823e-41b8-b24c-321a8ac22fd3",
+      "source": "stelemd",
+      "hash": "ebf189e391969d77374f72eddd09b5a92ecf0b64a90f0794bc0ae23f658c464b",
+      "position": 11
+    },
+    {
+      "id": "2c38c4ec-5790-44f5-a739-f8936506133b",
+      "source": "stelemd",
+      "hash": "54490b9232d534b44311b128c5780ad7033ff230f644c668a1ba428be1628995",
+      "position": 12
+    },
+    {
+      "id": "5891ea05-f00f-4df7-87ad-5ade024bbf59",
+      "source": "stelemd",
+      "hash": "1d3e9e378c9c280815d0dfda86eae5541b34b60db59fad28c4fecee45f22704f",
+      "position": 13
+    },
+    {
+      "id": "b0c4f644-ba5e-4de1-bb5f-000eb8a98689",
+      "source": "stelemd",
+      "hash": "d9cef049a9717c5002142bab85d1c884f22b8825e65148a13c833b40436ffe04",
+      "position": 14
+    },
+    {
+      "id": "58b27f88-09f5-40af-b3e5-483cce92c55e",
+      "source": "stelemd",
+      "hash": "9220ecca3edd9cd133b0ba442c2347f9cd2a4253e6beb6501ac9c623899e667f",
+      "position": 15
+    },
+    {
+      "id": "55d58a32-90b1-41a7-aed8-77e792b6f609",
+      "source": "stelemd",
+      "hash": "7315dafb7461b1567efbee621c9597295295421f58079300e1119c4fc3969f1c",
+      "position": 16
+    },
+    {
+      "id": "b255efc2-4b86-4896-865d-86e62ad270ec",
+      "source": "stelemd",
+      "hash": "90b133a4e0290ab0c44ff22633e69b29cb2b0f2aa9c47ac155a44e1599afc9ce",
+      "position": 17
+    },
+    {
+      "id": "20c11e99-4904-4fa6-86ce-f1eaddd4ae82",
+      "source": "stelemd",
+      "hash": "26319f000f21f56b7f011bf886f69b46bf3372d42c6558f902c0039c08cffa81",
+      "position": 18
+    },
+    {
+      "id": "72e464c9-53ee-49f5-a4c0-57578ef54db5",
+      "source": "stelemd",
+      "hash": "9e01faf2dac08fc1bec8a819100cc1182f610fddb5beacd3e4aee9420745d33b",
+      "position": 19
+    },
+    {
+      "id": "89bd1aa4-796e-448f-ba25-5bd8a3eb744b",
+      "source": "stelemd",
+      "hash": "c78aea3832d9dd665eff41b7279a0a49d39f01e04bd727b46ad534afcefcdb74",
+      "position": 20
+    },
+    {
+      "id": "974633aa-3f35-4e84-9c01-15cd46880226",
+      "source": "stelemd",
+      "hash": "7e7ff2f57a55d2d7be2a4cb52c0d4bc4ccc293342c6ef8de836b03a7aba16bbf",
+      "position": 21
+    },
+    {
+      "id": "28683901-1460-4bbe-a5f5-f8f4bcde2401",
+      "source": "stelemd",
+      "hash": "541d044203e2b6fec04e5fdc31c6ff055a0836a72d103296171c97e502043c26",
+      "position": 22
+    },
+    {
+      "id": "22bbec93-f318-44f4-b39f-a2e4cdf05690",
+      "source": "stelemd",
+      "hash": "8583d461234b67d3bda0d5a46b2edfff4e45fc4970dc656a8d0370a3cbc98540",
+      "position": 23
+    },
+    {
+      "id": "4a2d3c60-f3c2-4157-939f-ee838f6abe7b",
+      "source": "stelemd",
+      "hash": "3e9a82d76e8af4299cbe5e472a53895bcc7f826fd2b7ecc996d9fc1687e5c2d5",
+      "position": 24
+    },
+    {
+      "id": "05d8dbd8-5919-4208-a6eb-d3efe87c7079",
+      "source": "stelemd",
+      "hash": "9801b73904463c2bd193487d972f92269d2152432dbcc9a5acbddf1b2d4becc2",
+      "position": 25
+    },
+    {
+      "id": "87db71e3-8796-4fca-915d-6cdfe1594bfc",
+      "source": "stelemd",
+      "hash": "2d4f551fc9150b4332442639d9b922e3a987f28a65575ba511b4caff174ae9c3",
+      "position": 26
+    },
+    {
+      "id": "d4c924ca-fbe1-4b7f-827a-4f0b17d6076c",
+      "source": "stelemd",
+      "hash": "f0dc1ad8d1b4060b85df43b066bc2a63a73049f9872f045528f5f7b8eb19e31c",
+      "position": 27
+    },
+    {
+      "id": "0032c812-ce66-42e1-8714-a6bfeca0fe2d",
+      "source": "stelemd",
+      "hash": "154048784a5664e6acf85bddbc7336b271f0f7c8d35b4ff78aecba3bacf0e224",
+      "position": 28
+    },
+    {
+      "id": "1703857b-6142-4815-8069-4bf503bd7a64",
+      "source": "stelemd",
+      "hash": "5c6bd97bdcbfc74a5e0515e5061b515e425da80ffd2a3fb42e0afb8af223b90e",
+      "position": 29
+    },
+    {
+      "id": "097a74b7-0431-4f78-88be-596221f7e00b",
+      "source": "stelemd",
+      "hash": "61652d5b912eb6c097907c9552aa48640dc313efcdfc676545478abeeff3dd9a",
+      "position": 30
+    },
+    {
+      "id": "472701af-aa25-45ec-95f4-cb4257a8353a",
+      "source": "stelemd",
+      "hash": "1330075fc884e824427164688f0eea6d359b65cab356f9d12fb7a436a1f14fcb",
+      "position": 31
+    },
+    {
+      "id": "835951b5-50d7-4781-aa1b-c49f947f454b",
+      "source": "stelemd",
+      "hash": "8255487660ce7cdd5793382031e3f9a967dc1ab1c79a459e2817d93003d2743f",
+      "position": 32
+    },
+    {
+      "id": "51ef0bc6-3dee-487f-8e9a-f1d1a21e99a7",
+      "source": "stelemd",
+      "hash": "386fa8e9b5134b72e1aa7b2ff31eac67c6146df0b46274b30e61f0250d011242",
+      "position": 33
+    },
+    {
+      "id": "97a41e5f-3103-4eec-ab23-59d047a75b9c",
+      "source": "stelemd",
+      "hash": "5efdfe19dcd39b5b39033796d79091859a8476487eccddfb52eb9ade8ae90ca3",
+      "position": 34
+    },
+    {
+      "id": "20209348-03bc-4ba1-ad70-ba04c66b0483",
+      "source": "stelemd",
+      "hash": "c9f8b3c745657c89afde4e89ba2cf40155da94e1ee3c06ef4473e4a7bb5d495b",
+      "position": 35
+    },
+    {
+      "id": "8c273efe-48ab-4d24-927d-799b04ff7346",
+      "source": "stelemd",
+      "hash": "7eb116267e92115f6458f65c237109be3c72ef098cc5fe0d35ec5625b3b208e1",
+      "position": 36
+    },
+    {
+      "id": "418d5f31-fec3-4620-bd20-f5fa13d11fc1",
+      "source": "stelemd",
+      "hash": "4bbb25c4b67de120fddef6cbcfa3495102c75185805e09c4dc2e7ce5f603b33d",
+      "position": 37
+    },
+    {
+      "id": "0671e38f-f2d7-43e1-9a5c-0990586f9f4c",
+      "source": "stelemd",
+      "hash": "126e0572978c1e91cd0c4817e958ae7d95c26daf020c5152bf41824caf8756f9",
+      "position": 38
+    },
+    {
+      "id": "f9aa4669-66f6-4444-a446-147d8cd24e35",
+      "source": "stelemd",
+      "hash": "14e7607fb400e4e9ff0c1c11b0702b26c895a695c6db33589a230d8ad7a50ee6",
+      "position": 39
+    },
+    {
+      "id": "4c796fd3-7532-4d56-b854-277510128773",
+      "source": "stelemd",
+      "hash": "2ffd5f296641e1d86bcdce5e2aa50441b1536022a32033213c0e2aec0e8d20fd",
+      "position": 40
+    },
+    {
+      "id": "3f993528-adeb-454f-bbb2-97bc12d63012",
+      "source": "stelemd",
+      "hash": "a18338e68ff14f3ed3de8813eee67eb925ce251ddbfd072e433ba60969584a2c",
+      "position": 41
+    },
+    {
+      "id": "aab5424a-3393-404b-a213-307aa62ef11a",
+      "source": "stelemd",
+      "hash": "d295632325984087f092a2ef78c87ed46b57f182573676685a7bd6a508a9e8ab",
+      "position": 42
+    },
+    {
+      "id": "88b1d8bd-41af-48f2-ac23-ce86a68fef76",
+      "source": "stelemd",
+      "hash": "e2821cf7b44a752b8d029a5eb63ae1b3a1b01643e1b23615c6bc34dfb3189dc7",
+      "position": 43
+    },
+    {
+      "id": "82e01618-5007-4542-9790-d994eaebefcf",
+      "source": "stelemd",
+      "hash": "38b65efa454d9ca345b85004e20c1f0fe4a9523109f131d64f45007bef35d4c9",
+      "position": 44
+    },
+    {
+      "id": "f967aaa7-1b61-43d5-97c9-9c8e81e52790",
+      "source": "stelemd",
+      "hash": "f16cfc16eae63f2b72d47a8a52ff347ba1c58a06c467de4a6a4a50872c3ad2ce",
+      "position": 45
+    },
+    {
+      "id": "06a6194f-4647-47d3-8e01-1c80a99dd257",
+      "source": "stelemd",
+      "hash": "94785d4a40a82d66bf38a06ec8cf5807877ba9bf7463b06ed4a6110a04a43cc6",
+      "position": 46
+    },
+    {
+      "id": "00c3ca67-5f25-43f2-bd6e-662279620d76",
+      "source": "stelemd",
+      "hash": "f727b9028551608b83a1169b9b0a2228e402114554814923f813584ddf7d472f",
+      "position": 47
+    },
+    {
+      "id": "3e586f99-2c76-4bfe-b03a-380ceb3f0ea8",
+      "source": "stelemd",
+      "hash": "3ccc235fe642129fd71363711fcf03414a7e1f32f83697ea7084ef0a1d505551",
+      "position": 48
+    },
+    {
+      "id": "637a0faf-5e74-4788-b2dd-d0d0d6dbcc0c",
+      "source": "stelemd",
+      "hash": "85cb71cf60b653c5b610943d69c64f1d9b53bbb4efe80bae6584e0a7382b2733",
+      "position": 49
+    },
+    {
+      "id": "43b458ba-0d5a-4fd3-8c70-92c8680a5d94",
+      "source": "stelemd",
+      "hash": "1ec1717bcc4cadbe27c3dede0f70dbecd6ce641cd6992edd6b87fac130ffc749",
+      "position": 50
+    },
+    {
+      "id": "e9efd7c2-66d7-44d7-b758-1ec5772bf514",
+      "source": "stelemd",
+      "hash": "f639f693a452bcbb7d16f484216809bde9f854af538717617dea788c1942d4d6",
+      "position": 51
+    },
+    {
+      "id": "e722f69c-7bf1-4a4e-9e6e-806d19ff75f3",
+      "source": "stelemd",
+      "hash": "52a24638db7b19185065ce284c56490c2f125d4bda9838dc2dff34aa11208445",
+      "position": 52
+    },
+    {
+      "id": "bf038a48-2dff-4453-b547-e872faf03927",
+      "source": "stelemd",
+      "hash": "9858c26b554cd7d0f38ce9feb6b8931eb10c4ddea82d8b30da685f013c2ed528",
+      "position": 53
+    },
+    {
+      "id": "7ec9f842-76d6-4bfe-9beb-fc1307377f3f",
+      "source": "stelemd",
+      "hash": "96decbbfc1cbfc5e7926ec1c7d21380e2f1c8d378048f444f01f78410961f127",
+      "position": 54
+    },
+    {
+      "id": "623f113b-e977-46c4-bd45-8021d3463d60",
+      "source": "stelemd",
+      "hash": "9488ed2bd42faed802f108fa0dde4764403e9a67f5e890e77e10eff57890fc9a",
+      "position": 55
+    },
+    {
+      "id": "91cc9fce-6f7e-4eb4-9cb0-a559188a5c9b",
+      "source": "stelemd",
+      "hash": "0011f1ece89c8270bf80bcf83fcd9b8ba03a0c91239e31bc533b6f5d36da0e57",
+      "position": 56
+    },
+    {
+      "id": "3e615bf6-b4a9-4931-b6ae-781a05fdc437",
+      "source": "stelemd",
+      "hash": "6c8b9d2d818ffd4971b479ca1cda33d67c18a83e03fb7584443fc0b0e942db75",
+      "position": 57
+    },
+    {
+      "id": "460f55b3-6e61-4a91-8417-34880cddc805",
+      "source": "stelemd",
+      "hash": "3ac1ad69b9a0017a36ffe8a6c19848441e2bbe7be1d04d92e185296ece42b4ab",
+      "position": 58
+    },
+    {
+      "id": "89d9d080-49e0-4ac6-844c-3cc223035643",
+      "source": "stelemd",
+      "hash": "78129343ae7d6890c4cbf02c5f18801b191518eeeec29b645769fe594c527886",
+      "position": 59
+    },
+    {
+      "id": "ae4066df-10fd-4b69-ab1f-592a1103bca7",
+      "source": "stelemd",
+      "hash": "d1f87b182a957a76c3a1b40ba43f5713b35fbb0cd276c8cc9997438c22564ba6",
+      "position": 60
+    },
+    {
+      "id": "921ab138-26b2-4a6f-8e06-ef2942266baa",
+      "source": "stelemd",
+      "hash": "48e531acb1d66c7a85170e75995df26bbfa365d23c3398c876e2af38af0a491e",
+      "position": 61
+    },
+    {
+      "id": "6d9cce61-cf74-4a28-97dd-601c972a1db9",
+      "source": "stelemd",
+      "hash": "562b43699e15c33d2944d16c001db53f314b46bbd7988c9c85a591f157eec006",
+      "position": 62
+    },
+    {
+      "id": "501238df-c8b5-4974-879f-2159e4637688",
+      "source": "stelemd",
+      "hash": "7a162c154c7fd8a8a1a1c46ed7d7d04dfb7f9adae755cfb64320aa9aad54ed96",
+      "position": 63
+    },
+    {
+      "id": "a63736c7-21b2-4961-b176-f52ddbfcee03",
+      "source": "stelemd",
+      "hash": "b145d7bde6b5ee9d6f6bfcc378fd0443e9e09905e8b32949da4585ef72daa779",
+      "position": 64
+    },
+    {
+      "id": "69f2cb81-727b-486e-98f6-734e718cc9c8",
+      "source": "stelemd",
+      "hash": "79aee2cfbbe29c5fccaaa86c466cfaf59ba3f75de05e998f448dae255782e485",
+      "position": 65
+    },
+    {
+      "id": "e3df6770-824d-4b12-ae9f-7db87e29a804",
+      "source": "stelemd",
+      "hash": "8bbefa1bc7ba6a94d39d43fd2d97528d07742e286543586cea2a3322232dad11",
+      "position": 66
+    },
+    {
+      "id": "56a35b4a-cb31-4b9a-807e-63c0f1b2e4fa",
+      "source": "stelemd",
+      "hash": "c9c04309830eb2eda2d59f2bea9fdfbcbad0a684cd81303755808c2e8b7a58d8",
+      "position": 67
+    },
+    {
+      "id": "be95377a-3b43-4742-a468-3f052db89139",
+      "source": "stelemd",
+      "hash": "480e95a4c1019b196a365a90834a47154ee429fa93215e7bab518423ad424240",
+      "position": 68
+    },
+    {
+      "id": "3febe1bd-22c8-4fd4-9861-14b58131e790",
+      "source": "stelemd",
+      "hash": "555dadeded7d35d967a38e93090bb5812af8be3d5917fa4b8fa293e139f53563",
+      "position": 69
+    },
+    {
+      "id": "db0ea30d-73af-4c1e-90e3-b732268229c9",
+      "source": "stelemd",
+      "hash": "3c8ae6ddd491a24dc003a52aaca7f8ba5700a7242495e0bd8132b17ac3c7a927",
+      "position": 70
+    },
+    {
+      "id": "32351bf1-8118-4a7d-9999-be74e1e815a9",
+      "source": "stelemd",
+      "hash": "678f26f8a90c70da3a2224c6810cd479bfb3f19293a7b4b6910bb78aaac41707",
+      "position": 71
+    },
+    {
+      "id": "29b49841-71eb-4356-afb2-27f6267fdf65",
+      "source": "stelemd",
+      "hash": "8a1b24802c2e829ce405f1bcc0e1b01816da56c85242b51554751b21dc264e1f",
+      "position": 72
+    },
+    {
+      "id": "11fc0bbc-e5c4-4212-a5d7-a26b4237ca06",
+      "source": "stelemd",
+      "hash": "00ea6a847b4c56009221ca6dd5e8c27d2c644e8a47c87a5b5890c1eab3442c1a",
+      "position": 73
+    }
+  ]
+}

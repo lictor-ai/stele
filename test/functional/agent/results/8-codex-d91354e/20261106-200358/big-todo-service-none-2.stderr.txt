@@ -1,0 +1,11 @@
+2026-11-06T19:14:48.036777Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in C:\Users\Nacer\AppData\Local\Temp\stele-eval-big-todo-service-none-2-217686254\repo\internal\todo\todo_test.go:
+			item := s.Create(fmt.Sprintf("%d-%d", worker, j))
+			done := j%2 == 0
+			if _, ok := s.Get(item.ID); !ok {
+				t.Errorf("missing created item")
+			}
+			if _, ok := s.Update(item.ID, nil, &done); !ok {
+				t.Errorf("failed update")
+			}
+			if j%3 == 0 {
+				s.Delete(item.ID)

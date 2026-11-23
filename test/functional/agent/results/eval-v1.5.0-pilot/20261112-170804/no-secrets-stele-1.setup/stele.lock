@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "project": "0965e789-77c3-4114-8ce6-3ff9ac44edd6",
+  "rules": [
+    {
+      "id": "d3408dab-3945-430b-a8ab-fd7364984443",
+      "source": "stelemd",
+      "hash": "b291c7ebb4eafdd4b9e758ce0a12fbfab27e71b0b303c34acd3cda78e0d29160",
+      "position": 0
+    }
+  ]
+}
