@@ -16,8 +16,8 @@ Include:
 
 ## Supported versions
 
-Only the latest release gets fixes. Today that is the 1.6 line. A fix ships
-in a new release; older releases are not patched.
+Only the latest release gets fixes. A fix ships in a new release; older
+releases are not patched.
 
 ## What counts
 
