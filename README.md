@@ -13,7 +13,7 @@ Write your rules once in `stele.md`. stele shows them to the agent before it wri
 checks what it wrote, and checks again in CI.
 
 [![CI](https://github.com/lictor-ai/stele/actions/workflows/ci.yml/badge.svg)](https://github.com/lictor-ai/stele/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v1.6.0-blue)](https://github.com/lictor-ai/stele/releases)
+[![Release](https://img.shields.io/github/v/release/lictor-ai/stele)](https://github.com/lictor-ai/stele/releases)
 [![Go](https://img.shields.io/badge/go-1.27%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
