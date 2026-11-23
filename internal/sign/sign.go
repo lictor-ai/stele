@@ -11,8 +11,11 @@
 // stele.lock is shared on purpose and is not signed: it holds no rule text,
 // and changes to it show in review.
 //
-// This does not defend against malware already running as the user, which
-// can read the key; nothing file-based can.
+// So the signature sets apart files made on another machine or in another
+// repository, committed or copied. It does not stop a program running as the
+// user, the coding agent included, which can read the key and sign files of
+// its own; nothing file-based can. stele hook asks before a write to the key,
+// and sees no read (D96).
 package sign
 
 import (

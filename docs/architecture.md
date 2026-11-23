@@ -1724,7 +1724,12 @@ outside every project. A hard link or an 8.3 short name, which only a same-file
 test tells, is caught for the root's `stele.md`, `stele.json`, `stele.lock` and
 `.stele/` only. A write to a `.git` below the root, or into
 one, asks the same way (D94). Files inside the root's own `.git/`, such as
-`.git/index.lock`, do not ask. The ask comes before `stele.json`
+`.git/index.lock`, do not ask. A write to stele's signing key
+(`sign.KeyFile(keyDir())`), a path below it, or a removal or move of its
+folder or a folder above it asks too, inside a project or outside every one
+(`signingKey`, D96, #152): names in any case, as written and after links, and
+a same-file test for a hard link or an 8.3 short name. For a folder the
+message says it holds the key. The ask comes before `stele.json`
 is read, so `block_on_error` and the switches change nothing. Claude Code shows
 `permissionDecisionReason` to the user in the prompt; with no one to answer
 (`claude -p`) the call is refused. A deny from another hook wins over it. The
@@ -1823,10 +1828,11 @@ up to its `))`: what subshells written that way write is not read, and with no
 body written with `if`, `case`, `for` or `while` moves the tracked directory for
 what follows.
 A command that writes nothing costs a parse: no key, no index, no file. A
-target that is one of stele's own files, or a `.git` below the root, asks, as
-a Write does (#52). A target a scoped rule covers that the command writes
-content to (`Kind.Writes`: not a removal, a copy or a file or folder made) is
-denied, once per file, per agent and per turn
+target that is one of stele's own files, a `.git` below the root, or stele's
+signing key, its folder or one above it, asks, as a Write does (#52, #152). A
+target a scoped rule covers that the command writes content to
+(`Kind.Writes`: not a removal, a copy or a file or folder made) is denied,
+once per file, per agent and per turn
 (`backstop.DecideBash`, `State.BashDenied`), with the rules not yet shown and
 a pointer to Write and Edit (`bash-message.tmpl`); the same command run at
 least `RetryAfter` later goes through, with a note to run `stele check`. Only a
@@ -2099,8 +2105,11 @@ would still be trusted. **So generated files are signed** (D57, `internal/sign`)
   changes to it show in review. `state/current` is not signed either: it only
   names a session, whose state must verify.
 
-Malware already running as the user can read the key; nothing file-based stops
-that, as for git or any local tool.
+So the signature sets apart files made on another machine or in another
+repository, committed or copied. A program running as the user, the agent
+included, can read the key and sign files and log lines of its own; nothing
+file-based stops that, as for git or any local tool. The hook asks before a
+write to the key (D96); it sees no read.
 
 **`journal.Append` appends one line per call through `safefile.Append`**, which
 holds the lock file `log.jsonl.lock` on every OS, opens with `O_APPEND`, never
