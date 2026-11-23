@@ -28,10 +28,11 @@ go run ./test/functional/agent -eval -out eval-v1.5.0-pilot   # the published ev
 | `-claude` | newest VS Code extension binary, else `claude` on `PATH` |
 | `-stele` | built from this module, with the latest tag as its version when stele's code is unchanged and nothing new is in it since that tag; a binary given here has its `go version -m` build info recorded |
 | `-eval` | off: the published evaluation's 9 scenarios (not the probes), arms `claudemd` and `stele` |
-| `-out` | none: the files go in `results/`; with a name, in `results/<name>/` |
-| `-regrade` | none: a `results/<out>/<time>` folder whose saved runs are graded again from their diffs, with no agent; it prints the grades |
+| `-out` | none: the files go in `results/`; with a name, in `results/<name>/`. git ignores both: published results go on the `eval-results` branch ([results/README.md](results/README.md)) |
+| `-baseline` | none: comma-separated local `<time>.jsonl` files whose runs of the arms not run now join the summary |
+| `-regrade` | none: a local `<out>/<time>` results folder (under `results/`, or in a checkout of the `eval-results` branch: [results/README.md](results/README.md)) whose saved runs are graded again from their diffs, with no agent; it prints the grades |
 | `-regrade-write` | off: with `-regrade`, also write `<time>.regraded.md` and `<time>.regraded.jsonl` beside the folder |
-| `-rescrub` | none: a `results/<out>/<time>` folder whose files, and the summaries beside it, are scrubbed again in place with the current scrubber, then searched for private data; no agent |
+| `-rescrub` | none: a local `<out>/<time>` results folder, as for `-regrade`, whose files, and the summaries beside it, are scrubbed again in place with the current scrubber, then searched for private data; no agent |
 | `-keep` | off: each run's temporary tree is deleted after grading, and its diff kept in `results/<time>/` |
 
 ## Arms
@@ -58,7 +59,7 @@ Each run is one `codex exec --json`, with the prompt on stdin. **It uses your Ch
 
 ## Results so far
 
-[results/README.md](results/README.md) lists every experiment.
+[The `eval-results` branch](https://github.com/lictor-ai/stele/blob/eval-results/test/functional/agent/results/README.md) lists every experiment ([results/README.md](results/README.md) says how to check it out).
 
 - **Before v1.0.0-dev.2, stele lost to rules in CLAUDE.md.** With 74 rules,
   compliance was 5/6 against 6/6, at twice the tokens. The cause was a deny
@@ -112,7 +113,7 @@ Every arm is graded the same way. The final tree is copied without its rule file
 
 ## Output
 
-`results/<time>.jsonl` holds one line per run. `results/<time>.md` holds the plain numbers per arm, means per scenario and arm, stele's differences against the other arms, and every violation and note. `results/<time>/` keeps each run's stream, session transcript and diff, and in `<scenario>-<arm>-<rep>.setup/` what the agent was given: the prompt and the rule files. Streams and transcripts stay out of git, except in folders named `eval-*`.
+`results/<time>.jsonl` holds one line per run. `results/<time>.md` holds the plain numbers per arm, means per scenario and arm, stele's differences against the other arms, and every violation and note. `results/<time>/` keeps each run's stream, session transcript and diff, and in `<scenario>-<arm>-<rep>.setup/` what the agent was given: the prompt and the rule files. All of it stays out of git on `main`; a published eval's folder, streams and transcripts included, is committed to the `eval-results` branch at the same path.
 
 A finding the grade does not count is still listed in the run's notes: a line the fixture already had (each old line excuses one finding per rule), a non-blocking rule, a file `stele check` did not check (binary, too large, or ignored by a `.gitignore`), findings past its limit of 100 per rule and file, and the rule files and agent setup the agent changed, which the grader leaves out.
 

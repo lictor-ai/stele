@@ -4,7 +4,8 @@ Status: proposed, not built. Date: 2026-10-24, revised 2026-10-25.
 
 ## Why
 
-The agent eval of 2026-10-24 (`test/functional/agent/results/20261024-161524`)
+The agent eval of 2026-10-24 ([`2-big-9a30450/20261024-161524`](https://github.com/lictor-ai/stele/tree/eval-results/test/functional/agent/results/2-big-9a30450/20261024-161524)
+on the `eval-results` branch)
 compared four arms on three hard tasks with 74 rules, 6 runs each, Sonnet 5.5.
 The two that matter here (blocking violations only; the run's own summary
 counted a non-blocking warning, which the grader no longer does):
