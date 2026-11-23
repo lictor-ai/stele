@@ -421,6 +421,10 @@ func TestShown(t *testing.T) {
 		{"Never put credentials in code, config or tests. Read them…", "Never put credentials in code, config or tests. Read them from the environment.",
 			"Never put credentials in code, config or tests. Read them from the environment.", ""},
 		{"Log through internal/log.", "log through internal/log, not fmt.Print", "Log through internal/log.", "log through internal/log, not fmt.Print"},
+		// A rule's own long message that starts as its body does stays a
+		// message, where its cap applies, never the quote.
+		{"No TODO comments.", "No TODO comments. " + strings.Repeat("Track the work in an issue. ", 10),
+			"No TODO comments.", "No TODO comments. " + strings.Repeat("Track the work in an issue. ", 10)},
 	}
 	for _, tt := range tests {
 		if q, r := Shown(tt.excerpt, tt.message); q != tt.quote || r != tt.rest {

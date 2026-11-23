@@ -163,6 +163,7 @@ func ViolationMessageWithin(w adapter.Words, path string, vs []Violation, more i
 	cut := make([]Violation, len(vs))
 	for i, v := range vs {
 		v.Message = truncate(v.Message, maxRuleMessage)
+		v.Excerpt = truncate(v.Excerpt, maxRuleMessage)
 		cut[i] = v
 	}
 	for n := len(cut); ; n-- {

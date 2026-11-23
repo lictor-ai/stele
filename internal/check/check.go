@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/scope"
@@ -568,13 +569,15 @@ func shorten(s string, n int) string {
 
 // Shown is how to show a violation beside its rule id: the text to quote,
 // and the message to add after it, "" when the quote says it all. A message
-// that starts as the excerpt does, such as a Summary, is quoted alone, in
-// place of the excerpt.
+// that has a Summary's shape, at most about 120 characters with the excerpt
+// as its start, is quoted alone, in place of the excerpt. Any other message,
+// such as a long one of the rule's own, follows the excerpt, where its cap
+// applies.
 func Shown(excerpt, message string) (quote, rest string) {
 	switch {
 	case message == "" || message == excerpt:
 		return excerpt, ""
-	case strings.HasPrefix(message, strings.TrimSuffix(excerpt, "…")):
+	case utf8.RuneCountInString(message) <= summaryLen+1 && shorten(message, excerptLen) == excerpt:
 		return message, ""
 	}
 	return excerpt, message

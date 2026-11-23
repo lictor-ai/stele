@@ -418,9 +418,11 @@ func TestCheckNoGitRepository(t *testing.T) {
 	if code, _, _ := runCmd("compile"); code != exitOK {
 		t.Fatal("compile failed")
 	}
-	code, _, errOut := runCmd("check")
-	if code != exitCantRun || !strings.Contains(errOut, "stele check: needs a git repository") || strings.Contains(errOut, "fatal") {
-		t.Errorf("check outside git = %d, stderr %q, want 2", code, errOut)
+	for _, args := range [][]string{{"check"}, {"check", "--base", "main"}, {"check", "--all"}} {
+		code, _, errOut := runCmd(args...)
+		if code != exitCantRun || !strings.Contains(errOut, "stele check: needs a git repository") || strings.Contains(errOut, "fatal") {
+			t.Errorf("%v outside git = %d, stderr %q, want 2", args, code, errOut)
+		}
 	}
 }
 

@@ -428,6 +428,9 @@ func gitFiles(g gitTool, base string, all bool) ([]string, error) {
 		return g.list("ls-files", "-z")
 	case base != "":
 		if _, err := g.list("rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
+			if errors.Is(err, errNoRepository) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("--base %s: unknown ref", base)
 		}
 		files, err := g.list("diff", "--name-only", "-z", "--relative", "--diff-filter=ACMRT", base+"...HEAD", "--")
@@ -573,7 +576,10 @@ func (g gitTool) raw(args ...string) ([]string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		msg := strings.TrimSpace(errOut.String())
-		if strings.Contains(msg, "not a git repository") {
+		// Only git's own "not a git repository (or any of the parent
+		// directories)": a broken submodule's ".git/modules/x" is not fixed
+		// by git init.
+		if strings.Contains(msg, "not a git repository (or any") {
 			return nil, errNoRepository
 		}
 		if msg != "" {

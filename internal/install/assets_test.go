@@ -185,6 +185,11 @@ func TestViolationMessage(t *testing.T) {
 	if strings.Contains(big, strings.Repeat("m", 201)) || !strings.Contains(big, strings.Repeat("m", 200)+"…") {
 		t.Error("a rule message is not cut at 200 characters")
 	}
+	// The quote is capped as the message is (#157).
+	quoted := ViolationMessage(ccWords, "a.go", []Violation{{Line: 1, Column: 1, RuleID: "r", Excerpt: strings.Repeat("q", 480)}}, 0, true)
+	if strings.Contains(quoted, strings.Repeat("q", 201)) || !strings.Contains(quoted, strings.Repeat("q", 200)+"…") {
+		t.Error("a quote is not cut at 200 characters")
+	}
 	shown := strings.Count(big, "\ninternal/some/long/path/file.go:")
 	if shown == 30 || !strings.Contains(big, fmt.Sprintf("and %d more", 30-shown+2)) {
 		t.Errorf("%d of 30 shown, want some cut and counted:\n%s", shown, big[len(big)-200:])

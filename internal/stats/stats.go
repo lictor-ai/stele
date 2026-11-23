@@ -183,9 +183,9 @@ type Report struct {
 	TZ      string     `json:"tz"`    // the zone days are counted in
 	Log     LogCounts  `json:"log"`
 	Need    Need       `json:"need"`
-	// RulesJudged is whether stats judged which rules are dead, as the text
-	// says: false when the rules could not be read, or with too little data
-	// (All.Enough false, under MinTurns turns).
+	// RulesJudged is whether the rules could be read: false when they could
+	// not, and no rule is called dead. Dead rules are judged only when it is
+	// true and All.Enough is too.
 	RulesJudged bool           `json:"rules_judged"`
 	All         Numbers        `json:"all"`
 	Agents      []AgentNumbers `json:"agents"`
@@ -280,7 +280,7 @@ func Compute(in Input, lines []Line, counts LogCounts) Report {
 		loc = time.UTC
 	}
 	rep := Report{V: ReportVersion, Project: in.Project, Until: in.Until.UTC(), TZ: zone(loc, in.Until),
-		Log: counts, Need: Need{Turns: MinTurns, Broken: MinBroken},
+		Log: counts, Need: Need{Turns: MinTurns, Broken: MinBroken}, RulesJudged: in.RulesKnown,
 		Agents: []AgentNumbers{}, CheckRuns: CheckRuns{Broken: map[string]int{}}}
 	if !in.Since.IsZero() {
 		s := in.Since.UTC()
@@ -304,7 +304,6 @@ func Compute(in Input, lines []Line, counts LogCounts) Report {
 		byAgent[l.Agent] = append(byAgent[l.Agent], l)
 	}
 	rep.All = numbers(in, loc, agentLines)
-	rep.RulesJudged = in.RulesKnown && rep.All.Enough
 	addCheckRuns(&rep.All, in, rep.CheckRuns.Broken)
 	names := make([]string, 0, len(byAgent))
 	for a := range byAgent {
