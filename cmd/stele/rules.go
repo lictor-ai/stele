@@ -54,8 +54,8 @@ func runRules(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("stele rules", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	format := flags.String("format", "text", "output `format`: text or json")
-	if err := flags.Parse(args); err != nil {
-		return exitCantRun
+	if code, ok := parseFlags(flags, args, stdout); !ok {
+		return code
 	}
 	cantRun := func(format string, a ...any) int {
 		fmt.Fprintf(stderr, "stele rules: "+format+"\n", a...)

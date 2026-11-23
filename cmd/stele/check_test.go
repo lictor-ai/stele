@@ -419,7 +419,7 @@ func TestCheckNoGitRepository(t *testing.T) {
 		t.Fatal("compile failed")
 	}
 	code, _, errOut := runCmd("check")
-	if code != exitCantRun || !strings.Contains(errOut, "not a git repository") {
+	if code != exitCantRun || !strings.Contains(errOut, "stele check: needs a git repository") || strings.Contains(errOut, "fatal") {
 		t.Errorf("check outside git = %d, stderr %q, want 2", code, errOut)
 	}
 }

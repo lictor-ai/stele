@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/scope"
@@ -320,7 +319,7 @@ func (g group) finding(v Violation) (f *Finding, ok bool) {
 	}
 	msg := v.Message
 	if msg == "" {
-		msg = r.excerpt
+		msg = Summary(r.Body)
 	}
 	return &Finding{RuleID: r.ID, Excerpt: r.excerpt, File: v.File, Line: v.Line, Column: v.Column, Message: msg, Blocking: r.blocking}, true
 }
@@ -413,7 +412,25 @@ func prepare(ctx context.Context, idx index.Index, cs map[string]Checker, conten
 			p.groups = append(p.groups, g)
 		}
 	}
+	sortProblems(p.report.Problems, idx)
 	return p, nil
+}
+
+// sortProblems puts problems in the order of their rules in idx, the order
+// they are written in, whichever step found them. A problem naming no rule of
+// idx goes last.
+func sortProblems(ps []Problem, idx index.Index) {
+	at := make(map[string]int, len(idx.Rules))
+	for i, e := range idx.Rules {
+		at[e.ID] = i
+	}
+	pos := func(id string) int {
+		if i, ok := at[id]; ok {
+			return i
+		}
+		return len(idx.Rules)
+	}
+	sort.SliceStable(ps, func(i, j int) bool { return pos(ps[i].RuleID) < pos(ps[j].RuleID) })
 }
 
 // unread says which keys of the built-in regex checker a rule with no check
@@ -496,13 +513,28 @@ func sortFindings(fs []Finding) {
 	})
 }
 
-// excerptLen bounds an excerpt, in runes.
-const excerptLen = 60
+// excerptLen bounds an excerpt, and summaryLen a summary, in runes.
+const (
+	excerptLen = 60
+	summaryLen = 120
+)
 
 // Excerpt is the short text shown beside a rule id: a UUID cannot be read
 // (spec §12). It is the body's first paragraph, with its whitespace
-// collapsed, cut to about 60 characters.
+// collapsed, cut at a word to about 60 characters.
 func Excerpt(body string) string {
+	return shorten(paragraph(body), excerptLen)
+}
+
+// Summary is what a violation of a rule with no message says: the start of
+// the rule (spec §3), its first paragraph cut at a word to about 120
+// characters, enough for a sentence or two.
+func Summary(body string) string {
+	return shorten(paragraph(body), summaryLen)
+}
+
+// paragraph is body's first paragraph, its whitespace collapsed.
+func paragraph(body string) string {
 	var words []string
 	for _, line := range strings.Split(body, "\n") {
 		f := strings.Fields(line)
@@ -511,11 +543,41 @@ func Excerpt(body string) string {
 		}
 		words = append(words, f...)
 	}
-	s := strings.Join(words, " ")
-	if utf8.RuneCountInString(s) <= excerptLen {
+	return strings.Join(words, " ")
+}
+
+// shorten cuts s to at most n runes and marks the cut with "…". It cuts
+// between words, unless that would lose more than half of s's first n runes:
+// one long word is cut inside.
+func shorten(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return string([]rune(s)[:excerptLen]) + "…"
+	cut := r[:n]
+	if r[n] != ' ' {
+		for i := n - 1; i > n/2; i-- {
+			if cut[i] == ' ' {
+				cut = cut[:i]
+				break
+			}
+		}
+	}
+	return strings.TrimRight(string(cut), " ,;:") + "…"
+}
+
+// Shown is how to show a violation beside its rule id: the text to quote,
+// and the message to add after it, "" when the quote says it all. A message
+// that starts as the excerpt does, such as a Summary, is quoted alone, in
+// place of the excerpt.
+func Shown(excerpt, message string) (quote, rest string) {
+	switch {
+	case message == "" || message == excerpt:
+		return excerpt, ""
+	case strings.HasPrefix(message, strings.TrimSuffix(excerpt, "…")):
+		return message, ""
+	}
+	return excerpt, message
 }
 
 // checkerErr is err from the checker name, prefixed with it unless it names

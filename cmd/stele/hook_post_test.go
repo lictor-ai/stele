@@ -276,6 +276,21 @@ func TestHookAfterWrite(t *testing.T) {
 	})
 }
 
+// A rule with no message is quoted in the block at more than its 60
+// character excerpt, and cut between words (#157).
+func TestHookAfterWriteLongRuleNoMessage(t *testing.T) {
+	body := "Never print with fmt.Println in production code: use the shared logger in internal/log, so every line is structured and searchable."
+	root := project(t, "check: regex\npattern: fmt\\.Println\n\n"+body+"\n")
+	o, _ := postHook(t, root, "post-write", "main.go", "package main\n\nfunc f() { fmt.Println(1) }\n")
+	if o.Decision != "block" {
+		t.Fatalf("decision %q, want block", o.Decision)
+	}
+	want := `"Never print with fmt.Println in production code: use the shared logger in internal/log, so every line is structured and…"`
+	if !strings.Contains(o.Reason, want) || strings.Contains(o.Reason, "…\": ") {
+		t.Errorf("reason does not quote the rule's start alone, cut at a word:\n%s", o.Reason)
+	}
+}
+
 func TestHookAfterWriteOutsideStele(t *testing.T) {
 	t.Run("file outside the project", func(t *testing.T) {
 		project(t, checkRules)

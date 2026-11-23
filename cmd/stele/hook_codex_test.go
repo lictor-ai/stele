@@ -227,7 +227,7 @@ func TestCodexInitAndPrimedSession(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("init = %d: %s %s", code, out, errOut)
 	}
-	for _, want := range []string{"added stele hooks (PreToolUse, PostToolUse, SessionStart) to " + filepath.Join(".codex", "hooks.json"), "wrote AGENTS.md", "Codex hooks: remind on, check on"} {
+	for _, want := range []string{"added stele hooks (PreToolUse, PostToolUse, SessionStart) to " + ".codex/hooks.json", "wrote AGENTS.md", "Codex hooks: remind on, check on"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("init stdout lacks %q:\n%s", want, out)
 		}

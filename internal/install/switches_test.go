@@ -37,7 +37,7 @@ func TestInitSetsSwitches(t *testing.T) {
 	check("kept", adapter.Switches{RemindOff: true}, " --remind=off")
 
 	changes, _, err = Init(cc, root, "v1.2.0", Set{Check: boolp(false)})
-	if err != nil || len(changes) != 1 || changes[0] != "updated stele hooks in "+cc.SettingsFile() {
+	if err != nil || len(changes) != 1 || changes[0] != "updated stele hooks in "+filepath.ToSlash(cc.SettingsFile()) {
 		t.Errorf("Init check off = %q, %v", changes, err)
 	}
 	check("both off", adapter.Switches{RemindOff: true, CheckOff: true}, " --remind=off --check=off")

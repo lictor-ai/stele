@@ -4,7 +4,7 @@ stele checked your write to {{.Path}}: it breaks these project rules. The write 
 stele checked your write to {{.Path}}: these non-blocking rules flag it; fix them if they are part of your change. Write files with {{.Words.WriteTools}} only, not through {{.Words.Shell}}.
 {{- end}}
 {{range .Violations}}
-{{$.Path}}:{{.Line}}:{{.Column}}: rule {{.RuleID}} "{{.Excerpt}}"{{if ne .Message .Excerpt}}: {{.Message}}{{end}}
+{{$.Path}}:{{.Line}}:{{.Column}}: rule {{.RuleID}} "{{.Excerpt}}"{{if and .Message (ne .Message .Excerpt)}}: {{.Message}}{{end}}
 {{- end}}
 {{- if .More}}
 and {{.More}} more: run `stele check {{.Path}}` to see them all.

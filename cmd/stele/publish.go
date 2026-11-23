@@ -21,9 +21,9 @@ var (
 // request could not be opened: the branch is pushed and the page to open it
 // is printed.
 func runPublish(args []string, stdout, stderr io.Writer) int {
-	root, ok := setup("publish", args, stderr)
+	root, code, ok := setup("publish", args, stdout, stderr)
 	if !ok {
-		return exitCantRun
+		return code
 	}
 	res, err := publishRun(context.Background(), root)
 	if err != nil {
