@@ -92,7 +92,15 @@ Guideline enforcement for coding agents. Go, single binary.
     and exit 0 for it, and `stele status` shows the reason. Any other
     `accepted` with `deferred` is a protocol error. It amends ADR-0014, and
     D82–D85. The spec carries it as D92.
-22. `docs/architecture.md` — how the spec is built: packages, types, contracts.
+22. `docs/adr/0022-a-batch-of-parallel-writes-told-by-when-each-hook-started.md`
+    — the writes of one message are a batch told by when each hook started,
+    before any lock wait (`backstop.Input.Start`); the batch's first deny,
+    last deny and current chain are kept in the signed session
+    (`State.Batch`); the session lock waits at most 5 s within 8.5 s of the
+    hook's start; only a `-tags steletest` build can change the window. It
+    amends ADR-0004's "Parallel writes", and D58 and D61. The spec carries
+    it as D97.
+23. `docs/architecture.md` — how the spec is built: packages, types, contracts.
 
 `stele-design-doc.md` is the discussion document: reasoning and vocabulary, not
 decisions for v1.
