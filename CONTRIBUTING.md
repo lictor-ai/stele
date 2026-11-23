@@ -10,11 +10,10 @@ stele needs Go 1.27 or later (`go.mod` pins the toolchain, 1.27.4).
 ```sh
 go build ./...
 go vet ./...
-go test -timeout 40m ./...
+go test ./...
 ```
 
-The `cmd/stele` tests can take more than 10 minutes, Go's default timeout,
-hence `-timeout 40m`. While you work, test one package:
+While you work, test one package:
 
 ```sh
 go test ./internal/check/ -count=1
@@ -46,9 +45,10 @@ updated `stele.lock` and `.claude/rules/stele-rules.md` with it.
 
 ## Which documents decide
 
-[CLAUDE.md](CLAUDE.md) lists the authoritative documents in order: the v1 spec
-in `docs/superpowers/specs/`, then the ADRs in `docs/adr/`, then
-`docs/architecture.md`. `stele-design-doc.md` is discussion, not decisions.
+[CLAUDE.md](CLAUDE.md) lists the authoritative documents and their order: the
+v1 spec in `docs/superpowers/specs/`, the ADRs in `docs/adr/` (ADR-0004 wins
+over the spec on v1 scope), and `docs/architecture.md`. `stele-design-doc.md`
+is discussion, not decisions.
 
 A change that alters a decision updates the spec in the same pull request. A
 new decision gets an ADR: copy `docs/adr/adr-template.md`, take the next free

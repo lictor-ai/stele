@@ -10,10 +10,10 @@ attacks are not accepted.
 
 ## Reporting
 
-Report a problem privately to the maintainers through GitHub's private
-reporting form, <https://github.com/lictor-ai/stele/security/advisories/new>,
-and say it is a conduct report. For a comment or issue, you can also use
-GitHub's **Report content**. As the Covenant asks, the maintainers respect
+On a comment, issue or pull request, use GitHub's **Report content**, then
+**Report to repository admins**: only the maintainers see it. For anything
+not tied to a comment, open a short issue asking a maintainer to contact you
+privately, without the details. As the Covenant asks, the maintainers respect
 the reporter's privacy.
 
 The maintainers decide what to do, following the Covenant's
