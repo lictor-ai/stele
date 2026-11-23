@@ -1,0 +1,23 @@
+# One grouped pull request per ecosystem. The actions are pinned by SHA;
+# Dependabot moves the SHA and the version comment together.
+#
+# Not covered, bumped by hand: goreleaser's version in release.yml,
+# govulncheck@ in govulncheck.yml, and go.mod's toolchain line.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly # two dependencies
+    open-pull-requests-limit: 2
+    groups:
+      gomod:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      github-actions:
+        patterns: ["*"]

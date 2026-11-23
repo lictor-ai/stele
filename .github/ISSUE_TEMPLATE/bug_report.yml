@@ -1,0 +1,55 @@
+name: Bug report
+description: stele did something it shouldn't, or didn't do something it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A security problem goes to a private report instead: see SECURITY.md.
+        Check README's Limits first: a gap listed there is known.
+  - type: input
+    id: version
+    attributes:
+      label: stele version
+      description: The first line of `stele status`.
+      placeholder: stele v1.6.0 in /home/you/project, project …
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: Windows 11, macOS 15, Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent and its version
+      description: Claude Code (`claude --version`) or Codex (`codex --version`), or none if the agent isn't involved.
+      placeholder: Claude Code 2.3.1
+  - type: textarea
+    id: config
+    attributes:
+      label: stele.md and stele.json
+      description: The smallest part that shows the problem. Remove anything private.
+  - type: textarea
+    id: command
+    attributes:
+      label: What you ran
+      description: The command, or the tool call the agent made, and stele's output.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+    validations:
+      required: true
