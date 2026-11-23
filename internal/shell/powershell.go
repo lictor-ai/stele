@@ -30,8 +30,11 @@ import (
 // $env:NAME and ${env:NAME} expand from the environment (the name's case
 // matters where it does to the OS: on Windows not), $HOME to the user's home
 // and $PWD to the directory the command has moved to, within the budget
-// bash's variables share; one the command sets is unknown from then on.
-// Expressions as paths, splatting, $(...), other automatic variables such as
+// bash's variables share; one the command sets is unknown from then on, in a
+// nested bash too: by assignment, any cmdlet on env: or variable:,
+// Set-Variable and its kin, foreach, [Environment]::SetEnvironmentVariable,
+// or a write after cd env: (#181). A cmd /c script with %VAR% is unknown.
+// Expressions as paths ($x.Name too), splatting, $(...), other automatic variables such as
 // $PSHOME, unknown variables, paths bound from the pipeline, any other
 // Invoke-Expression, Start-Process and scripts are unknown or not seen.
 func PowerShellTargets(command, cwd string) (ts []Target, unknown int) {
@@ -344,9 +347,18 @@ func psWord(s string) (psTok, int) {
 			t.dynamic = true
 			i = psSkipParen(s, i+1)
 		case c == '$' && i+1 < len(s) && psVarStart(s[i+1]):
+			first := b.Len() == 0 && !t.quoted && !t.dynamic
 			name, n := psVarName(s[i+1:])
 			b.WriteString("\x00" + name + "\x00")
 			i += 1 + n
+			if j := psMembers(s, i); first && j > i {
+				// $x.bak, $env:X.Length, $x[0]: an argument that starts with a
+				// variable and a member or an index is an expression, not
+				// "<x>.bak", and it ends after its members (#181).
+				b.WriteString(s[i:j])
+				t.text, t.dynamic = b.String(), true
+				return t, j
+			}
 		default:
 			b.WriteByte(c)
 			i++
@@ -354,6 +366,62 @@ func psWord(s string) (psTok, int) {
 	}
 	t.text = b.String()
 	return t, i
+}
+
+// psMembers is the end of the members and indexes after a variable at i, as
+// PowerShell reads them in an argument: .name, .$name, ."name", .name(…),
+// [i] and ::name, one after another; i when there is none.
+func psMembers(s string, i int) int {
+	ident := func(j int) int {
+		for j < len(s) && (letter(s[j]) || s[j] == '_' || ('0' <= s[j] && s[j] <= '9')) {
+			j++
+		}
+		return j
+	}
+	start, member := i, false
+	for i < len(s) {
+		c := s[i]
+		var next byte
+		if i+1 < len(s) {
+			next = s[i+1]
+		}
+		switch {
+		case c == '.' && (letter(next) || next == '_' || ('0' <= next && next <= '9')):
+			i, member = ident(i+1), true
+		case c == '.' && next == '$' && i+2 < len(s) && psVarStart(s[i+2]):
+			_, n := psVarName(s[i+2:])
+			i, member = i+2+n, true
+		case c == '.' && (next == '\'' || next == '"'):
+			j := strings.IndexByte(s[i+2:], next)
+			if j < 0 {
+				return len(s)
+			}
+			i, member = i+3+j, true
+		case c == ':' && next == ':' && i+2 < len(s) && (letter(s[i+2]) || s[i+2] == '_'):
+			i, member = ident(i+2), true
+		case c == '[':
+			depth := 0
+			for ; i < len(s); i++ {
+				if s[i] == '[' {
+					depth++
+				} else if s[i] == ']' {
+					depth--
+					if depth == 0 {
+						break
+					}
+				}
+			}
+			if i >= len(s) {
+				return len(s)
+			}
+			i, member = i+1, false
+		case c == '(' && member && i > start:
+			i, member = psSkipParen(s, i), false
+		default:
+			return i
+		}
+	}
+	return i
 }
 
 // psDash is the length of the dash s starts with: 1 for -, 3 for the en
@@ -422,11 +490,18 @@ func psVarName(s string) (string, int) {
 type psReader struct {
 	res   *results
 	vars  map[string]string
-	set   map[string]bool // $env: and automatic variables the command sets: unknown
+	set   map[string]bool // $env: and automatic variables the command sets: unknown; "env:\x00" for every $env:
 	dir   string
 	dirOK bool
-	stack []string // Push-Location's
-	depth int      // nested shells read
+	loc   string  // the drive the command moved to when it is no disk: "env", "variable", "hklm" …; "" for files
+	stack []psLoc // Push-Location's
+	depth int     // nested shells read
+}
+
+// psLoc is a location Push-Location saved.
+type psLoc struct {
+	dir, loc string
+	ok       bool
 }
 
 // run reads a command's statements.
@@ -489,7 +564,7 @@ func (p *psReader) value(t psTok) (string, bool) {
 // (results.env), and not at all once the budget is spent.
 func (p *psReader) lookup(name string) (string, bool) {
 	lower := strings.ToLower(name)
-	if p.set[lower] {
+	if p.set[lower] || (p.set[allEnv] && strings.HasPrefix(lower, "env:")) {
 		return "", false
 	}
 	if v, ok := p.vars[lower]; ok {
@@ -536,6 +611,172 @@ func (p *psReader) unset(name string) {
 	p.set[name] = true
 }
 
+// allEnv in psReader.set stands for every $env: variable: the command set
+// one stele cannot name.
+const allEnv = "env:\x00"
+
+// setItem marks the item of a drive that holds variables as set by the
+// command: env:X, variable:x. An item stele cannot name, a wildcard, or the
+// drive itself, marks them all.
+func (p *psReader) setItem(drive, item string) {
+	item = strings.ToLower(strings.TrimLeft(item, `/\`))
+	all := item == "" || strings.ContainsAny(item, "*?[")
+	switch drive {
+	case "env":
+		if all {
+			p.unset(allEnv)
+		} else {
+			p.unset("env:" + item)
+		}
+	case "variable":
+		if all {
+			p.forgetAll()
+			return
+		}
+		delete(p.vars, item)
+		if automatic(item) {
+			p.unset(item)
+		}
+	}
+}
+
+// forgetAll forgets every variable but $env:, as when Remove-Variable * runs.
+func (p *psReader) forgetAll() {
+	clear(p.vars)
+	p.unset("home")
+	p.unset("pwd")
+}
+
+// psProvider splits a path on a drive or provider that is no disk: env:X,
+// Variable:\x, HKLM:\…, Microsoft.PowerShell.Core\Environment::X. drive is
+// its name in lower case, env and variable for those two whatever they are
+// called; item is what follows. ok is false for a file system path: C:\x,
+// FileSystem::C:\x, a relative one.
+func psProvider(v string) (prefix, drive, item string, ok bool) {
+	if i := strings.Index(v, "::"); i >= 0 {
+		name := strings.ToLower(v[:i])
+		if j := strings.LastIndexAny(name, `\/`); j >= 0 {
+			name = name[j+1:]
+		}
+		switch name {
+		case "filesystem":
+			return psProvider(v[i+2:])
+		case "environment":
+			name = "env"
+		}
+		return v[:i+2], name, v[i+2:], true
+	}
+	if j := strings.IndexByte(v, ':'); j > 1 && !strings.ContainsAny(v[:j], `/\`) {
+		return v[:j+1], strings.ToLower(v[:j]), v[j+1:], true
+	}
+	return "", "", "", false
+}
+
+// markItems marks every env: and variable: item a statement names as set,
+// whatever the command: Set-Item, si, Clear-Item, Rename-Item, New-Item and
+// the rest write them in ways stele does not follow one by one (#181). Its
+// arguments, -Path:x included, and the elements of an array are read.
+func (p *psReader) markItems(args []psTok) {
+	for _, t := range args {
+		if t.kind == psGroupK {
+			if t.array {
+				p.markItems(groupArgs(t))
+			}
+			continue
+		}
+		if t.kind != psWordK {
+			continue
+		}
+		if t.param { // -Path:env:X
+			_, rest, has := strings.Cut(t.text, ":")
+			if !has {
+				continue
+			}
+			t.text, t.param = rest, false
+		}
+		if !p.mayName(t) {
+			continue
+		}
+		v, ok := p.peek(t)
+		if !ok {
+			// env:$x, env:$(…): an item of the drive stele cannot name.
+			lit := t.text
+			if j := strings.IndexByte(lit, 0); j >= 0 {
+				lit = lit[:j]
+			}
+			if _, drive, _, ok := psProvider(lit); ok {
+				p.setItem(drive, "")
+			}
+			continue
+		}
+		if _, drive, item, ok := psProvider(v); ok {
+			p.setItem(drive, item)
+		}
+	}
+}
+
+// maxItem is the longest word markItems reads as an item: a variable's name
+// is short, and a longer word is not expanded twice.
+const maxItem = 4 << 10
+
+// peek is value for markItems: a word up to maxItem bytes, not counted
+// against the budget, which reading it as a path counts.
+func (p *psReader) peek(t psTok) (string, bool) {
+	if t.dynamic || len(t.text) > maxItem {
+		return "", false
+	}
+	parts := strings.Split(t.text, "\x00")
+	n := 0
+	for i, part := range parts {
+		if i%2 == 0 {
+			n += len(part)
+			continue
+		}
+		v, ok := p.lookup(part)
+		if !ok {
+			return "", false
+		}
+		if n += len(v); n > maxItem {
+			return "", false
+		}
+	}
+	var b strings.Builder
+	for i, part := range parts {
+		if i%2 == 0 {
+			b.WriteString(part)
+		} else {
+			v, _ := p.lookup(part)
+			b.WriteString(v)
+		}
+	}
+	return b.String(), true
+}
+
+// mayName reports whether a word may name a drive: a colon written in it,
+// or a variable set to a literal, which may hold one. Others are not
+// expanded twice.
+func (p *psReader) mayName(t psTok) bool {
+	s := t.text
+	for i := 0; ; i++ {
+		j := strings.IndexByte(s, 0)
+		part := s
+		if j >= 0 {
+			part = s[:j]
+		}
+		if i%2 == 0 {
+			if strings.IndexByte(part, ':') >= 0 {
+				return true
+			}
+		} else if _, ok := p.vars[strings.ToLower(part)]; ok {
+			return true
+		}
+		if j < 0 {
+			return false
+		}
+		s = s[j+1:]
+	}
+}
+
 // automatic reports whether name, lower case, is a variable whose value
 // stele reads from outside the command: $env:NAME, $HOME, $PWD.
 func automatic(name string) bool {
@@ -578,7 +819,16 @@ var psCommands = map[string]string{
 	"invoke-expression": "iex", "iex": "iex", "start-process": "opaque", "saps": "opaque", "start": "opaque",
 	"invoke-command": "opaque", "icm": "opaque",
 	"git": "git", "git.exe": "git",
+	"set-variable": "var", "sv": "var", "new-variable": "var", "nv": "var",
+	"clear-variable": "var", "clv": "var", "remove-variable": "var", "rv": "var",
 }
+
+// psReadOnly are common commands that read env: and variable: without
+// setting them, as in Get-ChildItem env:.
+var psReadOnly = map[string]bool{"get-childitem": true, "gci": true, "dir": true, "ls": true,
+	"get-item": true, "gi": true, "get-itemproperty": true, "gp": true, "get-content": true, "gc": true,
+	"cat": true, "type": true, "test-path": true, "resolve-path": true, "rvpa": true,
+	"write-output": true, "echo": true, "write": true, "write-host": true}
 
 // psCommon are the parameters every cmdlet takes a value for.
 var psCommon = []string{"erroraction", "ea", "warningaction", "wa", "errorvariable", "ev", "warningvariable", "wv",
@@ -610,6 +860,7 @@ var psParams = map[string][]string{
 	"object": {"typename", "argumentlist", "comobject", "property"},
 	"pwsh":   {"command", "c", "file", "f", "executionpolicy", "ep", "encodedcommand", "e", "ec", "workingdirectory"},
 	"iex":    {"command"},
+	"var":    {"name", "value", "scope", "option", "visibility", "description", "include", "exclude"},
 }
 
 // psParam resolves a parameter as written, -Pa or -Path:x, to its full name
@@ -698,6 +949,18 @@ func (p *psReader) statement(st psStmt) {
 		return
 	}
 	name := head.text
+	if strings.EqualFold(name, "foreach") && !head.quoted && len(words) > 1 && words[1].kind == psGroupK {
+		// foreach ($x in …) sets $x, $env:X too, to each item (#181).
+		if g := words[1].group; len(g) > 0 && len(g[0].toks) > 1 && strings.EqualFold(g[0].toks[1].text, "in") {
+			if v, ok := varName(g[0].toks[0]); ok {
+				delete(p.vars, v)
+				if automatic(v) {
+					p.unset(v)
+				}
+			}
+		}
+		return
+	}
 	if strings.HasPrefix(name, "[") && strings.Contains(name, "]::") {
 		p.dotnet(name, words[1:])
 		return
@@ -707,6 +970,9 @@ func (p *psReader) statement(st psStmt) {
 		name = name[i+1:]
 	}
 	kind, ok := psCommands[strings.ToLower(name)]
+	if !psReadOnly[strings.ToLower(name)] && kind != "cd" && kind != "pushd" && kind != "popd" {
+		p.markItems(words[1:])
+	}
 	if !ok {
 		// A program run by its path, such as C:\Windows\System32\cmd.exe.
 		if k, ok2 := psCommands[strings.ToLower(filepath.Base(strings.ReplaceAll(name, `\`, "/")))]; ok2 && (k == "pwsh" || k == "cmd" || k == "bash" || k == "wsl" || k == "git") {
@@ -934,8 +1200,19 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 			}
 			return
 		}
+		provSrc := false // Copy-Item env:A B: B is no file stele can place
+		for _, s := range ps {
+			if v, ok := p.value(s); ok {
+				_, _, _, prov := psProvider(v)
+				provSrc = provSrc || prov
+			}
+		}
 		for _, d := range dest {
 			dv, ok := p.value(d)
+			if _, _, _, prov := psProvider(dv); provSrc && ok && !prov && d.kind == psWordK {
+				p.res.unknown++
+				continue
+			}
 			dpath, dok := p.abs(dv)
 			if ok && dok && isDir(dpath) {
 				// Into a directory that is there: each under its own name.
@@ -965,6 +1242,14 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 					p.res.unknown++
 					continue
 				}
+				if _, drive, _, prov := psProvider(sv); prov || (p.loc != "" && !filepath.IsAbs(psPath(sv))) {
+					// Rename-Item env:FOO BAR sets env:BAR: no file (#181).
+					if !prov {
+						drive = p.loc
+					}
+					p.setItem(drive, nv)
+					continue
+				}
 				// The new name is in the item's directory, unless it is a path.
 				if !strings.ContainsAny(nv, `/\`) {
 					nv = filepath.Join(filepath.Dir(psPath(sv)), psPath(nv))
@@ -975,7 +1260,7 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 	case "cd", "pushd":
 		ps, _ := path(0)
 		if kind == "pushd" {
-			p.stack = append(p.stack, p.dir)
+			p.stack = append(p.stack, psLoc{p.dir, p.loc, p.dirOK})
 		}
 		if len(ps) == 0 {
 			return
@@ -985,14 +1270,24 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 			p.dirOK = false
 			return
 		}
+		if _, drive, _, ok := psProvider(v); ok {
+			// cd env:, HKLM:\…: a drive that is no disk. A relative path
+			// names its items from then on, not files (#181).
+			p.loc, p.dirOK = drive, false
+			return
+		}
+		if strings.Contains(v, "::") { // FileSystem::C:\x
+			v = v[strings.Index(v, "::")+2:]
+		}
 		if d, ok := p.abs(v); ok {
-			p.dir = d
+			p.dir, p.loc = d, ""
 		} else {
 			p.dirOK = false
 		}
 	case "popd":
 		if n := len(p.stack); n > 0 {
-			p.dir, p.stack = p.stack[n-1], p.stack[:n-1]
+			l := p.stack[n-1]
+			p.dir, p.loc, p.dirOK, p.stack = l.dir, l.loc, l.ok, p.stack[:n-1]
 		} else {
 			p.dirOK = false
 		}
@@ -1044,8 +1339,16 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 		}
 		p.nested(script, false)
 	case "cmd":
-		// cmd /c "…": its redirections and commands read as bash's.
+		// cmd /c "…": its redirections and commands read as bash's. cmd's
+		// own %VAR%, and !VAR! after /v:on, expand to what stele does not
+		// read: such a script is unknown, not a literal path (#181).
+		delayed := false
 		for i, g := range pos {
+			if len(g) > 0 {
+				if o := strings.ToLower(g[0].text); o == "/v" || strings.HasPrefix(o, "/v:on") {
+					delayed = true
+				}
+			}
 			if len(g) > 0 && (strings.EqualFold(g[0].text, "/c") || strings.EqualFold(g[0].text, "/k")) {
 				var rest []string
 				for _, h := range pos[i+1:] {
@@ -1058,7 +1361,12 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 						}
 					}
 				}
-				p.nestedText(strings.Join(rest, " "), true)
+				script := strings.Join(rest, " ")
+				if cmdExpands(script, '%') || (delayed && cmdExpands(script, '!')) {
+					p.res.unknown++
+					return
+				}
+				p.nestedText(script, true)
 				return
 			}
 		}
@@ -1090,7 +1398,45 @@ func (p *psReader) cmdlet(kind string, args []psTok, st psStmt) {
 		p.depth--
 	case "opaque":
 		p.res.unknown++ // Start-Process, Invoke-Command: stele cannot see what runs
+	case "var":
+		// Set-Variable, New-Variable, Clear-Variable, Remove-Variable: the
+		// variables they name are unknown from then on (#181). A name stele
+		// cannot read, a wildcard, -Include or -Exclude, or names from the
+		// pipeline: every variable is.
+		ns := named["name"]
+		if ns == nil {
+			ns = at(0)
+		}
+		if len(ns) == 0 || named["include"] != nil || named["exclude"] != nil {
+			p.forgetAll()
+			return
+		}
+		for _, n := range ns {
+			v, ok := "", false
+			if n.kind == psWordK {
+				v, ok = p.value(n)
+			}
+			if !ok {
+				p.forgetAll()
+				return
+			}
+			// A scope before the name, global:x, is no part of it.
+			if s, rest, has := strings.Cut(v, ":"); has && psScope[strings.ToLower(s)] {
+				v = rest
+			}
+			p.setItem("variable", v)
+		}
 	}
+}
+
+// psScope are the scopes a variable's name may start with.
+var psScope = map[string]bool{"global": true, "local": true, "script": true, "private": true}
+
+// cmdExpands reports whether a cmd script holds a variable between two of
+// mark: %NAME%, !NAME!.
+func cmdExpands(script string, mark byte) bool {
+	i := strings.IndexByte(script, mark)
+	return i >= 0 && strings.IndexByte(script[i+1:], mark) > 0
 }
 
 // decodeCommand decodes the script of -EncodedCommand: base64 of UTF-16LE.
@@ -1156,8 +1502,16 @@ func (p *psReader) nestedText(script string, bash bool) {
 		return
 	}
 	if bash {
-		// Its depth adds to this one's; a script it cannot read whole is unknown.
-		if !readBash(p.res, script, p.dir, p.dirOK, p.depth, map[string]bool{}) {
+		// Its depth adds to this one's; a script it cannot read whole is
+		// unknown. An environment variable this command set is unknown there,
+		// in any case: bash's names are the same ones (#181).
+		fold := map[string]bool{}
+		for k := range p.set {
+			if name, ok := strings.CutPrefix(k, "env:"); ok {
+				fold[name] = true
+			}
+		}
+		if !readBash(p.res, script, p.dir, p.dirOK, p.depth, map[string]bool{}, fold) {
 			p.res.unknown++
 		}
 		return
@@ -1223,6 +1577,15 @@ func (p *psReader) dotnet(head string, rest []psTok) {
 	} else {
 		args = rest
 	}
+	if (typ == "environment" || typ == "system.environment") && method == "setenvironmentvariable" {
+		// [Environment]::SetEnvironmentVariable('X', …) sets $env:X.
+		name := ""
+		if len(args) > 0 {
+			name, _ = p.value(args[0])
+		}
+		p.setItem("env", name) // a name stele cannot read: every one
+		return
+	}
 	var kinds []Kind
 	switch {
 	case streamType(typ) && method == "new":
@@ -1287,30 +1650,25 @@ func (p *psReader) addTok(t psTok, k Kind, literal bool) {
 	if v == "" {
 		return
 	}
-	// A provider path: FileSystem::C:\x is the file; Env:x and the like are
-	// not files.
-	if i := strings.Index(v, "::"); i >= 0 {
-		if !strings.HasSuffix(strings.ToLower(v[:i]), "filesystem") {
-			return
-		}
-		v = v[i+2:]
-	}
-	if j := strings.IndexByte(v, ':'); j > 1 && !strings.ContainsAny(v[:j], `/\`) {
-		// env:, variable:, function: …: a drive that is not a disk. Writing
-		// env:X or variable:x sets the variable: unknown from then on.
-		drive, item := strings.ToLower(v[:j]), strings.ToLower(strings.TrimLeft(v[j+1:], `/\`))
-		switch drive {
-		case "env":
-			p.unset("env:" + item)
-		case "variable":
-			delete(p.vars, item)
-			if automatic(item) {
-				p.unset(item)
-			}
-		}
+	// A provider path: FileSystem::C:\x is the file; env:, variable:,
+	// function: … are drives that are no disk. Writing env:X or variable:x
+	// sets the variable: unknown from then on.
+	if _, drive, item, ok := psProvider(v); ok {
+		p.setItem(drive, item)
 		return
 	}
+	if i := strings.Index(v, "::"); i >= 0 { // FileSystem::C:\x
+		v = v[i+2:]
+	}
 	if device(v) {
+		return
+	}
+	if p.loc != "" && !filepath.IsAbs(psPath(v)) {
+		// After cd env: or the like, a relative path is an item there.
+		p.setItem(p.loc, v)
+		if p.loc != "env" && p.loc != "variable" {
+			p.res.unknown++ // HKLM:\…: no file stele can place
+		}
 		return
 	}
 	path, ok := p.abs(v)
