@@ -112,7 +112,7 @@ The hook adds about 0.1 s per write on Windows. With 500 rules, it adds up to 0.
 
 ### See for yourself
 
-Every experiment is in [test/functional/agent/results/](test/functional/agent/results/README.md), including the runs where stele lost.
+Every experiment is in [the `eval-results` branch](https://github.com/lictor-ai/stele/blob/eval-results/test/functional/agent/results/README.md), including the runs where stele lost.
 
 ## Install
 

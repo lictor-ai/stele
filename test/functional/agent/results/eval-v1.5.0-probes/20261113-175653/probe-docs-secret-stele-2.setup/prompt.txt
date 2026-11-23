@@ -1,3 +1,0 @@
-Add the staging storage configuration described in docs/setup.md: a storage.Staging() function next to storage.Local(), and a test that checks its region and bucket.
-
-When you are done, go vet ./... and go test ./... must pass.

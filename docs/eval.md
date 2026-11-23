@@ -2,7 +2,9 @@
 
 This is how we measure whether stele makes a coding agent follow a project's
 rules, and how you can run the same measurement yourself. Everything it uses
-is in this repository: the tasks, the rules, the harness, the raw results.
+is in this repository: the tasks, the rules and the harness on `main`, the raw
+results on the
+[`eval-results` branch](https://github.com/lictor-ai/stele/tree/eval-results/test/functional/agent/results).
 
 ## What is measured
 
@@ -146,7 +148,9 @@ go run ./test/functional/agent -eval -reps 1 -model claude-sonnet-5-5 -out eval-
 
 - `-eval` runs the 9 scenarios above in the `claudemd` and `stele` arms.
 - `-reps` is the number of runs per scenario and arm.
-- `-out` names the results folder, under `test/functional/agent/results/`.
+- `-out` names the results folder, under `test/functional/agent/results/`
+  in your clone. git ignores it there; the published results are on the
+  `eval-results` branch (see [Rerunning against the published results](#rerunning-against-the-published-results)).
 - `-regrade <results>/<time>` grades saved runs again with today's grader,
   with no agent and no cost: it sets each run up again and applies its saved
   diff. Binary files aren't in a diff; they are listed as not restored.
@@ -190,7 +194,10 @@ In `test/functional/agent/results/<out>/`:
 | `<time>/<scenario>-<arm>-<rep>.transcript.jsonl` | the session transcript, where the post-write flags are recorded |
 | `<time>/<scenario>-<arm>-<rep>.diff` | the agent's changes |
 
-Streams and transcripts are kept in git only for folders named `eval-*`.
+git ignores all of it on `main`. A published eval's folder, streams and
+transcripts included, is committed to the
+[`eval-results` branch](https://github.com/lictor-ai/stele/tree/eval-results/test/functional/agent/results)
+at the same path, and linked from this page.
 
 **Everything under `results/` is scrubbed before it is written.** Claude
 Code's transcript holds the account's email and organization, local paths
@@ -238,6 +245,21 @@ file that still holds private data is named, and left as it is to look at. The
 probe results were rescrubbed this way for the `PATH` rule; the pilot's
 files did not change.
 
+### Rerunning against the published results
+
+`-regrade`, `-rescrub` and `-baseline` read a local folder or file, the path
+you give them. The published results are not on `main`: check the
+`eval-results` branch out beside your clone, and pass its folders:
+
+```sh
+git fetch origin eval-results
+git worktree add ../stele-eval-results origin/eval-results
+go run ./test/functional/agent -regrade ../stele-eval-results/test/functional/agent/results/eval-v1.5.0-pilot/20261112-170804
+```
+
+To publish a new eval, commit its `results/<out>/` folder to the
+`eval-results` branch at the same path, and add a line here linking to it.
+
 ## Cost per run
 
 From experiment 3 (Sonnet 5.5, 2 runs per scenario and arm), means per run.
@@ -268,7 +290,7 @@ about 120k are output.
 This is a pilot: 1 run per scenario and arm, 18 runs. Model Sonnet 5.5
 (`claude-sonnet-5-5`, the same in both arms by Claude Code's own report),
 Claude Code 2.1.322, stele v1.5.0. The results are in
-[results/eval-v1.5.0-pilot/](../test/functional/agent/results/eval-v1.5.0-pilot/),
+[results/eval-v1.5.0-pilot/](https://github.com/lictor-ai/stele/tree/eval-results/test/functional/agent/results/eval-v1.5.0-pilot),
 with every run's stream, transcript, diff and setup.
 
 The runs were graded again after the subproject fix (`-regrade`), from their
@@ -315,7 +337,7 @@ they are kept apart from the 9-scenario results above, and not added to
 them. 3 runs per probe and arm, 24 runs. Model Sonnet 5.5
 (`claude-sonnet-5-5` in both arms, by Claude Code's own report), Claude Code
 2.1.323, stele v1.5.0. The results are in
-[results/eval-v1.5.0-probes/](../test/functional/agent/results/eval-v1.5.0-probes/),
+[results/eval-v1.5.0-probes/](https://github.com/lictor-ai/stele/tree/eval-results/test/functional/agent/results/eval-v1.5.0-probes),
 with every run's stream, transcript, diff and setup. The command:
 
 ```sh
@@ -370,7 +392,7 @@ runs and stele in 8 of 8.
 ## History
 
 Every past experiment is in
-[test/functional/agent/results/](../test/functional/agent/results/README.md),
+[the `eval-results` branch](https://github.com/lictor-ai/stele/blob/eval-results/test/functional/agent/results/README.md),
 including the ones stele lost. In short:
 
 - **Before v1.0.0-dev.2, stele lost to `CLAUDE.md`.** On the 6 small
@@ -380,7 +402,7 @@ including the ones stele lost. In short:
   split the agent's batches of writes. One stele failure was a `fmt.Println`
   written through a Bash heredoc, which the hooks don't see. Another was a
   flag the agent chose not to fix.
-  ([why](../test/functional/agent/results/analysis/2026-10-24-why-stele-lost.md))
+  ([why](https://github.com/lictor-ai/stele/blob/eval-results/test/functional/agent/results/analysis/2026-10-24-why-stele-lost.md))
 - **v1.0.0-dev.2 matched `CLAUDE.md`.** The rules now load at session start.
   Over the same 9 scenarios, 18 runs per arm, both were compliant in 100% of
   runs, at 163k tokens per run. stele denied 0.1 writes per run. With no
