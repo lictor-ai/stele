@@ -23,8 +23,8 @@ import (
 func runPush(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("stele push", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	if err := flags.Parse(args); err != nil {
-		return exitCantRun
+	if code, ok := parseFlags(flags, args, stdout); !ok {
+		return code
 	}
 	cantRun := func(format string, a ...any) int {
 		fmt.Fprintf(stderr, "stele push: "+format+"\n", a...)

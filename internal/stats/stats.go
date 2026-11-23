@@ -183,8 +183,9 @@ type Report struct {
 	TZ      string     `json:"tz"`    // the zone days are counted in
 	Log     LogCounts  `json:"log"`
 	Need    Need       `json:"need"`
-	// RulesJudged is false when the rules could not be read: no rule is
-	// called dead.
+	// RulesJudged is whether the rules could be read: false when they could
+	// not, and no rule is called dead. Dead rules are judged only when it is
+	// true and All.Enough is too.
 	RulesJudged bool           `json:"rules_judged"`
 	All         Numbers        `json:"all"`
 	Agents      []AgentNumbers `json:"agents"`

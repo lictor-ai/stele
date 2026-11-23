@@ -143,6 +143,15 @@ The [Opengrep](#opengrep-checker) and [Trivy](#trivy-checker) checker plugins ar
 
 The hook runs the bare command `stele`, so it must be on the `PATH` that Claude Code or Codex sees: for `go install`, that is `$(go env GOPATH)/bin`.
 
+Check which stele is on your `PATH` (also `stele version` or `stele -v`; put it in a bug report):
+
+```
+$ stele --version
+stele v1.6.0
+```
+
+`stele help` lists the commands, and `stele <command> --help` a command's flags.
+
 ## Set up a repository
 
 Run `stele init` in the directory where you start Claude Code, normally the repository root:
@@ -197,7 +206,7 @@ If a rule can't be used — a `check` other than `regex`, a pattern that doesn't
 
 The hook also recompiles when `stele.md` changes, so edits take effect on the next write, except removing every rule, which takes `stele compile` (see [Limits](#limits)). Commit the updated `stele.lock` and `.claude/rules/stele-rules.md`. A session keeps the rules file it loaded at its start: a rule changed since is shown again before the next write it applies to.
 
-To remove stele: `stele uninstall`. It removes stele's hooks, `.claude/rules/stele-rules.md` and `.stele/` (its [log](#what-stele-records) too), and keeps `stele.md`, `stele.lock` and `stele.json`.
+To remove stele: `stele uninstall`. It removes stele's hooks, `.claude/rules/stele-rules.md` and `.stele/` (its [log](#what-stele-records) too), and keeps `stele.md`, `stele.lock` and `stele.json`. Run again, it prints `nothing to remove`.
 
 ### Codex
 
@@ -259,7 +268,7 @@ Never put credentials in code, config or tests. Read them from the environment.
 | `scope` | Path globs: `["a", "b"]` or one bare value. No scope means every file. A bare value with a comma outside `{...}`, such as `*.go, *.ts`, is an error: write the list in brackets. |
 | `check` | `regex`, the built-in checker, or a [checker plugin](#checker-plugins) `stele.json` lists, such as [`opengrep`](#opengrep-checker) or [`trivy`](#trivy-checker). Any other value is an invalid rule. Without `check`, a rule with `pattern` or `message` is invalid: nothing would check it. `blocking` without `check` gets a note from `stele compile`. |
 | `pattern` | A Go (RE2) regular expression, for `check: regex`, taken as written: quotes are part of it, so `pattern: "net/http"` matches `"net/http"` with its quotes, as in an import, not a bare mention of net/http. |
-| `message` | What a violation says. Default: the start of the rule. Taken as written, quotes included. |
+| `message` | What a violation says. Default: the start of the rule, its first paragraph up to about 120 characters. Taken as written, quotes included. |
 | `blocking` | `true` (the default with `check`) or `false`. |
 
 Scope globs:
@@ -297,8 +306,8 @@ Add `--format json` for JSON. Deleted files are skipped.
 
 ```
 $ stele check
-main.go:6:2: error 573549ea-7f0b-47ec-ad30-db25284a3d2a "Log through the shared logger in internal/log. Never print w…": log through internal/log, not fmt.Print
-main.go:7:10: error 2de7574e-7106-4986-8ce6-996d06e2703a "Never put credentials in code, config or tests. Read them fr…"
+main.go:6:2: error 573549ea-7f0b-47ec-ad30-db25284a3d2a "Log through the shared logger in internal/log. Never print…": log through internal/log, not fmt.Print
+main.go:7:10: error 2de7574e-7106-4986-8ce6-996d06e2703a "Never put credentials in code, config or tests. Read them from the environment."
 3 rules valid
 checked 1 file: 2 errors
 ```
@@ -737,7 +746,7 @@ last 30 days, 2026-10-04 to 2026-11-03 (+01:00), from .stele/log.jsonl
 3 sessions, 36 turns with a write, 39 writes (39 checked), 3 denied (3 writes)
 
 Broken most often (fixed: the agent's next write to the file, in the same turn, did not break it)
-  4 writes, fixed 3 of 4  787f8bcc-82e6-4ab6-93d9-02860d4921ba "Never put credentials in code. Read them from the environmen…"
+  4 writes, fixed 3 of 4  787f8bcc-82e6-4ab6-93d9-02860d4921ba "Never put credentials in code. Read them from the…"
 
 Dead: no write met a file they apply to, in 30 turns or more
   883fc015-b304-4f73-802c-b3df0f35516a "Migrations are append-only: never edit one that was merged." scope: migrations/**
@@ -811,7 +820,7 @@ The log and `stele push` name rules by id only. `stele rules` prints the rules b
 ```
 $ stele rules
 cb820e6a-fe32-43db-8875-53bf87d20556  stele.md  every file
-  Never build SQL by string concatenation. Use the query build…
+  Never build SQL by string concatenation. Use the query…
 911a21e4-63df-457f-9703-97e07347996e  stele.md  **/*.go, !**/*_test.go
   Return errors; never panic in library code.
 2 rules

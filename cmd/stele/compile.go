@@ -29,11 +29,11 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := interruptible()
 	defer stop()
 	var update bool
-	root, ok := setupFlags("compile", args, stderr, func(fs *flag.FlagSet) {
+	root, code, ok := setupFlags("compile", args, stdout, stderr, func(fs *flag.FlagSet) {
 		fs.BoolVar(&update, "update", false, "pin every git source at its ref's tip")
 	})
 	if !ok {
-		return exitCantRun
+		return code
 	}
 	key, err := loadKey()
 	if err != nil {
@@ -98,32 +98,33 @@ func loadExistingKey() (sign.Key, error) {
 	return sign.LoadExistingKey(dir)
 }
 
-// setup parses a command's flags and finds the project root.
-func setup(name string, args []string, stderr io.Writer) (string, bool) {
-	return setupFlags(name, args, stderr, nil)
+// setup parses a command's flags and finds the project root. When ok is
+// false, the command exits with code: 0 after printing its help.
+func setup(name string, args []string, stdout, stderr io.Writer) (root string, code int, ok bool) {
+	return setupFlags(name, args, stdout, stderr, nil)
 }
 
 // setupFlags is setup for a command with flags of its own, which define
 // adds.
-func setupFlags(name string, args []string, stderr io.Writer, define func(*flag.FlagSet)) (string, bool) {
+func setupFlags(name string, args []string, stdout, stderr io.Writer, define func(*flag.FlagSet)) (root string, code int, ok bool) {
 	fs := flag.NewFlagSet("stele "+name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	if define != nil {
 		define(fs)
 	}
-	if err := fs.Parse(args); err != nil {
-		return "", false
+	if code, ok := parseFlags(fs, args, stdout); !ok {
+		return "", code, false
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "stele %s: unexpected argument %q\n", name, fs.Arg(0))
-		return "", false
+		return "", exitCantRun, false
 	}
 	root, err := findRoot(".")
 	if err != nil {
 		fmt.Fprintf(stderr, "stele %s: %v\n", name, err)
-		return "", false
+		return "", exitCantRun, false
 	}
-	return root, true
+	return root, exitOK, true
 }
 
 // printCompile says how each rule got its id, and what was written. Ids

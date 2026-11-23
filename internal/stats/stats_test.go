@@ -186,8 +186,13 @@ func TestTooLittleData(t *testing.T) {
 	if rep.All.Enough || len(rep.All.Dead) != 0 || len(rep.All.NotJudged) != 1 {
 		t.Errorf("all = %+v, want not enough and r1 not judged", rep.All)
 	}
+	// rules_judged says the rules could be read; enough says whether there
+	// was data to judge them (D50 keeps its meaning).
+	if !rep.RulesJudged {
+		t.Error("rules_judged = false with readable rules, want true")
+	}
 	rep = Compute(input(Rule{ID: "r1", Scope: []string{"x/**"}}), turns(MinTurns, "a.go"), LogCounts{})
-	if !rep.All.Enough || len(rep.All.Dead) != 1 || rep.All.Dead[0].RuleID != "r1" || rep.All.Dead[0].TurnsSince != MinTurns {
+	if !rep.All.Enough || !rep.RulesJudged || len(rep.All.Dead) != 1 || rep.All.Dead[0].RuleID != "r1" || rep.All.Dead[0].TurnsSince != MinTurns {
 		t.Errorf("all = %+v, want r1 dead after %d turns", rep.All, MinTurns)
 	}
 }

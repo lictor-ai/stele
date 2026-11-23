@@ -27,8 +27,8 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	format := flags.String("format", "text", "output `format`: text or json")
 	offline := flags.Bool("offline", false, "start no plugin: versions and external sources' freshness are unknown")
-	if err := flags.Parse(args); err != nil {
-		return exitCantRun
+	if code, ok := parseFlags(flags, args, stdout); !ok {
+		return code
 	}
 	cantRun := func(format string, a ...any) int {
 		fmt.Fprintf(stderr, "stele status: "+format+"\n", a...)

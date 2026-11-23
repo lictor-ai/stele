@@ -57,7 +57,7 @@ func TestInit(t *testing.T) {
 	want := []string{
 		"created .stele/.gitignore",
 		"created stele.md",
-		"added stele hooks (PreToolUse, PostToolUse, SessionStart, SubagentStart) to " + filepath.Join(".claude", "settings.json"),
+		"added stele hooks (PreToolUse, PostToolUse, SessionStart, SubagentStart) to " + ".claude/settings.json",
 	}
 	if diff := cmp.Diff(want, changes); diff != "" {
 		t.Errorf("changes mismatch (-want +got):\n%s", diff)
@@ -389,7 +389,7 @@ func TestUninstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"removed stele hooks from " + filepath.Join(".claude", "settings.json"), "removed .stele/"}
+	want := []string{"removed stele hooks from " + ".claude/settings.json", "removed .stele/"}
 	if diff := cmp.Diff(want, changes); diff != "" {
 		t.Errorf("changes mismatch (-want +got):\n%s", diff)
 	}

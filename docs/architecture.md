@@ -1155,6 +1155,8 @@ func Spans(content []byte, fragments []Fragment) []Span // sorted and merged
 func Merge(spans []Span) []Span
 func Contain(spans []Span, line int) bool // binary search over merged spans
 func Excerpt(body string) string
+func Summary(body string) string
+func Shown(excerpt, message string) (quote, rest string)
 func Own(file string) bool
 ```
 
@@ -1199,8 +1201,12 @@ a binary search.
 stele's own files — `stele.md`, `stele.json`, `stele.lock` and `.stele/` — are
 never checked (`Own`): a pattern quoted in a rule's body would flag `stele.md`.
 
-`Excerpt` is a rule body's first paragraph, whitespace collapsed, cut to 60
-characters. Every human-facing id is printed beside one (spec §12).
+`Excerpt` is a rule body's first paragraph, whitespace collapsed, cut between
+words to about 60 characters. Every human-facing id is printed beside one
+(spec §12). A violation of a rule with no `message` says its `Summary`: the
+same paragraph cut to about 120 characters. `Shown` prints such a message in
+place of the excerpt rather than after it. Problems are sorted in the order
+of their rules in the index, whichever step found them.
 
 `Run` takes an `index.Index`, not rule files: `cmd/` calls `compile.Plan` first
 and hands over the planned index (D40). A rule file that does not parse, an

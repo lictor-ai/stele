@@ -36,8 +36,8 @@ func runStats(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	sinceArg := flags.String("since", "30d", "the window: `30d`, 12h, 2w, a day such as 2026-10-01, or all")
 	format := flags.String("format", "text", "output `format`: text or json")
-	if err := flags.Parse(args); err != nil {
-		return exitCantRun
+	if code, ok := parseFlags(flags, args, stdout); !ok {
+		return code
 	}
 	cantRun := func(format string, a ...any) int {
 		fmt.Fprintf(stderr, "stele stats: "+format+"\n", a...)
@@ -86,7 +86,7 @@ func runStats(args []string, stdout, stderr io.Writer) int {
 	if *format == "json" {
 		printStatsJSON(stdout, rep)
 	} else {
-		printStats(stdout, rep, *sinceArg)
+		printStats(stdout, rep, *sinceArg, in.RulesKnown)
 	}
 	return exitOK
 }
@@ -155,7 +155,7 @@ func window(arg string) string {
 
 // printStats prints the report for a person. Below stats.MinTurns it says
 // so first, and judges no rule.
-func printStats(w io.Writer, rep stats.Report, sinceArg string) {
+func printStats(w io.Writer, rep stats.Report, sinceArg string, rulesKnown bool) {
 	loc := statsLoc
 	day := func(t time.Time) string { return t.In(loc).Format("2006-01-02") }
 	win := window(sinceArg)
@@ -189,7 +189,7 @@ func printStats(w io.Writer, rep stats.Report, sinceArg string) {
 	fmt.Fprintln(w)
 	printBroken(w, a.Broken)
 	fmt.Fprintln(w)
-	printDead(w, rep, a)
+	printDead(w, rep, a, rulesKnown)
 	fmt.Fprintln(w)
 	printDays(w, a.DeniedByDay)
 
@@ -245,9 +245,11 @@ func printBroken(w io.Writer, bs []stats.Broken) {
 	}
 }
 
-func printDead(w io.Writer, rep stats.Report, a stats.Numbers) {
+// printDead says which rules are dead. rulesKnown is false when the rules
+// could not be read.
+func printDead(w io.Writer, rep stats.Report, a stats.Numbers, rulesKnown bool) {
 	switch {
-	case !rep.RulesJudged:
+	case !rulesKnown:
 		fmt.Fprintln(w, "Dead: not judged, the rules do not compile")
 		return
 	case !a.Enough:

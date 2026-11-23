@@ -454,7 +454,8 @@ func afterWrite(ev adapter.Event, e adapter.Edit, sw adapter.Switches, reasonRoo
 
 	var hard, soft []install.Violation
 	for _, f := range r.Violations {
-		v := install.Violation{Line: f.Line, Column: f.Column, RuleID: f.RuleID, Excerpt: f.Excerpt, Message: f.Message}
+		quote, rest := check.Shown(f.Excerpt, f.Message)
+		v := install.Violation{Line: f.Line, Column: f.Column, RuleID: f.RuleID, Excerpt: quote, Message: rest}
 		if f.Blocking {
 			hard = append(hard, v)
 		} else {

@@ -30,13 +30,13 @@ import (
 func runInit(args []string, stdout, stderr io.Writer) int {
 	var set install.Set
 	var names agentList
-	root, ok := installRoot("init", args, stdout, stderr, func(fs *flag.FlagSet) {
+	root, code, ok := installRoot("init", args, stdout, stderr, func(fs *flag.FlagSet) {
 		fs.Var(switchFlag{&set.Remind}, "remind", "before a write, deny it to show the rules: on or off")
 		fs.Var(switchFlag{&set.Check}, "check", "after a write, check it against the rules: on or off")
 		fs.Var(&names, "agent", "the agent to set up: "+knownAgents()+"; repeat it, or separate names with commas")
 	})
 	if !ok {
-		return exitCantRun
+		return code
 	}
 	chosen, err := chooseAgents(names, root)
 	if err != nil {
@@ -61,7 +61,7 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 		}
 		notes = appendNew(notes, otherAgents(root, chosen)...)
 	}
-	code := report("init", changes, notes, err, stdout, stderr)
+	code = report("init", changes, notes, err, stdout, stderr)
 	if code == exitOK {
 		for _, a := range chosen {
 			if sw, ok := install.InstalledSwitches(a, root); ok {
@@ -235,11 +235,11 @@ func initCompile(root string, stderr io.Writer) (changes, notes []string) {
 // .stele/ goes with the last agent's hooks.
 func runUninstall(args []string, stdout, stderr io.Writer) int {
 	var names agentList
-	root, ok := installRoot("uninstall", args, stdout, stderr, func(fs *flag.FlagSet) {
+	root, code, ok := installRoot("uninstall", args, stdout, stderr, func(fs *flag.FlagSet) {
 		fs.Var(&names, "agent", "the agent to remove stele from: "+knownAgents()+"; repeat it, or separate names with commas")
 	})
 	if !ok {
-		return exitCantRun
+		return code
 	}
 	chosen, err := chooseAgents(names, root)
 	if err != nil {
@@ -269,26 +269,26 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 // directory. An agent reads its settings file from the directory it starts
 // in, so both work where they run, never on an ancestor a root search would
 // find; notRoot says so. define, when not nil, adds the command's own flags.
-func installRoot(name string, args []string, stdout, stderr io.Writer, define func(*flag.FlagSet)) (string, bool) {
+func installRoot(name string, args []string, stdout, stderr io.Writer, define func(*flag.FlagSet)) (root string, code int, ok bool) {
 	fs := flag.NewFlagSet("stele "+name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	if define != nil {
 		define(fs)
 	}
-	if err := fs.Parse(args); err != nil {
-		return "", false
+	if code, ok := parseFlags(fs, args, stdout); !ok {
+		return "", code, false
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "stele %s: unexpected argument %q\n", name, fs.Arg(0))
-		return "", false
+		return "", exitCantRun, false
 	}
 	root, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "stele %s: %v\n", name, err)
-		return "", false
+		return "", exitCantRun, false
 	}
 	fmt.Fprintf(stdout, "stele %s in %s\n", name, root)
-	return root, true
+	return root, exitOK, true
 }
 
 // notRoot notes that root is not the repository root, when it is not: each
@@ -322,7 +322,11 @@ func report(name string, changes, notes []string, err error, stdout, stderr io.W
 		fmt.Fprintf(stderr, "stele %s: %v\n", name, err)
 		return exitCantRun
 	}
-	if len(changes) == 0 {
+	switch {
+	case len(changes) > 0:
+	case name == "uninstall":
+		fmt.Fprintln(stdout, "nothing to remove")
+	default:
 		fmt.Fprintln(stdout, "up to date, nothing written")
 	}
 	return exitOK

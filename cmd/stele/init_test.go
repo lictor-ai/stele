@@ -33,6 +33,10 @@ func TestInitAndUninstall(t *testing.T) {
 			t.Errorf("init stdout lacks %q:\n%s", want, out)
 		}
 	}
+	// Project paths are shown with /, on Windows too (#157).
+	if !strings.Contains(out, "to .claude/settings.json\n") {
+		t.Errorf("init stdout does not name .claude/settings.json with /:\n%s", out)
+	}
 	if _, out, _ = runCmd("init"); !strings.Contains(out, "up to date, nothing written") {
 		t.Errorf("init again: stdout %q", out)
 	}
@@ -45,8 +49,16 @@ func TestInitAndUninstall(t *testing.T) {
 		!strings.Contains(out, "removed .claude/rules/stele-rules.md") {
 		t.Errorf("uninstall = %d, stdout %q, stderr %q", code, out, errOut)
 	}
+	if !strings.Contains(out, "removed stele hooks from .claude/settings.json\n") {
+		t.Errorf("uninstall stdout does not name .claude/settings.json with /:\n%s", out)
+	}
 	if _, err := os.Stat(filepath.Join(root, "stele.md")); err != nil {
 		t.Errorf("uninstall removed stele.md: %v", err)
+	}
+	// Again, there is nothing of stele's left to remove (#157).
+	code, out, errOut = runCmd("uninstall")
+	if code != exitOK || !strings.HasSuffix(out, "\nnothing to remove\n") || strings.Contains(out, "nothing written") {
+		t.Errorf("uninstall again = %d, stdout %q, stderr %q, want nothing to remove", code, out, errOut)
 	}
 }
 

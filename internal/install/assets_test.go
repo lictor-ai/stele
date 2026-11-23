@@ -150,10 +150,13 @@ func TestViolationMessage(t *testing.T) {
 	vs := []Violation{
 		{Line: 3, Column: 7, RuleID: "r1", Excerpt: "Never put credentials in code.", Message: "Never put credentials in code."},
 		{Line: 9, Column: 1, RuleID: "r2", Excerpt: "No TODO comments.", Message: "track it in an issue"},
+		// No message: the quote says it all (#157).
+		{Line: 12, Column: 2, RuleID: "r3", Excerpt: "Log through internal/log, never fmt.Print, so that every line is structured."},
 	}
 	got := ViolationMessage(ccWords, "internal/db.go", vs, 4, true)
 	for _, want := range []string{
 		"internal/db.go:3:7: rule r1 \"Never put credentials in code.\"",
+		"internal/db.go:12:2: rule r3 \"Log through internal/log, never fmt.Print, so that every line is structured.\"\n",
 		"internal/db.go:9:1: rule r2 \"No TODO comments.\": track it in an issue",
 		"and 4 more",
 		"stele check internal/db.go",
@@ -181,6 +184,11 @@ func TestViolationMessage(t *testing.T) {
 	}
 	if strings.Contains(big, strings.Repeat("m", 201)) || !strings.Contains(big, strings.Repeat("m", 200)+"…") {
 		t.Error("a rule message is not cut at 200 characters")
+	}
+	// The quote is capped as the message is (#157).
+	quoted := ViolationMessage(ccWords, "a.go", []Violation{{Line: 1, Column: 1, RuleID: "r", Excerpt: strings.Repeat("q", 480)}}, 0, true)
+	if strings.Contains(quoted, strings.Repeat("q", 201)) || !strings.Contains(quoted, strings.Repeat("q", 200)+"…") {
+		t.Error("a quote is not cut at 200 characters")
 	}
 	shown := strings.Count(big, "\ninternal/some/long/path/file.go:")
 	if shown == 30 || !strings.Contains(big, fmt.Sprintf("and %d more", 30-shown+2)) {

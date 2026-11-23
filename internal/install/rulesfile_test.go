@@ -25,7 +25,7 @@ func TestUninstallRemovesTheRulesFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"removed stele hooks from " + cc.SettingsFile(), "removed " + cc.RulesFile(), "removed .stele/"}
+	want := []string{"removed stele hooks from " + filepath.ToSlash(cc.SettingsFile()), "removed " + cc.RulesFile(), "removed .stele/"}
 	if diff := cmp.Diff(want, changes); diff != "" {
 		t.Errorf("changes mismatch (-want +got):\n%s", diff)
 	}

@@ -48,8 +48,8 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	all := fs.Bool("all", false, "check every tracked file")
 	format := fs.String("format", "text", "output `format`: text or json")
 	pushFlag := fs.Bool("push", false, "then send the log's new lines, or in CI this run's counts, to every sink stele.json lists")
-	if err := fs.Parse(args); err != nil {
-		return exitCantRun
+	if code, ok := parseFlags(fs, args, stdout); !ok {
+		return code
 	}
 	paths := fs.Args()
 	cantRun := func(format string, a ...any) int {
@@ -428,6 +428,9 @@ func gitFiles(g gitTool, base string, all bool) ([]string, error) {
 		return g.list("ls-files", "-z")
 	case base != "":
 		if _, err := g.list("rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
+			if errors.Is(err, errNoRepository) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("--base %s: unknown ref", base)
 		}
 		files, err := g.list("diff", "--name-only", "-z", "--relative", "--diff-filter=ACMRT", base+"...HEAD", "--")
@@ -562,6 +565,9 @@ func (g gitTool) command(args ...string) *exec.Cmd {
 	return cmd
 }
 
+// errNoRepository is git's "not a git repository", said for stele check.
+var errNoRepository = errors.New("needs a git repository to find the changed files: run git init, or name the files to check")
+
 // raw runs git in the project and splits its NUL-separated output, in order.
 func (g gitTool) raw(args ...string) ([]string, error) {
 	cmd := g.command(args...)
@@ -569,7 +575,14 @@ func (g gitTool) raw(args ...string) ([]string, error) {
 	cmd.Stderr = &errOut
 	out, err := cmd.Output()
 	if err != nil {
-		if msg := strings.TrimSpace(errOut.String()); msg != "" {
+		msg := strings.TrimSpace(errOut.String())
+		// Only git's own "not a git repository (or any of the parent
+		// directories)": a broken submodule's ".git/modules/x" is not fixed
+		// by git init.
+		if strings.Contains(msg, "not a git repository (or any") {
+			return nil, errNoRepository
+		}
+		if msg != "" {
 			return nil, fmt.Errorf("git %s: %s", args[0], msg)
 		}
 		return nil, fmt.Errorf("git %s: %w", args[0], err)
@@ -607,9 +620,10 @@ func printCheck(w io.Writer, lf lock.File, rep check.Report, subs []subproject, 
 			level = "warning"
 			warns++
 		}
-		fmt.Fprintf(w, "%s:%d:%d: %s %s \"%s\"", showPath(f.File), f.Line, f.Column, level, f.RuleID, f.Excerpt)
-		if f.Message != f.Excerpt {
-			fmt.Fprintf(w, ": %s", f.Message)
+		quote, rest := check.Shown(f.Excerpt, f.Message)
+		fmt.Fprintf(w, "%s:%d:%d: %s %s \"%s\"", showPath(f.File), f.Line, f.Column, level, f.RuleID, quote)
+		if rest != "" {
+			fmt.Fprintf(w, ": %s", rest)
 		}
 		fmt.Fprintln(w)
 	}

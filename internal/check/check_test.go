@@ -187,10 +187,11 @@ func TestRunRuleProblems(t *testing.T) {
 		{RuleID: "unknown", Excerpt: "Use semgrep.", Message: `check: "semgrep" is not a checker; the only one is the built-in fake; list an external checker under "checkers" in stele.json`},
 		{RuleID: "empty", Excerpt: "Empty check.", Message: "check is empty"},
 		{RuleID: "yes", Excerpt: "Blocking yes.", Message: `blocking: "yes" is not true or false`},
+		{RuleID: "bad", Excerpt: "Fails validation.", Message: "fake: no pattern"},
 		{RuleID: "nocheck", Excerpt: "Pattern only.", Message: "pattern without check: the rule is guidance only and nothing checks pattern; add check: regex or remove pattern"},
 		{RuleID: "nocheck2", Excerpt: "Two keys.", Message: "message and pattern without check: the rule is guidance only and nothing reads them; add check: regex or remove them"},
-		{RuleID: "bad", Excerpt: "Fails validation.", Message: "fake: no pattern"},
 	}
+	// In the order the rules are written, whichever step found them (#157).
 	if diff := cmp.Diff(want, r.Problems); diff != "" {
 		t.Errorf("problems (-want +got):\n%s", diff)
 	}
@@ -389,11 +390,61 @@ func TestExcerpt(t *testing.T) {
 		{strings.Repeat("é", 70), strings.Repeat("é", 60) + "…"},
 		{strings.Repeat("a", 60), strings.Repeat("a", 60)},
 		{"", ""},
+		// Cut between words, never inside one (#157).
+		{"Never put credentials in code, config or tests. Read them from the environment.", "Never put credentials in code, config or tests. Read them…"},
+		{"Never put credentials in code, config or tests, and read them from the environment.", "Never put credentials in code, config or tests, and read…"},
 	}
 	for _, tt := range tests {
 		if got := Excerpt(tt.body); got != tt.want {
 			t.Errorf("Excerpt(%q) = %q, want %q", tt.body, got, tt.want)
 		}
+	}
+}
+
+func TestSummary(t *testing.T) {
+	long := "Never print with fmt.Println in production code: use the shared logger in internal/log, so every line is structured, leveled and searchable."
+	tests := []struct{ body, want string }{
+		{"Never put credentials in code.\n\nMore detail.", "Never put credentials in code."},
+		{long, "Never print with fmt.Println in production code: use the shared logger in internal/log, so every line is structured…"},
+	}
+	for _, tt := range tests {
+		if got := Summary(tt.body); got != tt.want {
+			t.Errorf("Summary(%q) = %q, want %q", tt.body, got, tt.want)
+		}
+	}
+}
+
+func TestShown(t *testing.T) {
+	tests := []struct{ excerpt, message, quote, rest string }{
+		{"Short rule.", "Short rule.", "Short rule.", ""},
+		{"Short rule.", "", "Short rule.", ""},
+		{"Never put credentials in code, config or tests. Read them…", "Never put credentials in code, config or tests. Read them from the environment.",
+			"Never put credentials in code, config or tests. Read them from the environment.", ""},
+		{"Log through internal/log.", "log through internal/log, not fmt.Print", "Log through internal/log.", "log through internal/log, not fmt.Print"},
+		// A rule's own long message that starts as its body does stays a
+		// message, where its cap applies, never the quote.
+		{"No TODO comments.", "No TODO comments. " + strings.Repeat("Track the work in an issue. ", 10),
+			"No TODO comments.", "No TODO comments. " + strings.Repeat("Track the work in an issue. ", 10)},
+	}
+	for _, tt := range tests {
+		if q, r := Shown(tt.excerpt, tt.message); q != tt.quote || r != tt.rest {
+			t.Errorf("Shown(%q, %q) = %q, %q, want %q, %q", tt.excerpt, tt.message, q, r, tt.quote, tt.rest)
+		}
+	}
+}
+
+// TestRunDefaultMessage: a violation of a rule with no message says the
+// start of the rule, longer than its excerpt (#157).
+func TestRunDefaultMessage(t *testing.T) {
+	body := "Never put credentials in code, config or tests. Read them from the environment."
+	idx := index.Index{Rules: []index.Entry{entry("a", body, nil, map[string]string{"check": "fake"})}}
+	f := &fake{name: "fake", found: []Violation{{RuleID: "a", File: "x.go", Line: 1}}}
+	r, err := Run(context.Background(), "root", idx, []string{"x.go"}, map[string]Checker{"fake": f})
+	if err != nil || len(r.Violations) != 1 {
+		t.Fatalf("Run = %v, %v", r.Violations, err)
+	}
+	if got := r.Violations[0].Message; got != body {
+		t.Errorf("message = %q, want %q", got, body)
 	}
 }
 

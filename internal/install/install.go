@@ -166,7 +166,7 @@ func Init(a adapter.Adapter, root, version string, set Set) (changes, notes []st
 
 	// Check.
 	hooks, _, _, _ := a.Install(nil, stamp, set.apply(adapter.Switches{}))
-	byHand := fmt.Sprintf("; add these hooks to %s by hand:\n%s", a.SettingsFile(), hooks)
+	byHand := fmt.Sprintf("; add these hooks to %s by hand:\n%s", filepath.ToSlash(a.SettingsFile()), hooks)
 	if err := plainDir(settingsDir); err != nil {
 		return nil, nil, fmt.Errorf("%w: stele will not write through it%s", err, byHand)
 	}
@@ -175,7 +175,7 @@ func Init(a adapter.Adapter, root, version string, set Set) (changes, notes []st
 	}
 	data, mode, err := readSettings(settings)
 	if errors.Is(err, safefile.ErrNotRegular) {
-		return nil, nil, fmt.Errorf("%s is not a plain file (a symlink?): stele will not replace it%s", a.SettingsFile(), byHand)
+		return nil, nil, fmt.Errorf("%s is not a plain file (a symlink?): stele will not replace it%s", filepath.ToSlash(a.SettingsFile()), byHand)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -187,7 +187,7 @@ func Init(a adapter.Adapter, root, version string, set Set) (changes, notes []st
 	sw := set.apply(installed)
 	out, changed, notes, err := a.Install(data, stamp, sw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%s: %w; fix it and run stele init again", a.SettingsFile(), err)
+		return nil, nil, fmt.Errorf("%s: %w; fix it and run stele init again", filepath.ToSlash(a.SettingsFile()), err)
 	}
 	createMD := !exists(steleMD)
 	hadGitignore := exists(filepath.Join(steleDir, ".gitignore"))
@@ -222,9 +222,9 @@ func Init(a adapter.Adapter, root, version string, set Set) (changes, notes []st
 			return changes, notes, err
 		}
 		if had {
-			changes = append(changes, "updated stele hooks in "+a.SettingsFile())
+			changes = append(changes, "updated stele hooks in "+filepath.ToSlash(a.SettingsFile()))
 		} else {
-			changes = append(changes, "added stele hooks ("+strings.Join(a.Hooks(), ", ")+") to "+a.SettingsFile())
+			changes = append(changes, "added stele hooks ("+strings.Join(a.Hooks(), ", ")+") to "+filepath.ToSlash(a.SettingsFile()))
 		}
 	}
 
@@ -235,7 +235,7 @@ func Init(a adapter.Adapter, root, version string, set Set) (changes, notes []st
 		}
 		other := filepath.FromSlash(p)
 		if l, err := safefile.ReadRegular(filepath.Join(root, other), maxSettings); err == nil && a.OtherSteleHook(l, stamp, sw) {
-			notes = append(notes, other+" runs another stele hook: remove it there, or stele runs twice")
+			notes = append(notes, p+" runs another stele hook: remove it there, or stele runs twice")
 		}
 	}
 	if enforce.SetsBackstop(root) {
@@ -280,14 +280,14 @@ func Uninstall(a adapter.Adapter, root string, others []adapter.Adapter) (change
 	}
 	data, mode, err := readSettings(settings)
 	if errors.Is(err, safefile.ErrNotRegular) {
-		return nil, nil, fmt.Errorf("%s is not a plain file (a symlink?): remove its stele hooks by hand, nothing was removed", a.SettingsFile())
+		return nil, nil, fmt.Errorf("%s is not a plain file (a symlink?): remove its stele hooks by hand, nothing was removed", filepath.ToSlash(a.SettingsFile()))
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 	out, removed, empty, err := a.Uninstall(data)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%s: %w; nothing was removed", a.SettingsFile(), err)
+		return nil, nil, fmt.Errorf("%s: %w; nothing was removed", filepath.ToSlash(a.SettingsFile()), err)
 	}
 
 	// The hooks go first, so a running session stops recreating .stele/.
@@ -298,12 +298,12 @@ func Uninstall(a adapter.Adapter, root string, others []adapter.Adapter) (change
 			return nil, nil, err
 		}
 		os.Remove(filepath.Dir(settings)) // only when nothing else is in it
-		changes = append(changes, "removed stele hooks from "+a.SettingsFile())
+		changes = append(changes, "removed stele hooks from "+filepath.ToSlash(a.SettingsFile()))
 	default:
 		if err := safefile.ReplacePerm(settings, out, mode); err != nil {
 			return nil, nil, err
 		}
-		changes = append(changes, "removed stele hooks from "+a.SettingsFile())
+		changes = append(changes, "removed stele hooks from "+filepath.ToSlash(a.SettingsFile()))
 	}
 
 	// The rules file goes when stele wrote it, by its header, and so does a
