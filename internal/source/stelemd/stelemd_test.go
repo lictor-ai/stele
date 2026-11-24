@@ -272,6 +272,26 @@ Never put credentials in source code.
 			want: []source.Rule{rule(0, 11, source.Rule{Tags: []string{"go"}, Body: "Never use eval."})},
 		},
 		{
+			name: "## at the top, then prose, is rule 1's title",
+			src:  "## Never use eval\n\nIt runs anything.\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Body: "## Never use eval\n\nIt runs anything."})},
+		},
+		{
+			name: "# title, then ## and prose",
+			src:  "# Our rules\n\n## Never use eval\n\nIt runs anything.\n",
+			want: []source.Rule{rule(0, 3, source.Rule{Body: "## Never use eval\n\nIt runs anything."})},
+		},
+		{
+			name: "## at the top, then metadata",
+			src:  "## Go\n\nscope: [\"*.go\"]\n\nNever use eval.\n",
+			want: []source.Rule{rule(0, 3, source.Rule{Scope: []string{"*.go"}, Body: "Never use eval."})},
+		},
+		{
+			name: "## alone at the top is not a rule",
+			src:  "## Never use eval\n\n---\n\nTwo.\n",
+			want: []source.Rule{rule(0, 5, source.Rule{Body: "Two."})},
+		},
+		{
 			name: "a heading alone at the top is not a rule",
 			src:  "# Our rules\n\n---\n\nNever use eval.\n",
 			want: []source.Rule{rule(0, 5, source.Rule{Body: "Never use eval."})},
@@ -390,6 +410,41 @@ func TestParseErrors(t *testing.T) {
 			}
 			if got := err.Error(); got != tt.wantMsg {
 				t.Errorf("Parse() error = %q, want %q", got, tt.wantMsg)
+			}
+		})
+	}
+}
+
+// A block of headings alone is no rule, and Notes names it (D98); the file's
+// # title at the top is not one.
+func TestNotes(t *testing.T) {
+	ctx := context.Background()
+	for name, tt := range map[string]struct {
+		src  string
+		want []string
+	}{
+		"no stele.md":       {"", nil},
+		"no heading":        {"One.\n---\nTwo.\n", nil},
+		"title alone":       {"# Our rules\n\n---\n\nOne.\n", nil},
+		"## alone at top":   {"## Go\n\n---\n\nOne.\n", []string{"stele.md:1: a heading alone is not a rule"}},
+		"title, then ##":    {"# Our rules\n\n## Go\n\n---\n\nOne.\n", []string{"stele.md:3: a heading alone is not a rule"}},
+		"later blocks":      {"One.\n\n---\n\n## Section\n\n---\n\nTwo.\n---\n# A\n### B\n", []string{"stele.md:5: a heading alone is not a rule", "stele.md:11: a heading alone is not a rule"}},
+		"heading and prose": {"One.\n---\n## Title\n\nTwo.\n", nil},
+		"does not parse":    {"## Go\n---\ntags: [a\n\nOne.\n", nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.src != "" {
+				if err := os.WriteFile(filepath.Join(root, "stele.md"), []byte(tt.src), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := New().(source.Noter).Notes(ctx, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("Notes (-want +got):\n%s", diff)
 			}
 		})
 	}

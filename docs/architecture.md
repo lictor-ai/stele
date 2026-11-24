@@ -196,9 +196,10 @@ func Parse(src []byte) ([]source.Rule, error) // pure
 ```
 
 **`Parse`** splits on lines holding only `---`, except inside a fenced code
-block. It skips leading HTML comments, and leading Markdown headings in the
-first block, or in a later one when metadata or nothing follows them (D98),
-reads leading `key: value` lines as
+block. It skips leading HTML comments, a leading `#` title in the first
+block, and other leading Markdown headings when metadata or nothing follows
+them (D98; the stelemd source's `Notes`, a `source.Noter`, names a block of
+headings alone for `stele compile` to print), reads leading `key: value` lines as
 metadata, and takes everything after the first blank line as the body. A key
 matches `^[a-z][a-z0-9_-]*$` and is followed by `:` and a space or the end of the
 line; any other line is body. `description`, `tags` and `scope` fill their

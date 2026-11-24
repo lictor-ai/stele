@@ -191,13 +191,24 @@ func TestCompileLeadingHeading(t *testing.T) {
 		}
 		before, _ := lock.Load(root)
 		writeAt(t, root, "stele.md", "# Our rules\n\n---\n\nOne.\n\n---\n\nTwo.\n")
-		code, out, _ := runCmd("compile")
+		code, out, errOut := runCmd("compile")
 		if code != exitOK || !strings.Contains(out, "2 rules: 2 matched by text, 0 by position, 0 new, 1 dropped") {
 			t.Fatalf("compile = %d, stdout %q, want the heading's rule dropped", code, out)
+		}
+		// The file's # title says nothing.
+		if strings.Contains(errOut, "heading") {
+			t.Errorf("stderr = %q, want no note for the file's title", errOut)
 		}
 		after, _ := lock.Load(root)
 		if len(after.Rules) != 2 || after.Rules[0].ID != before.Rules[1].ID || after.Rules[1].ID != before.Rules[2].ID {
 			t.Errorf("ids: before %+v, after %+v", before.Rules, after.Rules)
+		}
+	})
+	t.Run("a section heading alone gets a note", func(t *testing.T) {
+		project(t, "One.\n\n---\n\n## Section\n\n---\n\nTwo.\n")
+		code, out, errOut := runCmd("compile")
+		if code != exitOK || !strings.Contains(out, "2 rules:") || !strings.Contains(errOut, "stele compile: stele.md:5: a heading alone is not a rule\n") {
+			t.Errorf("compile = %d, stdout %q, stderr %q, want 2 rules and the note", code, out, errOut)
 		}
 	})
 	t.Run("no heading: nothing changes", func(t *testing.T) {

@@ -487,8 +487,9 @@ var pluginKeys = map[string]bool{"rules": true, "ids": true, "scanners": true, "
 
 // typoOf returns the key of ownKeys that key is probably a typo of, or "":
 // one edit away (a letter added, removed, changed, or two swapped), or two
-// for a key of five letters or more. A key equal to one of them, or that a
-// shipped checker plugin reads, is no typo. Other keys are a checker's or a
+// for one of seven letters or more (pattern, message, blocking,
+// description), so score or slope is no typo of scope. A key equal to one
+// of them, or that a shipped checker plugin reads, is no typo. Other keys are a checker's or a
 // source's, and stay without a word (D46, D93).
 func typoOf(key string) string {
 	if pluginKeys[key] {
@@ -500,7 +501,7 @@ func typoOf(key string) string {
 			return ""
 		}
 		limit := 2
-		if len(own) < 5 {
+		if len(own) < 7 {
 			limit = 1
 		}
 		if d := editDistance(key, own); d <= limit && d < bestD {

@@ -15,6 +15,7 @@ import (
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/plugin"
 	"github.com/lictor-ai/stele/internal/sign"
+	"github.com/lictor-ai/stele/internal/source"
 	"github.com/lictor-ai/stele/internal/source/gitrepo"
 )
 
@@ -62,6 +63,14 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 	printCompile(stdout, r)
 	for _, n := range generatedNotes(root, r.Files) {
 		fmt.Fprintf(stderr, "stele compile: %s\n", n)
+	}
+	for _, s := range srcs {
+		if n, ok := s.(source.Noter); ok {
+			notes, _ := n.Notes(ctx, root)
+			for _, note := range notes {
+				fmt.Fprintf(stderr, "stele compile: %s\n", note)
+			}
+		}
 	}
 	for _, n := range check.Notes(r.Index) {
 		fmt.Fprintf(stderr, "stele compile: rule %s \"%s\"%s: %s\n", n.RuleID, n.Excerpt, where(r.Lock, n.RuleID), n.Message)

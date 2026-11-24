@@ -16,12 +16,12 @@
 // stele init writes is not a rule. As in a code block, a --- inside a comment
 // does not separate rules.
 //
-// Markdown headings (# to ######) before a rule are skipped too (D98): at the
-// top of the file, before the first ---, whatever follows them, since there
-// they title the file; in a later block, only when metadata or nothing
-// follows them, so a heading never hides a rule's metadata and a heading
-// alone is not a rule. A later block's heading followed by prose stays the
-// rule's text, as do headings inside a body.
+// Markdown headings (# to ######) before a rule are skipped too (D98). At the
+// top of the file, before the first ---, a # heading titles the file and is
+// skipped whatever follows it. Any other heading is skipped only when
+// metadata or nothing follows it, so a heading never hides a rule's metadata
+// and a heading alone is not a rule (Notes names it). A heading followed by
+// prose stays the rule's text, its title, as do headings inside a body.
 package stelemd
 
 import (
@@ -141,11 +141,17 @@ func ParseNamed(src []byte, file string) ([]source.Rule, error) {
 // Parse turns the contents of stele.md into rules. A bad rule is a
 // *source.ParseError naming the line.
 func Parse(src []byte) ([]source.Rule, error) {
+	rules, _, err := parse(src)
+	return rules, err
+}
+
+// parse is Parse, and also returns the line of each block of headings alone
+// (D98), which is no rule.
+func parse(src []byte) (rules []source.Rule, alone []int, err error) {
 	src = bytes.TrimPrefix(src, []byte("\xef\xbb\xbf"))
 	text := strings.ReplaceAll(string(src), "\r\n", "\n")
 	lines := strings.Split(text, "\n")
 
-	var rules []source.Rule
 	start := 0
 	fence, fenceLine := "", 0 // the open code fence, if any, and its index
 	comment, commentLine := false, 0
@@ -175,21 +181,44 @@ func Parse(src []byte) ([]source.Rule, error) {
 				continue
 			}
 		} else if fence != "" {
-			return nil, &source.ParseError{File: fileName, Line: fenceLine + 1, Err: errors.New("unclosed code block")}
+			return nil, nil, &source.ParseError{File: fileName, Line: fenceLine + 1, Err: errors.New("unclosed code block")}
 		} else if comment {
-			return nil, &source.ParseError{File: fileName, Line: commentLine + 1, Err: errors.New("unclosed comment")}
+			return nil, nil, &source.ParseError{File: fileName, Line: commentLine + 1, Err: errors.New("unclosed comment")}
 		}
-		r, ok, err := parseRule(lines[start:i], start+1, start == 0)
+		heading := 0
+		r, ok, err := parseRule(lines[start:i], start+1, start == 0, &heading)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if ok {
 			r.Position = len(rules)
 			rules = append(rules, r)
 		}
+		if heading > 0 {
+			alone = append(alone, heading)
+		}
 		start = i + 1
 	}
-	return rules, nil
+	return rules, alone, nil
+}
+
+// Notes says what is worth knowing about stele.md under root that is not an
+// error: each block of headings alone, which is not a rule (D98). It reads
+// the file again; a file that does not parse has no notes, Read reports it.
+func (stelemd) Notes(ctx context.Context, root string) ([]string, error) {
+	src, err := readFile(ctx, root)
+	if err != nil || src == nil {
+		return nil, err
+	}
+	_, alone, err := parse(src)
+	if err != nil {
+		return nil, nil
+	}
+	var notes []string
+	for _, line := range alone {
+		notes = append(notes, fmt.Sprintf("%s:%d: a heading alone is not a rule", fileName, line))
+	}
+	return notes, nil
 }
 
 // opensFence returns the fence a line opens, such as ``` or ~~~~, or "". As in
@@ -233,8 +262,9 @@ func closesFence(line, fence string) bool {
 
 // parseRule parses the lines between two separators. first is the 1-based
 // line number of lines[0]; top is true for the block that starts the file.
-// ok is false for a block with no rule in it.
-func parseRule(lines []string, first int, top bool) (r source.Rule, ok bool, err error) {
+// ok is false for a block with no rule in it. A block of headings alone,
+// other than the file's # title, sets *alone to its first heading's line.
+func parseRule(lines []string, first int, top bool, alone *int) (r source.Rule, ok bool, err error) {
 	fail := func(i int, format string, args ...any) (source.Rule, bool, error) {
 		return source.Rule{}, false, &source.ParseError{File: fileName, Line: first + i, Err: fmt.Errorf(format, args...)}
 	}
@@ -243,17 +273,27 @@ func parseRule(lines []string, first int, top bool) (r source.Rule, ok bool, err
 	if unclosed >= 0 {
 		return fail(unclosed, "unclosed comment")
 	}
+	// At the top of the file, # headings title the file, whatever follows
+	// them (D98).
+	for top && i < len(lines) && title(lines[i]) {
+		if lines, i, unclosed = skipPreamble(lines, i+1); unclosed >= 0 {
+			return fail(unclosed, "unclosed comment")
+		}
+	}
 	if i < len(lines) && heading(lines[i]) {
-		// Headings, and the blank lines and comments between them, are not
-		// part of the rule (D98) at the top of the file, or when metadata
-		// or nothing follows them.
+		// Other headings, and the blank lines and comments between them,
+		// are not part of the rule when metadata or nothing follows them
+		// (D98). A heading followed by prose is the rule's title.
 		hl, j := lines, i
 		for j < len(hl) && heading(hl[j]) {
 			if hl, j, unclosed = skipPreamble(hl, j+1); unclosed >= 0 {
 				return fail(unclosed, "unclosed comment")
 			}
 		}
-		if top || j == len(hl) || metaLine.MatchString(strings.TrimRight(hl[j], " \t")) {
+		if j == len(hl) {
+			*alone = first + i
+		}
+		if j == len(hl) || metaLine.MatchString(strings.TrimRight(hl[j], " \t")) {
 			lines, i = hl, j
 		}
 	}
@@ -352,6 +392,11 @@ func skipPreamble(lines []string, i int) (out []string, next, unclosed int) {
 		}
 	}
 	return lines, i, -1
+}
+
+// title reports whether line is a first-level heading, # and not ##.
+func title(line string) bool {
+	return heading(line) && !strings.HasPrefix(strings.TrimLeft(line, " "), "##")
 }
 
 // heading reports whether line is a Markdown ATX heading: as in CommonMark,
