@@ -163,6 +163,7 @@ created .stele/.gitignore
 created stele.md
 added stele hooks (PreToolUse, PostToolUse, SessionStart, SubagentStart) to .claude/settings.json
 wrote stele.lock
+built this machine's rules index (no rules yet)
 wrote .claude/rules/stele-rules.md
 hooks: remind on, check on
 ```
@@ -170,7 +171,7 @@ hooks: remind on, check on
 - It works on the current directory only, and says so if a parent directory looks like the repository root (not when the current directory is a git worktree or submodule).
 - It adds `stele hook --installed=<version>` to `.claude/settings.json` on `PreToolUse` (matcher `Write|Edit|MultiEdit|Bash`), `PostToolUse` (matcher `Write|Edit|MultiEdit`), `SessionStart` and `SubagentStart`, each with a timeout of 10 s. The rest of the file is kept. `<version>` is the release tag, or `devel` for a build from a commit (`go install ./cmd/stele` in a clone, or `@latest` before a tag); a build from a commit never replaces a release's stamp.
 - It creates `stele.md` only if there is none. stele never writes `stele.md` or `stele.json` after that.
-- It compiles the rules: `stele.lock`, and `.claude/rules/stele-rules.md`, which Claude Code loads at the start of every session and subagent, like `CLAUDE.md`. So the agent has the rules before its first write.
+- It compiles the rules: `stele.lock`, and `.claude/rules/stele-rules.md`, which Claude Code loads at the start of every session and subagent, like `CLAUDE.md`. So the agent has the rules before its first write. It also builds this machine's rules index in `.stele/`, which the hook reads, and says so with the number of rules; in a fresh clone of a project with [shared rules](#shared-rules), that is what lets the hook enforce them.
 - Running it again prints `up to date, nothing written`. Every run ends with the state of the two write hooks.
 
 ### Turning the write hooks on and off
@@ -218,6 +219,7 @@ stele init in /home/you/project
 created .stele/.gitignore
 added stele hooks (PreToolUse, PostToolUse, SessionStart) to .codex/hooks.json
 wrote stele.lock
+built this machine's rules index (3 rules)
 wrote AGENTS.md
 stele init: Codex runs a project's hooks only in a trusted project, and only once you approve each one: start codex here, trust the project, type /hooks and approve stele's hooks. Until then Codex skips them, without a word in codex exec. Codex asks again whenever stele init changes them (--remind, --check).
 stele init: kept the existing stele.md
@@ -485,7 +487,7 @@ stele check: stele.lock is out of date with stele.json: run stele compile and co
 - **Ids come from the guidelines.** When the guidelines repository has its own `stele.lock` next to its `stele.md`, its rules keep those ids in every project ("supplied by their source"). Run `stele compile` there and commit its `stele.lock`.
 - **It uses your git login.** stele runs `git` on `PATH`, outside the project, and never asks for a password or holds a token: ssh keys and credential helpers work as they do for `git clone`.
 - **It needs the network only for a new pin.** stele keeps a bare clone of each repository in your user cache directory (`stele/sources/` in it), never in the project. A commit it already has is read offline.
-- **The hook never fetches.** It uses the rules from the last `stele compile`, `stele check` or `stele init` on your machine.
+- **The hook never fetches.** It uses the rules from the last `stele compile` or `stele init` on your machine; `stele check` writes nothing for it. After cloning a project with shared rules, run `stele init` (or `stele compile`) once.
 
 In CI, `stele check` reads the pinned commit, so the job needs read access to the guidelines repository. GitHub's default `GITHUB_TOKEN` reads only the repository the job runs in: give the job a deploy key for the guidelines repository, or a read token set in git's own config, never in `stele.json`. With no access, `stele check` exits 2:
 
@@ -728,7 +730,7 @@ Both checkers find `opengrep` and `trivy` as stele finds a plugin: only on `PATH
 - **Only from `PATH`, never from the project.** stele looks only in `PATH` entries that are absolute and outside the project and the git repository that holds it, so a copy inside the project is passed over, never run; on Windows the current directory isn't searched. One that links into the project is refused. On Windows it must be an `.exe` or `.com`.
 - **Run with no shell, outside the project.** It runs in a directory of stele's own, `stele/plugins` in your user cache directory, and finds the project through the `root` stele sends it. It gets your environment, with `PATH` and the library and module paths (`LD_LIBRARY_PATH`, `PYTHONPATH`, `NODE_PATH` and the like) cut to entries outside the project. What it writes on stderr is shown, each line starting with its name.
 - **What it starts stops with it.** After each call stele stops whatever the plugin left running. Ctrl-C stops the plugin too, and stele says the call was cancelled.
-- **Never in the hook.** Source plugins run at `stele compile`, `stele check` and `stele init`, checker plugins at `stele check`, and sinks at `stele push` and `stele check --push`. `stele status` asks each listed plugin its version, unless you pass `--offline`. The hook uses the rules of the last compile, check or init on your machine.
+- **Never in the hook.** Source plugins run at `stele compile`, `stele check` and `stele init`, checker plugins at `stele check`, and sinks at `stele push` and `stele check --push`. `stele status` asks each listed plugin its version, unless you pass `--offline`. The hook uses the rules of the last `stele compile` or `stele init` on your machine.
 
 Writing one takes a few lines in any language: [docs/plugin-protocol.md](docs/plugin-protocol.md) describes the protocol, with the `paragraphs` example above.
 
@@ -1064,7 +1066,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **A shared rule can't be switched off or changed in a project.** It applies as written, next to the project's own rules.
 
-**Before the first `stele compile`, `stele check` or `stele init` on a machine, the hook knows only the project's own rules.** A fresh clone has no index yet, and the hook never fetches. The agent still loads the shared rules from the committed `.claude/rules/stele-rules.md`, but no write is denied or checked against them until then. `stele rules` lists only the project's own rules until then too, and says the shared ones are missing.
+**Before the first `stele compile` or `stele init` on a machine, the hook knows only the project's own rules.** A fresh clone has no index yet, and the hook never fetches. `stele check` doesn't build one: it reads the shared rules and reports their violations, but writes nothing, as in CI. The agent still loads the shared rules from the committed `.claude/rules/stele-rules.md`, but no write is denied or checked against them until then. `stele rules` lists only the project's own rules until then too, and says the shared ones are missing. `stele init` says when it builds the index: `built this machine's rules index (3 rules)`, or `updated` when the hook had already built one from the project's own rules.
 
 **A cloned project chooses where `stele compile`, `stele check` and `stele init` connect.** Its `stele.json` names the host, and ssh offers your keys to it, as `git clone` of a project with submodules would. Look at a `sources` entry before running stele in a project you don't trust.
 
@@ -1086,7 +1088,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **A cloned project chooses which plugins run.** Its `stele.json` names them, and stele runs the ones of those names on your `PATH`. It can't bring a plugin of its own, but it can make one you installed run with its `config`.
 
-**Before the first `stele compile`, `stele check` or `stele init` on a machine, the hook knows only the project's own rules.** As for shared rules: the agent still loads a plugin's rules from the committed `.claude/rules/stele-rules.md`, but no write is denied or checked against them until then, and `stele rules` does not list them.
+**Before the first `stele compile` or `stele init` on a machine, the hook knows only the project's own rules.** As for shared rules: the agent still loads a plugin's rules from the committed `.claude/rules/stele-rules.md`, but no write is denied or checked against them until then, and `stele rules` does not list them.
 
 **A plugin's rules aren't pinned.** `stele check` asks the plugin again, so if it reads something outside the project that changed, `stele check` fails until you run `stele compile`.
 
