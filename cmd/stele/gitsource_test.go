@@ -321,6 +321,67 @@ func TestHookOnAFreshCloneKeepsSharedRules(t *testing.T) {
 	}
 }
 
+// A fresh clone of a project with shared rules (#149): stele check reads
+// them and reports their violations, but writes nothing, as in CI (spec §8),
+// so the hook still lacks them. stele init builds this machine's index and
+// says so; the hook then checks a write against them.
+func TestFreshCloneSharedRulesReachTheHookThroughInit(t *testing.T) {
+	bare, work, _ := sharedRemote(t)
+	pushShared(t, work, bare, "scope: [\"**/*.go\"]\ncheck: regex\npattern: panic\\(\n\nNo panic in library code.\n")
+	root := project(t, rules)
+	withGitSource(t, root, "main")
+	if code, _, errOut := runCmd("compile"); code != exitOK {
+		t.Fatalf("compile: %s", errOut)
+	}
+	commitAll(t, root, "shared rules")
+
+	clone := func() string {
+		t.Helper()
+		dir := t.TempDir()
+		gitIn(t, dir, "clone", "--quiet", root, ".")
+		t.Chdir(dir)
+		return dir
+	}
+	const panics = "package a\n\nfunc F() { panic(\"x\") }\n"
+	const shared = "No panic in library code."
+
+	dir := clone()
+	writeAt(t, dir, "a.go", panics)
+	code, out, errOut := runCmd("check")
+	if code != exitFailed || !strings.Contains(out, shared) {
+		t.Fatalf("check = %d, stdout %q, stderr %q; want the shared rule's violation", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".stele")); !os.IsNotExist(err) {
+		t.Errorf("check wrote .stele/ (%v): it writes nothing (spec §8)", err)
+	}
+	if o, _ := postHook(t, dir, "post-write", "a.go", panics); o.Decision != "" {
+		t.Errorf("hook before init: decision %q, reason %q; the hook can't know the shared rules yet", o.Decision, o.Reason)
+	}
+	if _, _, errOut := runCmd("rules"); !strings.Contains(errOut, "not in this machine's index: run stele compile") {
+		t.Errorf("rules before init: stderr %q, want the shared rules noted missing", errOut)
+	}
+
+	// The hook built an index from stele.md alone: init updates it.
+	code, out, errOut = runCmd("init")
+	if code != exitOK || !strings.Contains(out, "\nupdated this machine's rules index (3 rules)\n") || strings.Contains(out, "nothing written") {
+		t.Fatalf("init = %d, stdout %q, stderr %q; want the index update said", code, out, errOut)
+	}
+	o, _ := postHook(t, dir, "post-write", "a.go", panics)
+	if o.Decision != "block" || !strings.Contains(o.Reason, shared) {
+		t.Errorf("hook after init: decision %q, reason %q; want the shared rule's block", o.Decision, o.Reason)
+	}
+	if _, out, _ = runCmd("init"); !strings.Contains(out, "up to date, nothing written") || strings.Contains(out, "rules index") {
+		t.Errorf("init again: stdout %q, want nothing written", out)
+	}
+
+	// Another clone, where init runs first: it builds the index.
+	clone()
+	code, out, errOut = runCmd("init")
+	if code != exitOK || !strings.Contains(out, "\nbuilt this machine's rules index (3 rules)\n") {
+		t.Errorf("init on a fresh clone = %d, stdout %q, stderr %q; want the index build said", code, out, errOut)
+	}
+}
+
 // sources is where git starts; the hook and stats reach neither it nor
 // internal/gitexec.
 func TestSourcesReachGit(t *testing.T) {

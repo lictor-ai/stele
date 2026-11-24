@@ -28,7 +28,7 @@ func TestInitAndUninstall(t *testing.T) {
 		t.Fatalf("init = %d, stderr %q", code, errOut)
 	}
 	for _, want := range []string{"added stele hooks", "created .stele/.gitignore", "created stele.md",
-		"wrote stele.lock", "wrote .claude/rules/stele-rules.md"} {
+		"wrote stele.lock", "built this machine's rules index (0 rules)", "wrote .claude/rules/stele-rules.md"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("init stdout lacks %q:\n%s", want, out)
 		}

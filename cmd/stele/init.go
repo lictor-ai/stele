@@ -14,6 +14,7 @@ import (
 
 	"github.com/lictor-ai/stele/internal/adapter"
 	"github.com/lictor-ai/stele/internal/compile"
+	"github.com/lictor-ai/stele/internal/index"
 	"github.com/lictor-ai/stele/internal/install"
 	"github.com/lictor-ai/stele/internal/lock"
 	"github.com/lictor-ai/stele/internal/source/gitrepo"
@@ -210,6 +211,7 @@ func initCompile(root string, stderr io.Writer) (changes, notes []string) {
 	if err != nil {
 		return nil, []string{fmt.Sprintf("%v: fix it and %s", err, later)}
 	}
+	_, statErr := os.Lstat(index.Path(root))
 	r, err := compile.Compile(ctx, root, srcs, generated(root), uuid.NewString, key)
 	var ge *compile.GeneratedError
 	if err != nil && !errors.As(err, &ge) {
@@ -217,6 +219,15 @@ func initCompile(root string, stderr io.Writer) (changes, notes []string) {
 	}
 	if r.LockChanged {
 		changes = append(changes, "wrote "+lock.FileName)
+	}
+	if r.IndexChanged {
+		// The index is this machine's, never committed: on a fresh clone
+		// building it is what gives the hook the shared rules (#149).
+		verb := "updated"
+		if statErr != nil {
+			verb = "built"
+		}
+		changes = append(changes, fmt.Sprintf("%s this machine's rules index (%s)", verb, plural(len(r.Index.Rules), "rule")))
 	}
 	for _, f := range r.Files {
 		if f.Changed && !f.Foreign && ge == nil {
