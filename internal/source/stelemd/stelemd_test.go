@@ -250,6 +250,103 @@ Never put credentials in source code.
 			src:  "~~~ `go`\n---\n~~~\n",
 			want: []source.Rule{rule(0, 1, source.Rule{Body: "~~~ `go`\n---\n~~~"})},
 		},
+		// D98: headings before a rule.
+		{
+			name: "heading at the top, then metadata",
+			src:  "# Our rules\n\nscope: [\"*.go\"]\n\nNever use eval.\n",
+			want: []source.Rule{rule(0, 3, source.Rule{Scope: []string{"*.go"}, Body: "Never use eval."})},
+		},
+		{
+			name: "heading at the top, metadata on the next line",
+			src:  "# Our rules\nscope: [\"*.go\"]\n\nNever use eval.\n",
+			want: []source.Rule{rule(0, 2, source.Rule{Scope: []string{"*.go"}, Body: "Never use eval."})},
+		},
+		{
+			name: "heading at the top, then the body",
+			src:  "# Our rules\n\nNever use eval.\n",
+			want: []source.Rule{rule(0, 3, source.Rule{Body: "Never use eval."})},
+		},
+		{
+			name: "headings, comments and blank lines at the top",
+			src:  "<!-- header -->\n\n# Our rules\n\n<!--\nnote\n-->\n## Go\n   ### Style\n\ntags: [go]\n\nNever use eval.\n",
+			want: []source.Rule{rule(0, 11, source.Rule{Tags: []string{"go"}, Body: "Never use eval."})},
+		},
+		{
+			name: "## at the top, then prose, is rule 1's title",
+			src:  "## Never use eval\n\nIt runs anything.\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Body: "## Never use eval\n\nIt runs anything."})},
+		},
+		{
+			name: "# title, then ## and prose",
+			src:  "# Our rules\n\n## Never use eval\n\nIt runs anything.\n",
+			want: []source.Rule{rule(0, 3, source.Rule{Body: "## Never use eval\n\nIt runs anything."})},
+		},
+		{
+			name: "## at the top, then metadata",
+			src:  "## Go\n\nscope: [\"*.go\"]\n\nNever use eval.\n",
+			want: []source.Rule{rule(0, 3, source.Rule{Scope: []string{"*.go"}, Body: "Never use eval."})},
+		},
+		{
+			name: "## alone at the top is not a rule",
+			src:  "## Never use eval\n\n---\n\nTwo.\n",
+			want: []source.Rule{rule(0, 5, source.Rule{Body: "Two."})},
+		},
+		{
+			name: "a heading alone at the top is not a rule",
+			src:  "# Our rules\n\n---\n\nNever use eval.\n",
+			want: []source.Rule{rule(0, 5, source.Rule{Body: "Never use eval."})},
+		},
+		{
+			name: "heading after a separator, then metadata",
+			src:  "One.\n\n---\n\n## Testing\n\nscope: [\"**/*_test.go\"]\n\nUse t.TempDir.\n",
+			want: []source.Rule{
+				rule(0, 1, source.Rule{Body: "One."}),
+				rule(1, 7, source.Rule{Scope: []string{"**/*_test.go"}, Body: "Use t.TempDir."}),
+			},
+		},
+		{
+			name: "a heading alone after a separator is not a rule",
+			src:  "One.\n\n---\n\n## Section\n\n---\n\nTwo.\n",
+			want: []source.Rule{
+				rule(0, 1, source.Rule{Body: "One."}),
+				rule(1, 9, source.Rule{Body: "Two."}),
+			},
+		},
+		{
+			name: "heading after a separator, then prose, stays the rule's text",
+			src:  "One.\n\n---\n\n## No eval\n\nNever use eval.\n",
+			want: []source.Rule{
+				rule(0, 1, source.Rule{Body: "One."}),
+				rule(1, 5, source.Rule{Body: "## No eval\n\nNever use eval."}),
+			},
+		},
+		{
+			name: "comment, heading, prose after a separator",
+			src:  "One.\n\n---\n<!-- c -->\n## No eval\nNever use eval.\n",
+			want: []source.Rule{
+				rule(0, 1, source.Rule{Body: "One."}),
+				rule(1, 5, source.Rule{Body: "## No eval\nNever use eval."}),
+			},
+		},
+		{
+			name: "headings inside a body are body",
+			src:  "tags: [a]\n\nNever use eval.\n\n## Why\n\nIt runs anything.\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Tags: []string{"a"}, Body: "Never use eval.\n\n## Why\n\nIt runs anything."})},
+		},
+		{
+			name: "not headings: a hashtag, seven #, four spaces",
+			src:  "#eval is banned.\n\n---\n\n####### Seven.\n\n---\n\n    # Code.\n",
+			want: []source.Rule{
+				rule(0, 1, source.Rule{Body: "#eval is banned."}),
+				rule(1, 5, source.Rule{Body: "####### Seven."}),
+				rule(2, 9, source.Rule{Body: "    # Code."}),
+			},
+		},
+		{
+			name: "a heading in a code block at the top is not skipped",
+			src:  "```\n# not a heading\n```\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Body: "```\n# not a heading\n```"})},
+		},
 		{
 			name: "apostrophe inside a list item",
 			src:  "tags: [don't-care, b]\n\nBody.\n",
@@ -292,6 +389,8 @@ func TestParseErrors(t *testing.T) {
 			src:     "One.\n---\n<!-- never closed\n---\nTwo.\n",
 			wantMsg: "stele.md:3: unclosed comment",
 		},
+		{name: "unclosed comment after a heading", src: "# Rules\n<!-- never closed\n\nBody.\n", wantMsg: "stele.md:2: unclosed comment"},
+		{name: "heading then metadata with no body", src: "One.\n---\n## Two\ntags: [a]\n", wantMsg: "stele.md:4: rule has no body"},
 		{name: "unclosed quote in a list", src: "tags: [\"a, b]\n\nBody.\n", wantMsg: "stele.md:1: tags: unclosed quote"},
 		{name: "exclusion with no pattern", src: "One.\n---\nscope: [a, \"!\"]\n\nBody.\n", wantMsg: `stele.md:3: scope: "!" has no pattern after the !`},
 		{name: "bare exclusion", src: "scope: !\n\nBody.\n", wantMsg: `stele.md:1: scope: "!" has no pattern after the !`},
@@ -311,6 +410,41 @@ func TestParseErrors(t *testing.T) {
 			}
 			if got := err.Error(); got != tt.wantMsg {
 				t.Errorf("Parse() error = %q, want %q", got, tt.wantMsg)
+			}
+		})
+	}
+}
+
+// A block of headings alone is no rule, and Notes names it (D98); the file's
+// # title at the top is not one.
+func TestNotes(t *testing.T) {
+	ctx := context.Background()
+	for name, tt := range map[string]struct {
+		src  string
+		want []string
+	}{
+		"no stele.md":       {"", nil},
+		"no heading":        {"One.\n---\nTwo.\n", nil},
+		"title alone":       {"# Our rules\n\n---\n\nOne.\n", nil},
+		"## alone at top":   {"## Go\n\n---\n\nOne.\n", []string{"stele.md:1: a heading alone is not a rule"}},
+		"title, then ##":    {"# Our rules\n\n## Go\n\n---\n\nOne.\n", []string{"stele.md:3: a heading alone is not a rule"}},
+		"later blocks":      {"One.\n\n---\n\n## Section\n\n---\n\nTwo.\n---\n# A\n### B\n", []string{"stele.md:5: a heading alone is not a rule", "stele.md:11: a heading alone is not a rule"}},
+		"heading and prose": {"One.\n---\n## Title\n\nTwo.\n", nil},
+		"does not parse":    {"## Go\n---\ntags: [a\n\nOne.\n", nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.src != "" {
+				if err := os.WriteFile(filepath.Join(root, "stele.md"), []byte(tt.src), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := New().(source.Noter).Notes(ctx, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("Notes (-want +got):\n%s", diff)
 			}
 		})
 	}

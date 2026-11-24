@@ -205,6 +205,67 @@ func TestRunRuleProblems(t *testing.T) {
 	}
 }
 
+// A key one or two edits from one of stele's own gets a note (D99); any
+// other unknown key, and a shipped checker plugin's, stays without a word.
+func TestNotesTypoKeys(t *testing.T) {
+	for key, want := range map[string]string{
+		"scopes":      "scope",
+		"scpoe":       "scope",
+		"paterns":     "pattern",
+		"pattren":     "pattern",
+		"mesage":      "message",
+		"messages":    "message",
+		"chekc":       "check",
+		"blockng":     "blocking",
+		"tag":         "tags",
+		"descripton":  "description",
+		"checks":      "check",
+		"store":       "",
+		"shape":       "",
+		"scale":       "",
+		"escape":      "",
+		"owner":       "",
+		"lang":        "",
+		"page":        "",
+		"team":        "",
+		"word":        "",
+		"rules":       "",
+		"ids":         "",
+		"scanners":    "",
+		"severity":    "",
+		"check":       "",
+		"blocking":    "",
+		"description": "",
+	} {
+		meta := map[string]string{key: "x"}
+		got := Notes(index.Index{Rules: []index.Entry{entry("r", "A rule.", nil, meta)}})
+		var msgs []string
+		for _, n := range got {
+			if strings.HasPrefix(n.Message, "unknown key") {
+				msgs = append(msgs, n.Message)
+			}
+		}
+		var wantMsgs []string
+		if want != "" {
+			wantMsgs = []string{"unknown key " + key + ", did you mean " + want + "?"}
+		}
+		if diff := cmp.Diff(wantMsgs, msgs); diff != "" {
+			t.Errorf("Notes for key %q (-want +got):\n%s", key, diff)
+		}
+	}
+
+	// Several on one rule: one note each, in key order, after blocking's.
+	idx := index.Index{Rules: []index.Entry{entry("r", "A rule.", nil, map[string]string{"scopes": "x", "blocking": "true", "mesage": "m", "owner": "me"})}}
+	want := []Problem{
+		{RuleID: "r", Excerpt: "A rule.", Message: "blocking without check: the rule is guidance only, so blocking does nothing"},
+		{RuleID: "r", Excerpt: "A rule.", Message: "unknown key mesage, did you mean message?"},
+		{RuleID: "r", Excerpt: "A rule.", Message: "unknown key scopes, did you mean scope?"},
+	}
+	if diff := cmp.Diff(want, Notes(idx)); diff != "" {
+		t.Errorf("Notes (-want +got):\n%s", diff)
+	}
+}
+
 func TestRunScope(t *testing.T) {
 	idx := index.Index{Rules: []index.Entry{
 		entry("go", "Go only.", []string{"**/*.go"}, map[string]string{"check": "fake"}),

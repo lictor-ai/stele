@@ -196,7 +196,10 @@ func Parse(src []byte) ([]source.Rule, error) // pure
 ```
 
 **`Parse`** splits on lines holding only `---`, except inside a fenced code
-block. It skips leading HTML comments, reads leading `key: value` lines as
+block. It skips leading HTML comments, a leading `#` title in the first
+block, and other leading Markdown headings when metadata or nothing follows
+them (D98; the stelemd source's `Notes`, a `source.Noter`, names a block of
+headings alone for `stele compile` to print), reads leading `key: value` lines as
 metadata, and takes everything after the first blank line as the body. A key
 matches `^[a-z][a-z0-9_-]*$` and is followed by `:` and a space or the end of the
 line; any other line is body. `description`, `tags` and `scope` fill their
@@ -1147,6 +1150,10 @@ func RunFileLines(idx index.Index, file string, content []byte, cs map[string]Ch
 // post-write hook logs them (ADR-0010).
 func RunFileChecked(idx index.Index, file string, content []byte, cs map[string]Checker, keep func(line int) bool) (Report, []string)
 func Validate(idx index.Index, cs map[string]Checker) []Problem // the rule problems Run reports, reading no file
+// Notes are what stele compile says on stderr and nothing fails on: blocking
+// without check (D93), and a key an edit or two from one stele defines, such
+// as scopes (D99); never for a shipped checker plugin's key.
+func Notes(idx index.Index) []Problem
 func (r Report) ExitCode() int // 0, 1; errors from Run are 2
 
 type Span struct{ First, Last int }       // lines, 1-based, inclusive
@@ -2230,7 +2237,7 @@ string literals scattered through the code, so they can be revised and diffed.
 
 | Layer | Approach |
 | :-- | :-- |
-| `stelemd.Parse` | Table-driven. Malformed input, no metadata, empty bodies, CRLF, unicode, unknown keys kept in `Meta`, a body opening with `Note:`, `---` inside a code block, header comments. Pure, so no fixtures. |
+| `stelemd.Parse` | Table-driven. Malformed input, no metadata, empty bodies, CRLF, unicode, unknown keys kept in `Meta`, a body opening with `Note:`, `---` inside a code block, header comments, leading headings (D98). Pure, so no fixtures. |
 | `stelemd` fingerprint | Temp directory. Unchanged, edited, missing file. |
 | `lock.Reconcile` | Table-driven with a stub `newID`. Reorder, reword, insert, delete, reword-plus-reorder — the case that mismatches — and a rule moving between two sources. |
 | `compile.Plan` / `Apply` | Temp directory with a real `stele.md` and a fake second source. Round-trip, then edit and recompile to check ids carry over. `Plan` asserted to write nothing. `EnsureFresh` asserted never to call a non-built-in source. |

@@ -37,6 +37,13 @@ type Source interface {
 	Fingerprint(ctx context.Context, root string) (string, error)
 }
 
+// Noter is a source with something to say about its rule files that is not
+// an error, such as stele.md's block of headings alone, which is not a rule
+// (D98). stele compile prints each note; nothing fails on one.
+type Noter interface {
+	Notes(ctx context.Context, root string) ([]string, error)
+}
+
 // Pin is the commit a pinned source read its rules from, as stele.lock
 // records it (D72). Repo, Ref and Path are the source's settings when it was
 // pinned: a pin whose settings no longer match stele.json is out of date.

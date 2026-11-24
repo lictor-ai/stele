@@ -234,7 +234,14 @@ Everything else is as for Claude Code: the same `stele.md`, the same deny before
 
 ## Writing stele.md
 
-Rules are separated by a line holding only `---`. A rule may start with `key: value` lines; then a blank line, then the rule in plain prose. HTML comments are skipped.
+Rules are separated by a line holding only `---`. A rule may start with `key: value` lines; then a blank line, then the rule in plain prose. HTML comments are skipped. So is a `#` heading at the top of the file, before the first `---`: `# Our rules` there titles the file and is no part of rule 1. Any heading before a rule's `key: value` lines is skipped too, and a heading followed by prose stays in the rule, as its title. A heading alone between two `---` is no rule, and `stele compile` says so:
+
+```
+$ stele compile
+1 rule: 0 matched by text, 0 by position, 1 new, 0 dropped
+wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
+stele compile: stele.md:3: a heading alone is not a rule
+```
 
 ```markdown
 scope: ["**/*.go"]
@@ -270,6 +277,15 @@ Never put credentials in code, config or tests. Read them from the environment.
 | `pattern` | A Go (RE2) regular expression, for `check: regex`, taken as written: quotes are part of it, so `pattern: "net/http"` matches `"net/http"` with its quotes, as in an import, not a bare mention of net/http. |
 | `message` | What a violation says. Default: the start of the rule, its first paragraph up to about 120 characters. Taken as written, quotes included. |
 | `blocking` | `true` (the default with `check`) or `false`. |
+
+stele also reads `tags` and `description`. Any other key is kept for the rule's checker, without a word, unless it looks like a typo of one of stele's keys. Then `stele compile` says so, still exits 0, and keeps the key as written:
+
+```
+$ stele compile
+1 rule: 0 matched by text, 0 by position, 1 new, 0 dropped
+wrote stele.lock, .stele/index.json and .claude/rules/stele-rules.md
+stele compile: rule c7d4d963-7b8f-4f8b-a50f-cab63b7b1064 "Never edit a migration that has been merged. Add a new one…" (stelemd rule 1): unknown key scopes, did you mean scope?
+```
 
 Scope globs:
 
@@ -1040,7 +1056,7 @@ With no one to answer, as in `claude -p`, Claude Code refuses these writes, even
 
 **A rule with no `scope`, or only `!` exclusions, is shown for every other file.** Keep such rules few. Rules are chosen by path, not by task.
 
-**Unknown keys are accepted silently.** A typo such as `scopes:` leaves the rule unscoped.
+**Unknown keys are accepted.** A typo such as `scopes:` leaves the rule unscoped. `stele compile` notes a key one edit from one of stele's own (`scopes`, `chek`, `tag`), or two from `pattern`, `message`, `blocking` or `description` (`paterns`), but exits 0, and `stele check` and the hook say nothing. A typo further off, or of a checker plugin's key, gets no note.
 
 **Only `stele init` and `stele status` mention a top-level key of `stele.json` stele doesn't know.** A typo such as `block_on_eror` does nothing, and `stele compile`, `stele check` and the hook skip it without a word, so CI catches it only if it runs `stele status`. [The schema](#check-stelejson-in-your-editor) flags it in an editor that uses it.
 

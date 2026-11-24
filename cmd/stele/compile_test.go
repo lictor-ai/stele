@@ -133,12 +133,16 @@ func TestCompileInvalidRuleKinds(t *testing.T) {
 }
 
 // Other keys on a rule with no check are kept without a word (D46); blocking
-// there does nothing, which a note says (#148).
+// there does nothing, which a note says (#148), and so does a key that looks
+// like a typo of one of stele's own (D99).
 func TestCompileGuidanceKeys(t *testing.T) {
 	for name, tt := range map[string]struct{ meta, note string }{
-		"owner":       {"owner: alice\n", ""},
-		"unknown key": {"scopes: [\"*.go\"]\n", ""},
-		"blocking":    {"blocking: false\n", `"A rule." (stelemd rule 1): blocking without check: the rule is guidance only, so blocking does nothing`},
+		"owner":           {"owner: alice\n", ""},
+		"plugin key":      {"severity: HIGH\n", ""},
+		"typo of scope":   {"scopes: [\"*.go\"]\n", `"A rule." (stelemd rule 1): unknown key scopes, did you mean scope?`},
+		"typo, checked":   {"check: regex\npaterns: x+\npattern: y+\n", `"A rule." (stelemd rule 1): unknown key paterns, did you mean pattern?`},
+		"typo of message": {"mesage: use y\n", `"A rule." (stelemd rule 1): unknown key mesage, did you mean message?`},
+		"blocking":        {"blocking: false\n", `"A rule." (stelemd rule 1): blocking without check: the rule is guidance only, so blocking does nothing`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			project(t, tt.meta+"\nA rule.\n")
@@ -151,6 +155,72 @@ func TestCompileGuidanceKeys(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A heading at the top of stele.md is no longer part of rule 1 (D98). For a
+// stele.lock written when it was, rule 1's text changed: it keeps its id by
+// position, and compile names it. A heading that was a rule of its own is
+// dropped, and the other rules keep their ids by text.
+func TestCompileLeadingHeading(t *testing.T) {
+	t.Run("heading and rule 1 in one block", func(t *testing.T) {
+		// Before D98, rule 1's text held the heading; the lock is made
+		// from the same words without the # to stand for it.
+		root := project(t, "Our rules\n\nNever use eval.\n\n---\n\nTwo.\n")
+		if code, out, _ := runCmd("compile"); code != exitOK {
+			t.Fatalf("compile = %d, stdout %q", code, out)
+		}
+		before, _ := lock.Load(root)
+		writeAt(t, root, "stele.md", "# Our rules\n\nscope: [\"*.go\"]\n\nNever use eval.\n\n---\n\nTwo.\n")
+		code, out, errOut := runCmd("compile")
+		if code != exitOK || !strings.Contains(out, "2 rules: 1 matched by text, 1 by position, 0 new, 0 dropped") || !strings.Contains(out, "stelemd rule 1") {
+			t.Fatalf("compile = %d, stdout %q, stderr %q, want rule 1 matched by position", code, out, errOut)
+		}
+		after, _ := lock.Load(root)
+		if len(after.Rules) != 2 || after.Rules[0].ID != before.Rules[0].ID || after.Rules[1].ID != before.Rules[1].ID {
+			t.Errorf("ids changed: before %+v, after %+v", before.Rules, after.Rules)
+		}
+		code, out, _ = runCmd("rules", "--format", "json")
+		if code != exitOK || !strings.Contains(out, `"body": "Never use eval."`) || !strings.Contains(out, `"*.go"`) {
+			t.Errorf("rules = %d, %s, want rule 1 scoped, without the heading", code, out)
+		}
+	})
+	t.Run("heading alone", func(t *testing.T) {
+		root := project(t, "Our rules\n\n---\n\nOne.\n\n---\n\nTwo.\n")
+		if code, out, _ := runCmd("compile"); code != exitOK {
+			t.Fatalf("compile = %d, stdout %q", code, out)
+		}
+		before, _ := lock.Load(root)
+		writeAt(t, root, "stele.md", "# Our rules\n\n---\n\nOne.\n\n---\n\nTwo.\n")
+		code, out, errOut := runCmd("compile")
+		if code != exitOK || !strings.Contains(out, "2 rules: 2 matched by text, 0 by position, 0 new, 1 dropped") {
+			t.Fatalf("compile = %d, stdout %q, want the heading's rule dropped", code, out)
+		}
+		// The file's # title says nothing.
+		if strings.Contains(errOut, "heading") {
+			t.Errorf("stderr = %q, want no note for the file's title", errOut)
+		}
+		after, _ := lock.Load(root)
+		if len(after.Rules) != 2 || after.Rules[0].ID != before.Rules[1].ID || after.Rules[1].ID != before.Rules[2].ID {
+			t.Errorf("ids: before %+v, after %+v", before.Rules, after.Rules)
+		}
+	})
+	t.Run("a section heading alone gets a note", func(t *testing.T) {
+		project(t, "One.\n\n---\n\n## Section\n\n---\n\nTwo.\n")
+		code, out, errOut := runCmd("compile")
+		if code != exitOK || !strings.Contains(out, "2 rules:") || !strings.Contains(errOut, "stele compile: stele.md:5: a heading alone is not a rule\n") {
+			t.Errorf("compile = %d, stdout %q, stderr %q, want 2 rules and the note", code, out, errOut)
+		}
+	})
+	t.Run("no heading: nothing changes", func(t *testing.T) {
+		project(t, "<!-- header -->\n\nscope: [\"*.go\"]\n\nNever use eval.\n\n## Why\n\nIt runs anything.\n\n---\n\n## No SQL concat\n\nUse parameters.\n")
+		if code, out, _ := runCmd("compile"); code != exitOK {
+			t.Fatalf("compile = %d, stdout %q", code, out)
+		}
+		code, out, _ := runCmd("rules", "--format", "json")
+		if code != exitOK || !strings.Contains(out, `"body": "Never use eval.\n\n## Why\n\nIt runs anything."`) || !strings.Contains(out, `"body": "## No SQL concat\n\nUse parameters."`) {
+			t.Errorf("rules = %d, %s, want the bodies as written", code, out)
+		}
+	})
 }
 
 // A scope with a comma and no brackets would read as one glob that matches

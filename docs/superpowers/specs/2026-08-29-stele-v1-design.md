@@ -331,6 +331,25 @@ comments is not a rule. Text after a comment's `-->` on the same line belongs to
 the rule. That is how the header comment `stele init` writes stays
 out of the rules (§6) (D56).
 
+Markdown headings (ATX: `#` to `######`, at most three spaces before them,
+then a space, a tab or the end of the line) before a rule are skipped too, with
+the blank lines and comments around them (D98):
+
+* at the top of the file, in the block before the first `---`, `#` headings
+  (one `#`) whatever follows them: metadata, a body or nothing. There a `#`
+  heading titles the file, so `# Our rules` followed by `scope: ...` is a
+  scoped rule, not a rule whose body holds the heading and the scope;
+* any other heading, in any block, when metadata or nothing follows it: a
+  heading never hides a rule's metadata, and a block holding only headings is
+  not a rule. `stele compile` notes such a block on stderr
+  (`stele.md:5: a heading alone is not a rule`) and exits 0, except the
+  file's `#` title alone. A heading followed by prose stays the rule's text,
+  as its title.
+
+A heading inside a body is body. `#tag`, seven `#` and a heading in a code block
+are not headings. Setext headings (a line underlined with `===` or `---`) are
+not recognised: their `---` separates rules.
+
 **Bad input is an error naming the file and line**, for example
 `stele.md:12: rule has no body`. These are errors:
 
@@ -376,7 +395,22 @@ exists today.
 One exception (D93): a rule with `pattern` or `message`, the `regex` checker's
 keys, but no `check` is an invalid rule, because nothing would check it.
 `blocking` without `check` gets a note from `stele compile`. Every other key is
-kept without a word.
+kept without a word, except one that looks like a typo of a key stele defines
+(D99): `stele compile` notes it, on stderr, and still exits 0 and keeps it, as
+written, as any other key.
+
+```
+stele compile: rule 3f6c… "Never use eval." (stelemd rule 1): unknown key scopes, did you mean scope?
+```
+
+The keys stele defines are `scope`, `check`, `pattern`, `message`, `blocking`,
+`tags` and `description`. A typo is one edit away from one of them (a letter
+added, removed or changed, or two next to each other swapped), or two for one
+of seven letters or more (`pattern`, `message`, `blocking`, `description`),
+and is not one of them. The keys of the checker
+plugins that ship with stele (`rules`, `ids`, `scanners`, `severity`, D90) are
+never typos; an external checker cannot name its keys in protocol 1, so a key
+of its that is that close to one of stele's gets the note too.
 
 The matcher and the agent never see checker keys. `corpus` and `fetch` carry
 description, tags, scope and body only. An agent needs the prose, not the check.
@@ -872,7 +906,7 @@ From ADR-0002, `docs/adr/0002-engine-and-extension-points.md`:
 | D43 | Only plugins listed in `stele.json` and found on `PATH` run. Never an executable inside the repository. | — |
 | D44 | Agent adapters are compiled into the binary and are always free. | — |
 | D45 | External plugins never run on the hot path. `request` refreshes built-in sources only. *Amended by D71: the built-in sources the hook refreshes are `plugin.Builtins()`; the `git` source, which starts git, is never one of them.* | — |
-| D46 | Unknown metadata keys are kept and passed to checkers. `check` and `blocking` are the keys stele itself reads. The other keys' values are kept as written, without unquoting (#40). *Amended by D93: `pattern` or `message` without `check` makes the rule invalid.* | — |
+| D46 | Unknown metadata keys are kept and passed to checkers. `check` and `blocking` are the keys stele itself reads. The other keys' values are kept as written, without unquoting (#40). *Amended by D93: `pattern` or `message` without `check` makes the rule invalid. Amended by D99: a key that looks like a typo of one stele defines gets a note from `stele compile`.* | — |
 | D47 | `stele check` validates the rules and runs checkers on changed files, failing CI on invalid rules and blocking violations. | design doc §8.2, rules checked by running a command |
 | D48 | Free if a single developer would want it. Paid only for needs that only an organization has. | — |
 
@@ -887,7 +921,7 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D53 | A fourth slot, sinks (`stele-sink-<name>`, external only). Data leaves only through a listed sink, only from `stele push` or `stele check --push`. Amended by D66: `stele publish` too. Amended by D71: the `git` source fetches rules in and sends nothing of the project. Briefs only with `share_briefs`. Amended by D82: `share_briefs` is reserved and has no effect, since no record holds a brief; a sink gets the log's signed lines (D83) or, from `stele check --push` in CI, one record of a run's counts (D84). Amended by D87: and the project's folder on this machine, as `project_dir`. | `O-LOG-LOC`, the mechanism only |
 | D54 | `stele status --format json` describes the install. `describe` reports the plugin's version. Amended by D85: what it reports, `--offline`, its exit codes. | — |
 | D55 | Org-wide rules reach a repository only through a source plugin. | — |
-| D56 | `stele.md` follows Markdown where it can: a `---` inside a fenced code block or an HTML comment does not separate rules, and HTML comments before a rule's metadata are skipped. | — |
+| D56 | `stele.md` follows Markdown where it can: a `---` inside a fenced code block or an HTML comment does not separate rules, and HTML comments before a rule's metadata are skipped. *Amended by D98: so are a `#` title at the top of the file, and Markdown headings before a rule's metadata or alone in a block.* | — |
 | D57 | stele trusts only the generated files it wrote on this machine. `index.json` and session state carry an HMAC-SHA256 made with a per-user key kept outside every repository (the user config directory, owner-only); a file that does not verify is rebuilt or started afresh. `stele.lock` is shared on purpose and not signed. Malware running as the user is out of scope. *Amended by D96: the signature tells files made on another machine or in another repository, committed or copied, from stele's own; it does not stop a program running as the user, the agent included, which can read the key. A write to the key asks.* | follows from D24 and D45: `.stele/` is not covered by the repository's `.gitignore`, so a repository could otherwise commit an index the agent is served |
 | D58 | v1 is for one developer. Rules are chosen by `scope`, not by a model: a `PreToolUse` hook denies a write that brings rules not yet shown this turn, with those rules as the reason; a `PostToolUse` hook runs built-in checks on the written file and reports violations. The MCP server, matcher subagent, logging, plugins and sinks move to the "team" milestone, with D12–D15, D30, D33–D35 and D39; D16, D29 and D37 are amended. *Amended by D69: a local log comes back. Amended by D78: external plugins come back. Amended by D97: a batch of parallel writes is told by when each hook started (ADR-0022).* | ADR-0004 |
 | D59 | A `scope` item starting with `!` excludes: a rule applies to a file that matches no exclusion and at least one other item; a scope of only exclusions applies to every other file. Order does not matter. A broken exclusion excludes nothing. | e2e 2026-10-23, What to change 1 (#39) |
@@ -924,11 +958,13 @@ From ADR-0003, `docs/adr/0003-ready-for-a-dashboard.md`:
 | D90 | **ADR-0019.** Two checker plugins ship with stele, `cmd/stele-checker-opengrep` and `cmd/stele-checker-trivy`, built and archived with each release; they are external checkers like any other (D78–D80) and run only in `stele check`. `check: opengrep` takes `rules` (required: a rules file in the project, relative, no `..`, inside the project once links are followed; no registry name or URL) and optional `ids` (the Opengrep rule ids that count, each one in the file). `check: trivy` takes `scanners` (required: `vuln`, `secret`, `misconfig`) and optional `severity` (`UNKNOWN` … `CRITICAL`). Both take an optional `message`; any other key is invalid. The scanner is found on `PATH` outside the project and run with no shell, outside the project; missing, failing or unreadable output is a plugin error. An Opengrep rule that counts and that Opengrep didn't run, or an error about the rules file, fails the check; Opengrep runs with `--disable-nosem` and `--disable-version-check`. A vulnerable package goes on the first line of its file that names it with its version, else the first that names it, else line 1. The plugins send nothing; Trivy runs with `--offline-scan` and downloads its own database, its misconfiguration checks and, for Java archives, its Java database. | #119 |
 | D91 | **Amends D90 (ADR-0020).** The checker plugins also ship as a Homebrew cask and a Scoop manifest each, in stele's tap and bucket; a plugin's package installs neither stele nor its scanner. | #131 |
 | D92 | **Amends D82–D85 (ADR-0021).** A sink may defer a push: `{"accepted": 0, "deferred": true, "reason": "…"}`, `reason` optional, made one printable line of at most 200 bytes. `"deferred": true` with any other `accepted`, or none, a `deferred` neither boolean nor `null`, a `reason` neither string nor `null`, or `"deferred"` in another case or given twice is a protocol error; `"deferred": false` or `null`, or a `reason` alone, is no deferral. A deferral leaves the cursor where it is, stops that sink for the run, and is kept with its reason in the sealed cursor until the sink's next answer that is neither an error nor a deferral. `stele push` prints `<sink>: nothing sent (deferred: <reason>), n lines waiting` and exits 0 for it; `stele check --push` likewise, and in CI says the run's record is not kept. `stele status` shows the reason beside the lines waiting (`deferred`, `deferred_reason` in JSON). | #145 |
-| D93 | **Amends D46.** A rule with `pattern` or `message`, the built-in `regex` checker's keys, and no `check` is an invalid rule (`pattern without check`): `stele compile` and `stele check` report it and exit 1, and the post-write hook doesn't check it; it is still shown as guidance. `blocking` without `check` gets a note on stderr from `stele compile`, exit 0. Every other key a rule without `check` has is kept without a word: a source or a later version may add its own. | #148 |
+| D93 | **Amends D46.** A rule with `pattern` or `message`, the built-in `regex` checker's keys, and no `check` is an invalid rule (`pattern without check`): `stele compile` and `stele check` report it and exit 1, and the post-write hook doesn't check it; it is still shown as guidance. `blocking` without `check` gets a note on stderr from `stele compile`, exit 0. Every other key a rule without `check` has is kept without a word: a source or a later version may add its own. *Amended by D99: a key that looks like a typo of one stele defines gets a note.* | #148 |
 | D94 | **Amends D76.** A `.git` ends a project only when git would recognise it: a directory with a `HEAD` git accepts and `objects/` and `refs/` (in it, or in the directory its `commondir` names), or a file `gitdir: <path>` leading to such a directory. The test reads files only and starts no process, so the hook can make it. A write to a `.git` below the project's top, or into one, asks like a write to stele's own files; files inside the project's own `.git/` are left alone. | #170 |
 | D95 | **Amends D80.** On Windows every program stele starts gets `NoDefaultCurrentDirectoryInExePath=1` unless already set; `stele init`'s agent version probe is found and run as a plugin is, from a new folder outside the project, removed afterwards. | #168 |
 | D96 | **Amends D57, D61, D69, D76 and D83.** A write to, removal or move of stele's signing key (`stele/key` in the user's config directory, as `sign.KeyFile` names it), a path below it, its folder or any folder above it, asks the user in Claude Code and is refused in Codex, inside a project or outside every one, as a write to stele's own files does (`cmd/stele` `signingKey`). It is seen through Write, Edit and MultiEdit, `apply_patch`, and the Bash and PowerShell targets the hook reads (D61, D77). Names are compared in any case, after cleaning (trailing dots, alternate data streams), as written and after links; a hard link or an 8.3 short name is caught by a same-file test, and so is a new file of the key's name in the key's folder reached by another name. Reads are not seen: stele registers no read hook, and a shell read or a copy from the key is not a write to it. The ask and refuse messages name the key. What the signature protects against: files made on another machine or in another repository, committed or copied, do not verify. It does not stop a program running as the user, the agent included, which can read the key and sign lines and files of its own; so a log line, index or state file that verifies was signed with this machine's key, not necessarily written by stele. | #152 |
 | D97 | **Amends D58 and D61 (ADR-0022), on ADR-0004's parallel writes.** A batch of parallel writes is told by when each hook started: `stele hook` takes the time after reading the event, before any lock wait (`backstop.Input.Start`); a deny is recorded at the time it is decided, holding the session lock (`Input.Now`). The signed session state keeps, per agent, the batch of its last deny (`State.Batch`: `Start`, the first deny; `End`, the last; `Chain`, the first deny of the current chain, a run of denies each less than `RetryAfter`, 0.5 s, after the one before); a new `prompt_id` empties it. A write is in the batch when it started before the last deny was answered or less than 0.5 s after it, and not more than `Lead` (10 s) before the first (chained), or less than `Window` (3 s) after the first deny; a rule shown in the batch is shown to it again. A retry is a write to a denied file started at least 0.5 s after that deny and not chained to that deny's chain. `DecideBash` shares the batch. The hook waits for the session lock at most 5 s per holder (`safefile.LockInTurn`) and at most what is left of 8.5 s from its start in all (`session.UpdateWithin`); past it `block_on_error` decides. Only a test build (`-tags steletest`) reads `STELE_TEST_BATCH_WINDOW` to change the window. | #151 |
+| D98 | **Amends D56 and §3.** Markdown ATX headings (`#` to `######`, at most three spaces before, then a space, a tab or the end of the line), with the blank lines and HTML comments among them, are not part of a rule: a `#` heading (one `#`) in `stele.md`'s first block, before the first `---`, whatever follows it, as the file's title; any other heading, in any block, only when metadata or nothing follows it. So no heading hides a rule's metadata, and a block of headings alone is not a rule: `stele compile` notes it on stderr, `stele.md:N: a heading alone is not a rule`, exit 0, unless it is the file's `#` title alone (`source.Noter`). A heading followed by prose stays the rule's text, its title, and a heading inside a body is body. A file with no such heading parses as before. For a file with a heading at the top, rule 1's text changes once: `stele compile` keeps its id by position and names it, and a heading that was a rule of its own is dropped. | #157 |
+| D99 | **Amends D46 and D93.** `stele compile` prints a note on stderr, `rule <id> "<excerpt>" (<source> rule N): unknown key <key>, did you mean <own>?`, for a rule key that is one edit (a letter added, removed or changed, or two adjacent letters swapped) from a key stele defines, `scope`, `check`, `pattern`, `message`, `blocking`, `tags` and `description`, or two edits from one of seven letters or more (`pattern`, `message`, `blocking`, `description`), and is not one of them. The keys of the checker plugins that ship with stele (`rules`, `ids`, `scanners`, `severity`) never get it. The note never fails anything and never changes the rule: the key is kept as written, as before. Every other unknown key is still kept without a word. | #157 |
 
 Already argued in the design doc's prose but never recorded in the design doc's §9.1. Recorded here:
 

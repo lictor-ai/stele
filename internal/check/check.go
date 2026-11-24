@@ -453,8 +453,9 @@ func unread(meta map[string]string) string {
 }
 
 // Notes are what is worth saying about idx's rules that does not make them
-// invalid: blocking on a rule with no check, which does nothing. Each note
-// is a Problem the caller shows, not one that fails anything.
+// invalid: blocking on a rule with no check, which does nothing, and a key
+// that looks like a typo of one of stele's own (D99), such as scopes. Each
+// note is a Problem the caller shows, not one that fails anything.
 func Notes(idx index.Index) []Problem {
 	var notes []Problem
 	for _, e := range idx.Rules {
@@ -462,8 +463,79 @@ func Notes(idx index.Index) []Problem {
 		if _, ok := e.Meta["blocking"]; ok && !checked {
 			notes = append(notes, Problem{RuleID: e.ID, Excerpt: Excerpt(e.Body), Message: "blocking without check: the rule is guidance only, so blocking does nothing"})
 		}
+		keys := make([]string, 0, len(e.Meta))
+		for k := range e.Meta {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if near := typoOf(k); near != "" {
+				notes = append(notes, Problem{RuleID: e.ID, Excerpt: Excerpt(e.Body), Message: fmt.Sprintf("unknown key %s, did you mean %s?", k, near)})
+			}
+		}
 	}
 	return notes
+}
+
+// ownKeys are the rule keys stele itself defines: stele.md's fields (spec
+// §3), the keys stele reads (D46) and the built-in regex checker's.
+var ownKeys = []string{"scope", "check", "pattern", "message", "blocking", "tags", "description"}
+
+// pluginKeys are the keys of the checker plugins that ship with stele (D90).
+// They are never taken for a typo, however close to one of ownKeys.
+var pluginKeys = map[string]bool{"rules": true, "ids": true, "scanners": true, "severity": true}
+
+// typoOf returns the key of ownKeys that key is probably a typo of, or "":
+// one edit away (a letter added, removed, changed, or two swapped), or two
+// for one of seven letters or more (pattern, message, blocking,
+// description), so score or slope is no typo of scope. A key equal to one
+// of them, or that a shipped checker plugin reads, is no typo. Other keys are a checker's or a
+// source's, and stay without a word (D46, D93).
+func typoOf(key string) string {
+	if pluginKeys[key] {
+		return ""
+	}
+	best, bestD := "", 3
+	for _, own := range ownKeys {
+		if own == key {
+			return ""
+		}
+		limit := 2
+		if len(own) < 7 {
+			limit = 1
+		}
+		if d := editDistance(key, own); d <= limit && d < bestD {
+			best, bestD = own, d
+		}
+	}
+	return best
+}
+
+// editDistance is the optimal string alignment distance between a and b:
+// insertions, deletions, substitutions and swaps of two adjacent bytes.
+// Keys are ASCII.
+func editDistance(a, b string) int {
+	d := make([][]int, len(a)+1)
+	for i := range d {
+		d[i] = make([]int, len(b)+1)
+		d[i][0] = i
+	}
+	for j := range d[0] {
+		d[0][j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			d[i][j] = min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1]+cost)
+			if i > 1 && j > 1 && a[i-1] == b[j-2] && a[i-2] == b[j-1] {
+				d[i][j] = min(d[i][j], d[i-2][j-2]+1)
+			}
+		}
+	}
+	return d[len(a)][len(b)]
 }
 
 // known names the checkers a rule can use.
