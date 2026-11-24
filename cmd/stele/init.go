@@ -227,7 +227,11 @@ func initCompile(root string, stderr io.Writer) (changes, notes []string) {
 		if statErr != nil {
 			verb = "built"
 		}
-		changes = append(changes, fmt.Sprintf("%s this machine's rules index (%s)", verb, plural(len(r.Index.Rules), "rule")))
+		count := "no rules yet"
+		if n := len(r.Index.Rules); n > 0 {
+			count = plural(n, "rule")
+		}
+		changes = append(changes, fmt.Sprintf("%s this machine's rules index (%s)", verb, count))
 	}
 	for _, f := range r.Files {
 		if f.Changed && !f.Foreign && ge == nil {

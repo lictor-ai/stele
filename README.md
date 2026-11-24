@@ -163,7 +163,7 @@ created .stele/.gitignore
 created stele.md
 added stele hooks (PreToolUse, PostToolUse, SessionStart, SubagentStart) to .claude/settings.json
 wrote stele.lock
-built this machine's rules index (0 rules)
+built this machine's rules index (no rules yet)
 wrote .claude/rules/stele-rules.md
 hooks: remind on, check on
 ```
@@ -730,7 +730,7 @@ Both checkers find `opengrep` and `trivy` as stele finds a plugin: only on `PATH
 - **Only from `PATH`, never from the project.** stele looks only in `PATH` entries that are absolute and outside the project and the git repository that holds it, so a copy inside the project is passed over, never run; on Windows the current directory isn't searched. One that links into the project is refused. On Windows it must be an `.exe` or `.com`.
 - **Run with no shell, outside the project.** It runs in a directory of stele's own, `stele/plugins` in your user cache directory, and finds the project through the `root` stele sends it. It gets your environment, with `PATH` and the library and module paths (`LD_LIBRARY_PATH`, `PYTHONPATH`, `NODE_PATH` and the like) cut to entries outside the project. What it writes on stderr is shown, each line starting with its name.
 - **What it starts stops with it.** After each call stele stops whatever the plugin left running. Ctrl-C stops the plugin too, and stele says the call was cancelled.
-- **Never in the hook.** Source plugins run at `stele compile`, `stele check` and `stele init`, checker plugins at `stele check`, and sinks at `stele push` and `stele check --push`. `stele status` asks each listed plugin its version, unless you pass `--offline`. The hook uses the rules of the last compile, check or init on your machine.
+- **Never in the hook.** Source plugins run at `stele compile`, `stele check` and `stele init`, checker plugins at `stele check`, and sinks at `stele push` and `stele check --push`. `stele status` asks each listed plugin its version, unless you pass `--offline`. The hook uses the rules of the last `stele compile` or `stele init` on your machine.
 
 Writing one takes a few lines in any language: [docs/plugin-protocol.md](docs/plugin-protocol.md) describes the protocol, with the `paragraphs` example above.
 
