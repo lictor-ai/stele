@@ -250,6 +250,83 @@ Never put credentials in source code.
 			src:  "~~~ `go`\n---\n~~~\n",
 			want: []source.Rule{rule(0, 1, source.Rule{Body: "~~~ `go`\n---\n~~~"})},
 		},
+		// D98: headings before a rule.
+		{
+			name: "heading at the top, then metadata",
+			src:  "# Our rules\n\nscope: [\"*.go\"]\n\nNever use eval.\n",
+			want: []source.Rule{rule(0, 3, source.Rule{Scope: []string{"*.go"}, Body: "Never use eval."})},
+		},
+		{
+			name: "heading at the top, metadata on the next line",
+			src:  "# Our rules\nscope: [\"*.go\"]\n\nNever use eval.\n",
+			want: []source.Rule{rule(0, 2, source.Rule{Scope: []string{"*.go"}, Body: "Never use eval."})},
+		},
+		{
+			name: "heading at the top, then the body",
+			src:  "# Our rules\n\nNever use eval.\n",
+			want: []source.Rule{rule(0, 3, source.Rule{Body: "Never use eval."})},
+		},
+		{
+			name: "headings, comments and blank lines at the top",
+			src:  "<!-- header -->\n\n# Our rules\n\n<!--\nnote\n-->\n## Go\n   ### Style\n\ntags: [go]\n\nNever use eval.\n",
+			want: []source.Rule{rule(0, 11, source.Rule{Tags: []string{"go"}, Body: "Never use eval."})},
+		},
+		{
+			name: "a heading alone at the top is not a rule",
+			src:  "# Our rules\n\n---\n\nNever use eval.\n",
+			want: []source.Rule{rule(0, 5, source.Rule{Body: "Never use eval."})},
+		},
+		{
+			name: "heading after a separator, then metadata",
+			src:  "One.\n\n---\n\n## Testing\n\nscope: [\"**/*_test.go\"]\n\nUse t.TempDir.\n",
+			want: []source.Rule{
+				rule(0, 1, source.Rule{Body: "One."}),
+				rule(1, 7, source.Rule{Scope: []string{"**/*_test.go"}, Body: "Use t.TempDir."}),
+			},
+		},
+		{
+			name: "a heading alone after a separator is not a rule",
+			src:  "One.\n\n---\n\n## Section\n\n---\n\nTwo.\n",
+			want: []source.Rule{
+				rule(0, 1, source.Rule{Body: "One."}),
+				rule(1, 9, source.Rule{Body: "Two."}),
+			},
+		},
+		{
+			name: "heading after a separator, then prose, stays the rule's text",
+			src:  "One.\n\n---\n\n## No eval\n\nNever use eval.\n",
+			want: []source.Rule{
+				rule(0, 1, source.Rule{Body: "One."}),
+				rule(1, 5, source.Rule{Body: "## No eval\n\nNever use eval."}),
+			},
+		},
+		{
+			name: "comment, heading, prose after a separator",
+			src:  "One.\n\n---\n<!-- c -->\n## No eval\nNever use eval.\n",
+			want: []source.Rule{
+				rule(0, 1, source.Rule{Body: "One."}),
+				rule(1, 5, source.Rule{Body: "## No eval\nNever use eval."}),
+			},
+		},
+		{
+			name: "headings inside a body are body",
+			src:  "tags: [a]\n\nNever use eval.\n\n## Why\n\nIt runs anything.\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Tags: []string{"a"}, Body: "Never use eval.\n\n## Why\n\nIt runs anything."})},
+		},
+		{
+			name: "not headings: a hashtag, seven #, four spaces",
+			src:  "#eval is banned.\n\n---\n\n####### Seven.\n\n---\n\n    # Code.\n",
+			want: []source.Rule{
+				rule(0, 1, source.Rule{Body: "#eval is banned."}),
+				rule(1, 5, source.Rule{Body: "####### Seven."}),
+				rule(2, 9, source.Rule{Body: "    # Code."}),
+			},
+		},
+		{
+			name: "a heading in a code block at the top is not skipped",
+			src:  "```\n# not a heading\n```\n",
+			want: []source.Rule{rule(0, 1, source.Rule{Body: "```\n# not a heading\n```"})},
+		},
 		{
 			name: "apostrophe inside a list item",
 			src:  "tags: [don't-care, b]\n\nBody.\n",
@@ -292,6 +369,8 @@ func TestParseErrors(t *testing.T) {
 			src:     "One.\n---\n<!-- never closed\n---\nTwo.\n",
 			wantMsg: "stele.md:3: unclosed comment",
 		},
+		{name: "unclosed comment after a heading", src: "# Rules\n<!-- never closed\n\nBody.\n", wantMsg: "stele.md:2: unclosed comment"},
+		{name: "heading then metadata with no body", src: "One.\n---\n## Two\ntags: [a]\n", wantMsg: "stele.md:4: rule has no body"},
 		{name: "unclosed quote in a list", src: "tags: [\"a, b]\n\nBody.\n", wantMsg: "stele.md:1: tags: unclosed quote"},
 		{name: "exclusion with no pattern", src: "One.\n---\nscope: [a, \"!\"]\n\nBody.\n", wantMsg: `stele.md:3: scope: "!" has no pattern after the !`},
 		{name: "bare exclusion", src: "scope: !\n\nBody.\n", wantMsg: `stele.md:1: scope: "!" has no pattern after the !`},

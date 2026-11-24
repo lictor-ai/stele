@@ -15,6 +15,13 @@
 // HTML comments before a rule's metadata are skipped, so the header comment
 // stele init writes is not a rule. As in a code block, a --- inside a comment
 // does not separate rules.
+//
+// Markdown headings (# to ######) before a rule are skipped too (D98): at the
+// top of the file, before the first ---, whatever follows them, since there
+// they title the file; in a later block, only when metadata or nothing
+// follows them, so a heading never hides a rule's metadata and a heading
+// alone is not a rule. A later block's heading followed by prose stays the
+// rule's text, as do headings inside a body.
 package stelemd
 
 import (
@@ -172,7 +179,7 @@ func Parse(src []byte) ([]source.Rule, error) {
 		} else if comment {
 			return nil, &source.ParseError{File: fileName, Line: commentLine + 1, Err: errors.New("unclosed comment")}
 		}
-		r, ok, err := parseRule(lines[start:i], start+1)
+		r, ok, err := parseRule(lines[start:i], start+1, start == 0)
 		if err != nil {
 			return nil, err
 		}
@@ -225,15 +232,30 @@ func closesFence(line, fence string) bool {
 }
 
 // parseRule parses the lines between two separators. first is the 1-based
-// line number of lines[0]. ok is false for a block with no rule in it.
-func parseRule(lines []string, first int) (r source.Rule, ok bool, err error) {
+// line number of lines[0]; top is true for the block that starts the file.
+// ok is false for a block with no rule in it.
+func parseRule(lines []string, first int, top bool) (r source.Rule, ok bool, err error) {
 	fail := func(i int, format string, args ...any) (source.Rule, bool, error) {
 		return source.Rule{}, false, &source.ParseError{File: fileName, Line: first + i, Err: fmt.Errorf(format, args...)}
 	}
 
-	lines, i, unclosed := skipPreamble(lines)
+	lines, i, unclosed := skipPreamble(lines, 0)
 	if unclosed >= 0 {
 		return fail(unclosed, "unclosed comment")
+	}
+	if i < len(lines) && heading(lines[i]) {
+		// Headings, and the blank lines and comments between them, are not
+		// part of the rule (D98) at the top of the file, or when metadata
+		// or nothing follows them.
+		hl, j := lines, i
+		for j < len(hl) && heading(hl[j]) {
+			if hl, j, unclosed = skipPreamble(hl, j+1); unclosed >= 0 {
+				return fail(unclosed, "unclosed comment")
+			}
+		}
+		if top || j == len(hl) || metaLine.MatchString(strings.TrimRight(hl[j], " \t")) {
+			lines, i = hl, j
+		}
 	}
 	if i == len(lines) {
 		return source.Rule{}, false, nil
@@ -299,11 +321,11 @@ func parseRule(lines []string, first int) (r source.Rule, ok bool, err error) {
 	return r, true, nil
 }
 
-// skipPreamble skips blank lines and HTML comments, and returns the index of
-// the first line of the rule. unclosed is the index of a comment that never
-// closes, or -1. Text after a comment's --> is the start of the rule, so the
-// returned lines may hold that line with the comment cut off.
-func skipPreamble(lines []string) (out []string, i, unclosed int) {
+// skipPreamble skips blank lines and HTML comments from lines[i], and returns
+// the index of the first line that is neither. unclosed is the index of a
+// comment that never closes, or -1. Text after a comment's --> is the start of
+// the rule, so the returned lines may hold that line with the comment cut off.
+func skipPreamble(lines []string, i int) (out []string, next, unclosed int) {
 	for i < len(lines) {
 		line := strings.TrimSpace(lines[i])
 		switch {
@@ -330,6 +352,22 @@ func skipPreamble(lines []string) (out []string, i, unclosed int) {
 		}
 	}
 	return lines, i, -1
+}
+
+// heading reports whether line is a Markdown ATX heading: as in CommonMark,
+// at most three spaces, one to six #, then a space, a tab or the end of the
+// line. #tag is not a heading.
+func heading(line string) bool {
+	trimmed := strings.TrimLeft(line, " ")
+	if len(line)-len(trimmed) > 3 {
+		return false
+	}
+	n := len(trimmed) - len(strings.TrimLeft(trimmed, "#"))
+	if n < 1 || n > 6 {
+		return false
+	}
+	rest := trimmed[n:]
+	return rest == "" || rest[0] == ' ' || rest[0] == '\t'
 }
 
 // unquote trims s and removes one pair of matching outer quotes. It is used
