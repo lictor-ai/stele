@@ -446,6 +446,119 @@ func TestTargets(t *testing.T) {
 	}
 }
 
+// A variable that unset, read, a loop or the like set is unknown from then
+// on, never its earlier value or the environment's (#189).
+func TestTargetsVarsSetByCommand(t *testing.T) {
+	env(t, map[string]string{"HOME": filepath.Join(cwd, "home"), "E": "env"})
+	R := Redirect
+	tests := []struct {
+		command string
+		want    []Target
+		unknown int
+	}{
+		// unset: X is empty, not the environment's.
+		{command: "X=a; unset X; echo > $X/b", unknown: 1},
+		{command: "unset E; echo > $E/b", unknown: 1},
+		{command: "X=a; unset -v X; echo > $X/b", unknown: 1},
+		{command: "X=a Y=c; unset Y X; echo > $X/b", unknown: 1},
+		{command: "X=a; unset -- X; echo > $X/b", unknown: 1},
+		{command: "X=a; unset -f X; echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "X=a Y=c; unset Y; echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "X=a; unset $n; echo > $X/b", unknown: 1},
+		{command: "X=a; unset X; X=c; echo > $X/b", want: []Target{at("c/b", R)}},
+		{command: "X=a; builtin unset X; echo > $X/b", unknown: 1},
+		// read and its kin set X from their input.
+		{command: "X=a; read X; echo > $X/b", unknown: 1},
+		{command: "X=a; read -r Y X; echo > $X/b", unknown: 1},
+		{command: "X=a; read -a X; echo > $X/b", unknown: 1},
+		{command: "X=a; read -ra X; echo > $X/b", unknown: 1},
+		{command: "X=a; read -p 'name: ' X; echo > $X/b", unknown: 1},
+		{command: "X=a; read -p X Y; echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "X=a; read -t 1 -- X; echo > $X/b", unknown: 1},
+		{command: "X=a; echo | read X; echo > $X/b", unknown: 1},
+		{command: "X=a; while read X; do echo > $X/b; done", unknown: 1},
+		{command: "REPLY=a; read; echo > $REPLY/b", unknown: 1},
+		{command: "X=a; read Y; echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "X=a; mapfile X; echo > $X/b", unknown: 1},
+		{command: "X=a; readarray -t X < f; echo > $X/b", unknown: 1},
+		{command: "X=a; mapfile -t -n 2 X; echo > $X/b", unknown: 1},
+		{command: "X=a; mapfile -C X Y; echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "X=a; printf -v X '%s' c; echo > $X/b", unknown: 1},
+		{command: "X=a; printf -vX '%s' c; echo > $X/b", unknown: 1},
+		{command: "X=a; printf '%s' X; echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "X=a; getopts ab: X; echo > $X/b", unknown: 1},
+		{command: "OPTARG=a; getopts ab: o; echo > $OPTARG/b", unknown: 1},
+		{command: "X=a; wait -p X; echo > $X/b", unknown: 1},
+		// A loop variable, inside the loop and after it.
+		{command: "X=a; for X in c d; do echo > $X/b; done", unknown: 1},
+		{command: "X=a; for X in c d; do :; done; echo > $X/b", unknown: 1},
+		{command: "for E in c; do :; done; echo > $E/b", unknown: 1},
+		{command: "X=a; for X\ndo :; done; echo > $X/b", unknown: 1},
+		{command: "X=a; select X in c d; do break; done; echo > $X/b", unknown: 1},
+		{command: "X=a; for f in *.go; do :; done; echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "for f in a; do echo > $f.go; done; echo > c", want: []Target{at("c", R)}, unknown: 1},
+		// Arithmetic that assigns.
+		{command: "X=a; for ((X=0; X<3; X++)); do :; done; echo > $X/b", unknown: 1},
+		{command: "X=a; for ((i=0; i<3; i++)); do :; done; echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "X=a; ((X=1)); echo > $X/b", unknown: 1},
+		{command: "X=a; (( X += 1 )); echo > $X/b", unknown: 1},
+		{command: "X=a; ((X++)); echo > $X/b", unknown: 1},
+		{command: "X=a; ((--X)); echo > $X/b", unknown: 1},
+		{command: "X=a; ((X[1]=2)); echo > $X/b", unknown: 1},
+		{command: "X=a; ((X == 1)); echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "X=a; ((X <= 1 || X >= 2 || X != 0)); echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "X=a; echo $((X=2)); echo > $X/b", unknown: 1},
+		{command: "X=a; echo $[X=2]; echo > $X/b", unknown: 1},
+		{command: "X=a; n=X; (($n = 1)); echo > $X/b", unknown: 1},
+		{command: "X=a; let X=1; echo > $X/b", unknown: 1},
+		{command: "X=a; let 'X = 1'; echo > $X/b", unknown: 1},
+		{command: "X=a; let X++; echo > $X/b", unknown: 1},
+		{command: "X=a; let Y=X+1; echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "X=a; X+=c; echo > $X/b", unknown: 1},
+		{command: "X=; echo ${X:=c}; echo > $X/b", unknown: 1},
+		{command: "unset X; echo ${X=c}; echo > $X/b", unknown: 1},
+		// declare and its kin: a literal is known; anything else is not.
+		{command: "declare X=c; echo > $X/b", want: []Target{at("c/b", R)}},
+		{command: "export X=c; echo > $X/b", want: []Target{at("c/b", R)}},
+		{command: "local X=c; echo > $X/b", want: []Target{at("c/b", R)}},
+		{command: "X=a; export X; echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "X=a; readonly X; echo > $X/b", want: []Target{at("a/b", R)}},
+		{command: "X=a; declare X=$(cmd); echo > $X/b", unknown: 1},
+		{command: "X=a; export X=`cmd`; echo > $X/b", unknown: 1},
+		{command: "X=a; local X; echo > $X/b", unknown: 1},
+		{command: "X=a; typeset X; echo > $X/b", unknown: 1},
+		{command: "declare -u X=c; echo > $X/b", unknown: 1},
+		{command: "declare -i X; X=1+1; echo > $X/b", unknown: 1},
+		{command: "local -l X; X=C; echo > $X/b", unknown: 1},
+		{command: "declare -n X=E; echo > $X/b", unknown: 1},
+		{command: "Y=a; declare -n X=Y; X=c; echo > $Y/b", unknown: 1},
+		{command: "Y=a; declare -n X=Y; echo > $Y/b", want: []Target{at("a/b", R)}},
+		{command: "Y=a; declare -n X=Y; read X; echo > $Y/b", unknown: 1},
+		{command: "X=a; export -n X=c; echo > $X/b", want: []Target{at("c/b", R)}},
+		{command: "X=a; declare $spec; echo > $X/b", unknown: 1},
+		// A sourced script or an eval of what stele can't read may set any.
+		{command: "X=a; source env.sh; echo > $X/b", unknown: 1},
+		{command: "X=a; . ./env.sh; echo > $E/b", unknown: 1},
+		{command: "source env.sh; X=c; echo > $X/b", want: []Target{at("c/b", R)}},
+		{command: "source env.sh; echo > ~/b", unknown: 1},
+		{command: "X=a; eval \"$cmd\"; echo > $X/b", unknown: 2},
+		// A cd to an unknown variable leaves the directory unknown.
+		{command: "read d; cd $d; echo > b", unknown: 1},
+		{command: "for d in a c; do cd $d; done; echo > b", unknown: 1},
+		// What a nested shell sets stays there.
+		{command: "X=a; bash -c 'read X'; echo > $X/b", want: []Target{at("a/b", R)}},
+	}
+	for _, tt := range tests {
+		got, unknown := Targets(tt.command, cwd)
+		if diff := cmp.Diff(tt.want, got); diff != "" {
+			t.Errorf("Targets(%q) (-want +got):\n%s", tt.command, diff)
+		}
+		if unknown != tt.unknown {
+			t.Errorf("Targets(%q): unknown = %d, want %d", tt.command, unknown, tt.unknown)
+		}
+	}
+}
+
 // With no directory to resolve against, a relative target is unknown.
 func TestTargetsNoCwd(t *testing.T) {
 	got, unknown := Targets("echo > a", "")
@@ -1255,6 +1368,9 @@ func FuzzTargets(f *testing.F) {
 		"touch -d x -- a; mkdir -pm 7 b", "git -C a -C b clone --bare -b x u:/r.git", "git clone ://", "git worktree add",
 		"git submodule -q add -- u", "git --git-dir= init", "git -C",
 		"git --attr-source x init src", "git --exec-path init", "git clone ~u", "git clone '~/.git'",
+		"X=a; unset -v X; read -rp p -a Y; mapfile -t Z; printf -vW x; getopts a: V; echo > $X$Y$Z$W$V",
+		"for X in a; do :; done; for ((i=0;i<2;i++)); do let j++; done; ((k[1]+=2)); echo ${X:=b}$[y=1] > $X",
+		"declare -n r=X; declare -iu Y=1; r=c; source f; eval \"$c\"; echo > ~/$X$Y",
 	} {
 		f.Add(s)
 	}
