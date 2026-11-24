@@ -21,7 +21,8 @@ type parser struct {
 	res  *results
 	vars map[string]string // NAME=literal assignments seen so far
 	// dyn are the variables set to something unknown. allVars stands for
-	// every variable not in vars; sticky+NAME and nameref+NAME mark names
+	// every variable not in vars, sourced for all but HOME; sticky+NAME and
+	// nameref+NAME mark names
 	// whose later assignments are unknown too.
 	dyn map[string]bool
 	// fold are the environment variables a PowerShell command around this
@@ -681,7 +682,7 @@ func (p *parser) expand(b *strings.Builder, w *word, name string) {
 		}
 		v, ok := p.vars[name]
 		if !ok {
-			if p.dyn[allVars] {
+			if p.dyn[allVars] || p.dyn[sourced] {
 				w.dynamic = true
 				return
 			}
@@ -703,7 +704,7 @@ func (p *parser) expand(b *strings.Builder, w *word, name string) {
 	}
 	v, ok := p.vars[name]
 	if !ok {
-		if p.dyn[allVars] || p.folded(name) { // set by a source, or by the PowerShell command around this script
+		if p.dyn[allVars] || p.dyn[sourced] && name != "HOME" || p.folded(name) { // set by a source, or by the PowerShell command around this script
 			w.dynamic = true
 			return
 		}
@@ -840,8 +841,14 @@ func (p *parser) finish(c *command, inPipe bool) {
 			p.arith(a.raw)
 		}
 	case "source", ".":
-		// The script may set any variable.
-		p.forgetAll()
+		// The script may set any variable. HOME is taken to stay as it
+		// was: a script such as venv/bin/activate doesn't move it.
+		home, ok := p.vars["HOME"]
+		clear(p.vars)
+		if ok {
+			p.vars["HOME"] = home
+		}
+		p.dyn[sourced] = true
 	case "tee":
 		for _, a := range operands(args, nil) {
 			p.add(a, Tee)
@@ -1076,6 +1083,7 @@ const (
 	allVars = "\x00" // every variable not in vars is unknown
 	sticky  = "\x01" // + NAME: declare -i, -l or -u changes what NAME is set to
 	nameref = "\x02" // + NAME: declare -n: setting NAME sets another variable
+	sourced = "\x03" // every variable not in vars but HOME is unknown
 )
 
 // forget makes variable name unknown from here on: a command such as unset,
@@ -1089,9 +1097,11 @@ func (p *parser) forget(name string) {
 	}
 }
 
-// forgetAll makes every variable unknown, as a sourced script may set any.
+// forgetAll makes every variable unknown, as unset $n may unset any.
 func (p *parser) forgetAll() {
-	clear(p.vars)
+	if len(p.vars) > 0 { // clear walks the map's whole capacity
+		clear(p.vars)
+	}
 	p.dyn[allVars] = true
 }
 
@@ -1230,20 +1240,44 @@ func (p *parser) declare(cmd string, args []word) {
 // NAME op= …, NAME++, ++NAME and the like, NAME[i] too. One assigned through
 // an expansion, as in $n = 1, may be any variable.
 func (p *parser) arith(s string) {
+	// Each byte is looked at a bounded number of times: a run of name
+	// bytes is skipped whole, and the ] a subscript ends at is found once
+	// for every name before it (#191).
+	close := -1 // the first ] at or after the last subscript looked for, or len(s)
 	for i := 0; i < len(s); {
+		if c := s[i]; '0' <= c && c <= '9' {
+			// A number, or 1a…: not a name, nor any name inside it.
+			j := i + 1
+			for j < len(s) && (nameStart(s[j]) || '0' <= s[j] && s[j] <= '9') {
+				j++
+			}
+			p.res.arith += j - i
+			i = j
+			continue
+		}
 		n := nameLen(s[i:])
-		if n == 0 || i > 0 && (nameStart(s[i-1]) || '0' <= s[i-1] && s[i-1] <= '9') {
+		if n == 0 {
+			p.res.arith++
 			i++
 			continue
 		}
+		p.res.arith += n
 		name, end := s[i:i+n], i+n
 		if end < len(s) && s[end] == '[' {
-			if close := strings.IndexByte(s[end:], ']'); close > 0 {
-				end += close + 1
+			if close < end {
+				close = len(s)
+				if c := strings.IndexByte(s[end:], ']'); c >= 0 {
+					close = end + c
+				}
+				p.res.arith += close - end
+			}
+			if close < len(s) {
+				end = close + 1
 			}
 		}
 		before := strings.TrimRight(s[:i], " \t\n")
 		after := strings.TrimLeft(s[end:], " \t\n")
+		p.res.arith += i - len(before) + len(s) - end - len(after)
 		if strings.HasSuffix(before, "++") || strings.HasSuffix(before, "--") || assignOp(after) {
 			if strings.HasSuffix(before, "$") || strings.HasSuffix(before, "${") {
 				p.forgetAll()

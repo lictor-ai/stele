@@ -540,7 +540,13 @@ func TestTargetsVarsSetByCommand(t *testing.T) {
 		{command: "X=a; source env.sh; echo > $X/b", unknown: 1},
 		{command: "X=a; . ./env.sh; echo > $E/b", unknown: 1},
 		{command: "source env.sh; X=c; echo > $X/b", want: []Target{at("c/b", R)}},
-		{command: "source env.sh; echo > ~/b", unknown: 1},
+		// HOME is taken to stay: source venv/bin/activate doesn't move it.
+		{command: "source env.sh; echo > ~/b", want: []Target{at("home/b", R)}},
+		{command: "source env.sh; echo > $HOME/b", want: []Target{at("home/b", R)}},
+		{command: "HOME=/q; source env.sh; echo > ~/b", unknown: 1},
+		{command: "HOME=c; source env.sh; echo > $HOME/b", want: []Target{at("c/b", R)}},
+		{command: "unset $n; echo > ~/b", unknown: 1},
+		{command: "source env.sh; echo > $PWD/b", unknown: 1},
 		{command: "X=a; eval \"$cmd\"; echo > $X/b", unknown: 2},
 		// A cd to an unknown variable leaves the directory unknown.
 		{command: "read d; cd $d; echo > b", unknown: 1},
@@ -555,6 +561,31 @@ func TestTargetsVarsSetByCommand(t *testing.T) {
 		}
 		if unknown != tt.unknown {
 			t.Errorf("Targets(%q): unknown = %d, want %d", tt.command, unknown, tt.unknown)
+		}
+	}
+}
+
+// Looking for assignments in arithmetic costs a few reads of each byte, not a
+// read of the rest at each one: a long run such as 1aaa… took 30 s (#191).
+// The bytes scanned are counted, not timed.
+func TestTargetsArithLinear(t *testing.T) {
+	run := "1" + strings.Repeat("a1", 50<<10)
+	subs := strings.Repeat("a[", 50<<10)
+	for _, command := range []string{
+		"((" + run + "))",
+		"let " + run,
+		"echo $[" + run + "]",
+		"echo ${" + run + "}",
+		"echo ${X:=" + run + "}",
+		"((" + subs + "))",
+		"((" + subs + "]))",
+		"((" + strings.Repeat("a ", 50<<10) + "= 1))",
+		"((" + strings.Repeat("a", 100<<10) + "=1))",
+		"let " + strings.Repeat("_a1", 30<<10) + "++",
+	} {
+		r := globRun(command, cwd)
+		if r.arith > 4*len(command) {
+			t.Errorf("%.20s… (%d bytes): arithmetic scanned %d bytes", command, len(command), r.arith)
 		}
 	}
 }
