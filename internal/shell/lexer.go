@@ -20,7 +20,11 @@ type parser struct {
 
 	res  *results
 	vars map[string]string // NAME=literal assignments seen so far
-	dyn  map[string]bool   // variables assigned something unknown
+	// dyn are the variables set to something unknown. allVars stands for
+	// every variable not in vars, sourced for all but HOME; sticky+NAME and
+	// nameref+NAME mark names
+	// whose later assignments are unknown too.
+	dyn map[string]bool
 	// fold are the environment variables a PowerShell command around this
 	// script set, lower case: unknown here in any case. "\x00" stands for all.
 	fold map[string]bool
@@ -324,15 +328,17 @@ func (p *parser) skipWords(end string) {
 	}
 }
 
-// skipArith skips an arithmetic command after its "((", up to "))".
+// skipArith skips an arithmetic command after its "((", up to "))". The
+// variables it assigns are unknown from then on.
 func (p *parser) skipArith() {
-	depth := 0
+	depth, start := 0, p.i
 	for p.i < len(p.src) {
 		switch p.src[p.i] {
 		case '(':
 			depth++
 		case ')':
 			if depth == 0 && p.i+1 < len(p.src) && p.src[p.i+1] == ')' {
+				p.arith(p.src[start:p.i])
 				p.i += 2
 				return
 			}
@@ -614,7 +620,7 @@ func (p *parser) dollar(b *strings.Builder, w *word, quoted bool) {
 		p.sub()
 		w.dynamic = true
 	case c == '[': // $[ … ], old arithmetic
-		depth := 0
+		depth, start := 0, p.i
 		for p.i < len(p.src) {
 			switch p.src[p.i] {
 			case '[':
@@ -630,6 +636,7 @@ func (p *parser) dollar(b *strings.Builder, w *word, quoted bool) {
 		if depth != 0 {
 			p.err = true
 		}
+		p.arith(p.src[start:p.i])
 		w.dynamic = true
 	case c == '{':
 		end := strings.IndexByte(p.src[p.i:], '}')
@@ -639,9 +646,15 @@ func (p *parser) dollar(b *strings.Builder, w *word, quoted bool) {
 		}
 		name := p.src[p.i+1 : p.i+end]
 		p.i += end + 1
-		if nameLen(name) == len(name) && name != "" {
+		if n := nameLen(name); n == len(name) && name != "" {
 			p.expand(b, w, name)
 		} else {
+			// ${X=v} and ${X:=v} assign X; ${a[i++]} and ${s:i=1} are
+			// arithmetic.
+			if n > 0 && (strings.HasPrefix(name[n:], "=") || strings.HasPrefix(name[n:], ":=")) {
+				p.forget(name[:n])
+			}
+			p.arith(name[n:])
 			w.dynamic = true
 		}
 	case c == '\'' && !quoted:
@@ -669,6 +682,10 @@ func (p *parser) expand(b *strings.Builder, w *word, name string) {
 		}
 		v, ok := p.vars[name]
 		if !ok {
+			if p.dyn[allVars] || p.dyn[sourced] {
+				w.dynamic = true
+				return
+			}
 			v = p.dir
 		}
 		if !p.res.expand(len(v)) {
@@ -687,7 +704,7 @@ func (p *parser) expand(b *strings.Builder, w *word, name string) {
 	}
 	v, ok := p.vars[name]
 	if !ok {
-		if p.folded(name) { // set by the PowerShell command around this script
+		if p.dyn[allVars] || p.dyn[sourced] && name != "HOME" || p.folded(name) { // set by a source, or by the PowerShell command around this script
 			w.dynamic = true
 			return
 		}
@@ -795,11 +812,43 @@ func (p *parser) finish(c *command, inPipe bool) {
 			p.dirOK = false
 		}
 	case "export", "local", "declare", "readonly", "typeset":
-		for _, a := range args {
-			if a.assign != "" {
-				p.assign(a)
-			}
+		p.declare(name(words[0]), args)
+	case "unset":
+		p.unset(args)
+	case "read":
+		p.forget("REPLY")
+		p.setVars(args, "adinNptu", "a", true)
+	case "mapfile", "readarray":
+		p.forget("MAPFILE")
+		p.setVars(args, "dnOsuCc", "", true)
+	case "printf":
+		p.setVars(args, "v", "v", false)
+	case "wait":
+		p.setVars(args, "p", "p", false)
+	case "getopts":
+		p.forget("OPTARG")
+		p.forget("OPTIND")
+		if len(args) > 1 {
+			p.forgetWord(args[1])
 		}
+	case "for", "select":
+		// for X in …: X is each word in turn, and the last one after.
+		if len(args) > 0 {
+			p.forgetWord(args[0])
+		}
+	case "let":
+		for _, a := range args {
+			p.arith(a.raw)
+		}
+	case "source", ".":
+		// The script may set any variable. HOME is taken to stay as it
+		// was: a script such as venv/bin/activate doesn't move it.
+		home, ok := p.vars["HOME"]
+		clear(p.vars)
+		if ok {
+			p.vars["HOME"] = home
+		}
+		p.dyn[sourced] = true
 	case "tee":
 		for _, a := range operands(args, nil) {
 			p.add(a, Tee)
@@ -917,6 +966,9 @@ func (p *parser) eval(args []word, inPipe bool) {
 	for _, a := range args {
 		if a.dynamic || a.glob {
 			p.res.unknown++
+			if !inPipe {
+				p.forgetAll() // it may set any variable
+			}
 			return
 		}
 		if n <= maxNested {
@@ -995,6 +1047,7 @@ var wrappers = map[string]map[string]bool{
 	"nice":    {"-n": true},
 	"time":    {"-o": true, "-f": true},
 	"timeout": {"-s": true, "-k": true},
+	"builtin": {},
 	"stdbuf":  {"-i": true, "-o": true, "-e": true},
 	"ionice":  {"-c": true, "-n": true, "-t": false},
 }
@@ -1017,13 +1070,233 @@ func name(w word) string {
 
 // assign records NAME=value for the expansions after it.
 func (p *parser) assign(w word) {
-	if w.dynamic || w.partial {
-		delete(p.vars, w.assign)
-		p.dyn[w.assign] = true
+	if w.dynamic || w.partial || p.dyn[sticky+w.assign] || p.dyn[nameref+w.assign] {
+		p.forget(w.assign)
 		return
 	}
 	p.vars[w.assign] = w.value
 	delete(p.dyn, w.assign)
+}
+
+// Keys of parser.dyn that are not variable names (#189).
+const (
+	allVars = "\x00" // every variable not in vars is unknown
+	sticky  = "\x01" // + NAME: declare -i, -l or -u changes what NAME is set to
+	nameref = "\x02" // + NAME: declare -n: setting NAME sets another variable
+	sourced = "\x03" // every variable not in vars but HOME is unknown
+)
+
+// forget makes variable name unknown from here on: a command such as unset,
+// read or for set it to something stele doesn't know. Through a nameref any
+// variable may change.
+func (p *parser) forget(name string) {
+	delete(p.vars, name)
+	p.dyn[name] = true
+	if p.dyn[nameref+name] {
+		p.forgetAll()
+	}
+}
+
+// forgetAll makes every variable unknown, as unset $n may unset any.
+func (p *parser) forgetAll() {
+	if len(p.vars) > 0 { // clear walks the map's whole capacity
+		clear(p.vars)
+	}
+	p.dyn[allVars] = true
+}
+
+// forgetWord forgets the variable w names: NAME or NAME[i]. A name stele
+// can't read may be any variable's.
+func (p *parser) forgetWord(w word) {
+	if w.dynamic {
+		p.forgetAll()
+		return
+	}
+	if n := nameLen(w.text); n > 0 {
+		p.forget(w.text[:n])
+	}
+}
+
+// setVars forgets the variables a builtin such as read sets: its operands,
+// when operands is set, and the arguments of the options in names. takes are
+// the options that take an argument. Options end at -- or the first operand.
+func (p *parser) setVars(args []word, takes, names string, operands bool) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		t := a.text
+		switch {
+		case t == "--" && !a.dynamic:
+			if operands {
+				for _, o := range args[i+1:] {
+					p.forgetWord(o)
+				}
+			}
+			return
+		case a.dynamic || len(t) < 2 || t[0] != '-':
+			if operands {
+				for _, o := range args[i:] {
+					p.forgetWord(o)
+				}
+			}
+			return
+		}
+		for j := 1; j < len(t); j++ {
+			c := t[j]
+			if strings.IndexByte(takes, c) < 0 {
+				continue
+			}
+			arg := word{raw: t[j+1:], text: t[j+1:]}
+			if arg.text == "" {
+				if i+1 >= len(args) {
+					return
+				}
+				i++
+				arg = args[i]
+			}
+			if strings.IndexByte(names, c) >= 0 {
+				p.forgetWord(arg)
+			}
+			break
+		}
+	}
+}
+
+// unset forgets the variables it names. unset is empty, not the
+// environment's value, and a target such as $X/a.go would be /a.go: unknown
+// rather than a guess. unset -f removes functions.
+func (p *parser) unset(args []word) {
+	funcs := false
+	for i, a := range args {
+		t := a.text
+		switch {
+		case t == "--" && !a.dynamic:
+			if !funcs {
+				for _, o := range args[i+1:] {
+					p.forgetWord(o)
+				}
+			}
+			return
+		case !a.dynamic && len(t) > 1 && t[0] == '-':
+			funcs = strings.Contains(t, "f") && !strings.Contains(t, "v")
+		case !funcs:
+			p.forgetWord(a)
+		}
+	}
+}
+
+// declare reads export, local, declare, readonly and typeset: NAME=literal
+// is known, as an assignment; a value with -i, -l or -u is changed, as is
+// any later one, and a nameref (-n) stands for another variable. A bare NAME
+// for local, declare or typeset is a new variable, empty in a function.
+func (p *parser) declare(cmd string, args []word) {
+	attr, ref, opts := false, false, true
+	for _, a := range args {
+		t := a.text
+		if opts && !a.dynamic && a.assign == "" {
+			if t == "--" {
+				opts = false
+				continue
+			}
+			if len(t) > 1 && (t[0] == '-' || t[0] == '+') {
+				attr = attr || strings.ContainsAny(t[1:], "ilu")
+				ref = ref || cmd != "export" && t[0] == '-' && strings.Contains(t, "n")
+				continue
+			}
+		}
+		opts = false
+		n := a.assign
+		if n == "" && !a.dynamic {
+			if l := nameLen(t); l > 0 && l == len(t) {
+				n = t
+			}
+		}
+		switch {
+		case a.dynamic && a.assign == "":
+			p.forgetAll() // declare $spec: any variable
+			continue
+		case n == "":
+			continue
+		}
+		switch {
+		case attr || ref:
+			// Not forget: declaring a nameref sets no other variable.
+			delete(p.vars, n)
+			p.dyn[n] = true
+			if attr {
+				p.dyn[sticky+n] = true
+			}
+			if ref {
+				p.dyn[nameref+n] = true
+			}
+		case a.assign != "":
+			p.assign(a)
+		case cmd == "local" || cmd == "declare" || cmd == "typeset":
+			p.forget(n)
+		}
+	}
+}
+
+// arith forgets the variables an arithmetic expression assigns: NAME = …,
+// NAME op= …, NAME++, ++NAME and the like, NAME[i] too. One assigned through
+// an expansion, as in $n = 1, may be any variable.
+func (p *parser) arith(s string) {
+	// Each byte is looked at a bounded number of times: a run of name
+	// bytes is skipped whole, and the ] a subscript ends at is found once
+	// for every name before it (#191).
+	close := -1 // the first ] at or after the last subscript looked for, or len(s)
+	for i := 0; i < len(s); {
+		if c := s[i]; '0' <= c && c <= '9' {
+			// A number, or 1a…: not a name, nor any name inside it.
+			j := i + 1
+			for j < len(s) && (nameStart(s[j]) || '0' <= s[j] && s[j] <= '9') {
+				j++
+			}
+			p.res.arith += j - i
+			i = j
+			continue
+		}
+		n := nameLen(s[i:])
+		if n == 0 {
+			p.res.arith++
+			i++
+			continue
+		}
+		p.res.arith += n
+		name, end := s[i:i+n], i+n
+		if end < len(s) && s[end] == '[' {
+			if close < end {
+				close = len(s)
+				if c := strings.IndexByte(s[end:], ']'); c >= 0 {
+					close = end + c
+				}
+				p.res.arith += close - end
+			}
+			if close < len(s) {
+				end = close + 1
+			}
+		}
+		before := strings.TrimRight(s[:i], " \t\n")
+		after := strings.TrimLeft(s[end:], " \t\n")
+		p.res.arith += i - len(before) + len(s) - end - len(after)
+		if strings.HasSuffix(before, "++") || strings.HasSuffix(before, "--") || assignOp(after) {
+			if strings.HasSuffix(before, "$") || strings.HasSuffix(before, "${") {
+				p.forgetAll()
+			} else {
+				p.forget(name)
+			}
+		}
+		i += n
+	}
+}
+
+// assignOp reports whether s starts with an arithmetic assignment, ++ or --.
+func assignOp(s string) bool {
+	for _, op := range []string{"++", "--", "<<=", ">>=", "+=", "-=", "*=", "/=", "%=", "&=", "^=", "|="} {
+		if strings.HasPrefix(s, op) {
+			return true
+		}
+	}
+	return strings.HasPrefix(s, "=") && !strings.HasPrefix(s, "==")
 }
 
 // cd moves the directory relative paths resolve against.
@@ -1546,7 +1819,7 @@ func (p *parser) home() string {
 // set the variable name.
 func (p *parser) setHere(name string) bool {
 	_, ok := p.vars[name]
-	return ok || p.dyn[name] || p.folded(name)
+	return ok || p.dyn[name] || p.dyn[allVars] || p.folded(name)
 }
 
 // folded reports whether a PowerShell command around this script set the

@@ -90,6 +90,7 @@ type results struct {
 	steps   int // directories globs opened and fixed path segments they walked
 	nested  int // bytes of nested scripts read, each read counted readCost more
 	grown   int // bytes variables expanded to; maxExpand+1 once spent
+	arith   int // bytes arithmetic was scanned for assignments, a cost tests bound
 	envs    map[string]string
 }
 
