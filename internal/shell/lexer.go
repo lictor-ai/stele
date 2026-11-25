@@ -47,6 +47,11 @@ type parser struct {
 	last    [kinds]int
 	forNext bool // the next { … } is the body of a for or select
 	piped   bool // the command finished is in a pipeline or the background
+	// log are the assignments made while a { … } group is open, which a |
+	// or & after it puts in a subshell. ended is the group just closed,
+	// while what follows it is still to be read.
+	log   []string
+	ended *frame
 }
 
 // The kinds of frame.
@@ -66,9 +71,18 @@ const (
 type frame struct {
 	kind  int
 	head  bool // a while or until whose do is still to come
+	fn    bool // a function's body: its cd is undone at its end
+	cd    bool // a cd ran in it: the directory is unknown at its end
 	cond  int
 	prev  int // the frame of this kind it hides, as in last
 	names []string
+
+	// A group's: where its assignments start in log, the directory it
+	// started in, and whether it is in a pipeline.
+	start int
+	dir   string
+	dirOK bool
+	piped bool
 }
 
 // body is a function body being read: where it began, and the directory to
@@ -167,15 +181,20 @@ func (p *parser) list(term string) {
 	}
 	var c command
 	var cases []int // the case … esac open in this list, innermost last
-	prevPipe, fnName, andOr := false, false, false
+	// cont: the last token was |, |&, && or ||, which a newline doesn't end.
+	prevPipe, fnName, cont := false, false, false
 	for !p.err {
 		t := p.next()
 		if p.err {
 			return // the command being read is dropped
 		}
 		n := len(cases)
-		if t.kind == tWord || t.kind == tRedir {
-			andOr = false
+		if t.kind == tOp && t.op == "\n" && cont {
+			continue
+		}
+		cont = t.kind == tOp && (t.op == "|" || t.op == "|&" || t.op == "&&" || t.op == "||")
+		if t.kind != tRedir {
+			p.groupEnd(t)
 		}
 		switch t.kind {
 		case tEOF:
@@ -184,6 +203,11 @@ func (p *parser) list(term string) {
 		case tWord:
 			if !t.w.plain() || t.w.text != "{" {
 				p.forNext = false
+			}
+			// for ((…)) do, for NAME do: the head ends at do or {.
+			if t.w.plain() && (t.w.text == "do" || t.w.text == "{") && c.assigns == 0 && forHead(c.words) {
+				p.finish(&c, prevPipe)
+				prevPipe = false
 			}
 			if n > 0 && cases[n-1] != caseBody {
 				// The subject or a pattern: not a command.
@@ -223,11 +247,14 @@ func (p *parser) list(term string) {
 						p.bodies = append(p.bodies, body{p.braces, p.dir, p.dirOK})
 						p.funcNext = false
 						p.push(kBody)
+						p.frames[len(p.frames)-1].fn = true
 					case p.forNext:
 						p.forNext = false
 						p.push(kBody)
 					default:
 						p.push(kGroup)
+						g := &p.frames[len(p.frames)-1]
+						g.start, g.dir, g.dirOK, g.piped = len(p.log), p.dir, p.dirOK, prevPipe
 					}
 					p.braces++
 					continue
@@ -237,7 +264,16 @@ func (p *parser) list(term string) {
 						p.dir, p.dirOK = p.bodies[b-1].dir, p.bodies[b-1].dirOK
 						p.bodies = p.bodies[:b-1]
 					}
-					p.closeTo(max(p.last[kGroup], p.last[kBody]), base)
+					at := max(p.last[kGroup], p.last[kBody])
+					if at > base && p.frames[at-1].kind == kGroup {
+						g := p.frames[at-1]
+						p.closeTo(at, base)
+						if !g.piped { // else undone as it closed
+							p.ended = &g
+						}
+					} else {
+						p.closeTo(at, base)
+					}
 					continue
 				case "[[":
 					p.funcNext = false
@@ -325,6 +361,11 @@ func (p *parser) list(term string) {
 			case "((":
 				p.funcNext = false
 				p.skipArith()
+				if c.assigns == 0 && len(c.words) == 1 && forHead(c.words) {
+					// for ((…)): what follows is its body.
+					p.finish(&c, prevPipe)
+					prevPipe = false
+				}
 			case ")":
 				if term == ")" {
 					p.finish(&c, prevPipe)
@@ -342,10 +383,8 @@ func (p *parser) list(term string) {
 					if !top {
 						p.push(kAndOr)
 					}
-					andOr = true
-				case top && (t.op == ";" || t.op == "&" || t.op == "\n" && !andOr):
-					// The list ends: a newline right after && or || does not.
-					p.pop()
+				case top && (t.op == ";" || t.op == "&" || t.op == "\n"):
+					p.pop() // the list ends
 				}
 			}
 		}
@@ -898,6 +937,7 @@ func (p *parser) finish(c *command, inPipe bool) {
 	case "cd", "pushd":
 		if !inPipe {
 			p.cd(args)
+			p.moved()
 		}
 	case "popd":
 		if !inPipe {
@@ -1085,9 +1125,12 @@ func (p *parser) eval(args []word, inPipe bool) {
 	}
 	q := &parser{src: b.String(), res: p.res, vars: p.vars, dyn: p.dyn, fold: p.fold, dir: p.dir, dirOK: p.dirOK, depth: p.depth}
 	if !inPipe {
-		// What it assigns in a body here is unknown at the body's end.
-		q.frames, q.last = p.frames, p.last
-		defer func() { p.dir, p.dirOK, p.frames = q.dir, q.dirOK, q.frames }()
+		// What it assigns in a body here is unknown at the body's end. Its
+		// list closes every frame it opens, so q.last ends as p.last began
+		// and is not copied back; frames and log are, as appending may have
+		// moved them.
+		q.frames, q.last, q.log = p.frames, p.last, p.log
+		defer func() { p.dir, p.dirOK, p.frames, p.log = q.dir, q.dirOK, q.frames, q.log }()
 	} else {
 		// A pipeline's commands run in subshells: what eval sets stays there.
 		q.vars, q.dyn = maps.Clone(p.vars), maps.Clone(p.dyn)
@@ -1179,6 +1222,9 @@ func (p *parser) assign(w word) {
 	}
 	p.vars[w.assign] = w.value
 	delete(p.dyn, w.assign)
+	if p.last[kGroup] > 0 {
+		p.log = append(p.log, w.assign)
+	}
 	if l := len(p.frames); l > 0 && p.frames[l-1].cond > 0 {
 		f := &p.frames[p.frames[l-1].cond-1]
 		f.names = append(f.names, w.assign)
@@ -1211,6 +1257,58 @@ func (p *parser) pop() {
 	for _, n := range f.names {
 		p.forget(n)
 	}
+	if f.cd {
+		p.dirOK = false
+	}
+	if f.kind == kGroup && f.piped {
+		p.subshell(&f)
+	}
+}
+
+// groupEnd acts on what follows a { … } group just closed: after | or &, or
+// in a pipeline from its start, it ran in a subshell, so its assignments and
+// cd are undone.
+func (p *parser) groupEnd(t token) {
+	g := p.ended
+	if g == nil {
+		return
+	}
+	p.ended = nil
+	if t.kind == tOp && (t.op == "|" || t.op == "|&" || t.op == "&") {
+		p.subshell(g)
+	} else if p.last[kGroup] == 0 {
+		p.log = p.log[:0] // no group left to undo
+	}
+}
+
+// subshell undoes what group g did: its assignments are unknown and the
+// directory is the one it started in. Each assignment logged is undone once:
+// the log is cut back to where g started.
+func (p *parser) subshell(g *frame) {
+	start := min(g.start, len(p.log))
+	p.res.frames += len(p.log) - start
+	for _, n := range p.log[start:] {
+		p.forget(n)
+	}
+	p.log = p.log[:start]
+	p.dir, p.dirOK = g.dir, g.dirOK
+}
+
+// moved records a cd in the innermost frame that may not run, but for a
+// function's body, whose end puts the directory back.
+func (p *parser) moved() {
+	if l := len(p.frames); l > 0 {
+		if c := p.frames[l-1].cond; c > 0 && !p.frames[c-1].fn {
+			p.frames[c-1].cd = true
+		}
+	}
+}
+
+// forHead reports whether words are the head of a for or select: for NAME,
+// or for alone before ((…)).
+func forHead(words []word) bool {
+	return (len(words) == 1 || len(words) == 2 && words[1].plain()) && words[0].plain() &&
+		(words[0].text == "for" || words[0].text == "select" && len(words) == 2)
 }
 
 // closeTo closes frame at, an index plus one, and those inside it, when it
@@ -1240,6 +1338,9 @@ func (p *parser) branch(at, base int) {
 		p.forget(n)
 	}
 	f.names = f.names[:0]
+	if f.cd {
+		p.dirOK = false
+	}
 }
 
 // Keys of parser.dyn that are not variable names (#189).

@@ -256,8 +256,8 @@ func TestTargets(t *testing.T) {
 		{command: "time -v tee f", want: nil},
 		{command: "/usr/bin/time -o log -f %e tee f", want: []Target{at("f", T)}},
 
-		// A case pattern's ) closes nothing.
-		{command: "(case x in a) cd sub;; (b) true;; esac; echo > in.go); echo > out.go", want: []Target{at("sub/in.go", R), at("out.go", R)}},
+		// A case pattern's ) closes nothing. The branch's cd may not run.
+		{command: "(case x in a) cd sub;; (b) true;; esac; echo > in.go); echo > out.go", want: []Target{at("out.go", R)}, unknown: 1},
 		{command: "case $x in *.go) echo > g;; *) echo > h;; esac", want: []Target{at("g", R), at("h", R)}},
 
 		// More wrappers.
@@ -404,12 +404,13 @@ func TestTargets(t *testing.T) {
 		{command: "((echo > d.go) && (echo > e.go)); echo > f.go", want: []Target{at("f.go", R)}},
 		// With no )) it reads to the end, so what follows it is lost too.
 		{command: "((echo x > a.go) || true) && echo z > c.go", want: nil},
-		// A cd in a body that is not in braces or a subshell moves the directory,
-		// though bash only defines the function: it writes c.go here.
-		{command: "f() if true; then cd a; fi; echo > c.go", want: []Target{at("a/c.go", R)}},
-		{command: "f() case x in x) cd a;; esac; echo > c.go", want: []Target{at("a/c.go", R)}},
-		{command: "f() for x in y; do cd a; done; echo > c.go", want: []Target{at("a/c.go", R)}},
-		{command: "f() while cd a; do break; done; echo > c.go", want: []Target{at("a/c.go", R)}},
+		// A cd in a body that is not in braces or a subshell leaves the
+		// directory unknown, though bash only defines the function: it writes
+		// c.go here.
+		{command: "f() if true; then cd a; fi; echo > c.go", unknown: 1},
+		{command: "f() case x in x) cd a;; esac; echo > c.go", unknown: 1},
+		{command: "f() for x in y; do cd a; done; echo > c.go", unknown: 1},
+		{command: "f() while cd a; do break; done; echo > c.go", unknown: 1},
 
 		// Paths.
 		{os: "unix", command: "echo > /tmp/x", want: []Target{{Path: "/tmp/x", Kind: R}}},
@@ -638,6 +639,46 @@ func TestTargetsVarsSetConditionally(t *testing.T) {
 		{command: "X=a; c && X=b; echo > $X/f", unknown: 1},
 		{command: "X=a; c || X=b\necho > $X/f", unknown: 1},
 		{command: "X=a; c &&\n\n  X=b; echo > $X/f", unknown: 1},
+		// A group in a pipeline or the background runs in a subshell.
+		{command: "X=a; true | { Y=1; X=b; }; echo > $X/f", unknown: 1},
+		{command: "X=a; { X=b; } | cat; echo > $X/f", unknown: 1},
+		{command: "X=a; { X=b; } |& cat; echo > $X/f", unknown: 1},
+		{command: "X=a; { X=b; } & echo > $X/f", unknown: 1},
+		{command: "X=a; { X=b; } 2>&1 | tee log; echo > $X/f", want: []Target{at("log", Tee)}, unknown: 1},
+		{command: "X=a; time { X=b; } | cat; echo > $X/f", unknown: 1},
+		{command: "X=a; { { X=b; }; } | cat; echo > $X/f", unknown: 1},
+		{command: "X=a; { { X=b; } | cat; }; echo > $X/f", unknown: 1},
+		{command: "X=a; c && { X=b; } | cat; echo > $X/f", unknown: 1},
+		{command: "X=a; { X=b; } > log; echo > $X/f", want: []Target{at("log", R), at("b/f", R)}},
+		{command: "X=a; { X=b; } && c; echo > $X/f", want: []Target{at("b/f", R)}},
+		{command: "X=a; { X=b; }\n{ Y=c; } | cat; echo > $X/f", want: []Target{at("b/f", R)}},
+		// A newline after | continues the pipeline.
+		{command: "X=a; c |\nX=b; echo > $X/f", unknown: 1},
+		{command: "X=a; c |\n\n  X=b; echo > $X/f", unknown: 1},
+		{command: "X=a; c | (d)\nX=b; echo > $X/f", want: []Target{at("b/f", R)}},
+		// for heads that end at do or { with no ; before.
+		{command: "X=a; for ((i=0;i<n;i++)) { X=b; }; echo > $X/f", unknown: 1},
+		{command: "X=a; for ((i=0;i<n;i++)) do X=b; done; echo > $X/f", unknown: 1},
+		{command: "X=a; for i do X=b; done; echo > $X/f", unknown: 1},
+		{command: "X=a; for i\ndo X=b; done; echo > $X/f", unknown: 1},
+		{command: "X=a; select i do X=b; done; echo > $X/f", unknown: 1},
+		{command: "for i do X=b; echo > $X/f; done", want: []Target{at("b/f", R)}},
+		// A cd that may not run leaves the directory unknown after it; one in
+		// a subshell is undone.
+		{command: "c && cd b; echo > f", unknown: 1},
+		{command: "c || cd b\necho > f", unknown: 1},
+		{command: "if c; then cd b; fi; echo > f", unknown: 1},
+		{command: "if c; then cd b; else echo > f; fi", unknown: 1},
+		{command: "case $v in a) cd b;; esac; echo > f", unknown: 1},
+		{command: "while c; do cd b; done; echo > f", unknown: 1},
+		{command: "if c; then cd b; echo > f; fi", want: []Target{at("b/f", R)}},
+		{command: "cd b && echo > f", want: []Target{at("b/f", R)}},
+		{command: "c |\ncd b; echo > f", want: []Target{at("f", R)}},
+		{command: "{ cd b; } | cat; echo > f", want: []Target{at("f", R)}},
+		{command: "{ cd b; } & echo > f", want: []Target{at("f", R)}},
+		{command: "true | { cd b; }; echo > f", want: []Target{at("f", R)}},
+		{command: "f() { cd b; }; echo > f", want: []Target{at("f", R)}},
+		{command: "{ cd b; }; echo > f", want: []Target{at("b/f", R)}},
 		{command: "X=a; c && { true; X=b; }; echo > $X/f", unknown: 1},
 		{command: "X=a; c && if d; then X=b; fi; echo > $X/f", unknown: 1},
 		{command: "X=a; case $v in a) c && X=b;; esac; echo > $X/f", unknown: 1},
@@ -685,6 +726,11 @@ func TestTargetsFramesLinear(t *testing.T) {
 		strings.Repeat("for i in 1; { X=b; }; ", n),
 		strings.Repeat("( X=b ); ", n),
 		strings.Repeat("eval 'if c; then X=b; fi'; ", n),
+		strings.Repeat("{ ", n) + strings.Repeat("X=b; } | c; ", n),
+		strings.Repeat("{ X=b; ", n) + strings.Repeat("} | c; ", n),
+		strings.Repeat("c |\n", n) + "X=b",
+		strings.Repeat("for ((;;)) do X=b; cd a; done; ", n),
+		strings.Repeat("c && cd a; if c; then cd b; else cd c; fi; ", n),
 	} {
 		r := globRun(command, cwd)
 		if r.frames > len(command) {
