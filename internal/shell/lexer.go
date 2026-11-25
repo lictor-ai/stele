@@ -39,6 +39,36 @@ type parser struct {
 	funcNext bool   // the next { … } is a function body
 	braces   int    // { … } groups open
 	bodies   []body // function bodies open, innermost last
+
+	// frames are the bodies open that may not run, or run in a subshell:
+	// what they assign is unknown once they end (#193). last maps a kind
+	// to its innermost frame, as an index plus one; 0 is none.
+	frames  []frame
+	last    [kinds]int
+	forNext bool // the next { … } is the body of a for or select
+	piped   bool // the command finished is in a pipeline or the background
+}
+
+// The kinds of frame.
+const (
+	kIf    = iota // if … fi: its condition too
+	kLoop         // while, until: from the keyword; for, select: from do
+	kCase         // case … esac
+	kBody         // a function's { … }, or a for's
+	kGroup        // { … }: it runs, so its assignments stand
+	kSub          // ( … ), $( … ), ` … `: a subshell
+	kAndOr        // what follows && or ||, up to the list's end
+	kinds
+)
+
+// frame is a body being read. Its assignments are recorded in names, in the
+// innermost frame that may not run: cond, an index plus one.
+type frame struct {
+	kind  int
+	head  bool // a while or until whose do is still to come
+	cond  int
+	prev  int // the frame of this kind it hides, as in last
+	names []string
 }
 
 // body is a function body being read: where it began, and the directory to
@@ -124,25 +154,37 @@ var keywords = map[string]bool{
 // list reads commands until the end, or until term (")") closes them.
 func (p *parser) list(term string) {
 	p.depth++
-	defer func() { p.depth-- }()
+	base := len(p.frames) // the frames this list opens are above it
+	defer func() {
+		p.depth--
+		for len(p.frames) > base {
+			p.pop()
+		}
+	}()
 	if p.depth > maxDepth {
 		p.err = true
 		return
 	}
 	var c command
 	var cases []int // the case … esac open in this list, innermost last
-	prevPipe, fnName := false, false
+	prevPipe, fnName, andOr := false, false, false
 	for !p.err {
 		t := p.next()
 		if p.err {
 			return // the command being read is dropped
 		}
 		n := len(cases)
+		if t.kind == tWord || t.kind == tRedir {
+			andOr = false
+		}
 		switch t.kind {
 		case tEOF:
 			p.finish(&c, prevPipe)
 			return
 		case tWord:
+			if !t.w.plain() || t.w.text != "{" {
+				p.forNext = false
+			}
 			if n > 0 && cases[n-1] != caseBody {
 				// The subject or a pattern: not a command.
 				switch {
@@ -151,6 +193,7 @@ func (p *parser) list(term string) {
 					cases[n-1] = casePattern
 				case cases[n-1] == casePattern && t.w.text == "esac":
 					cases = cases[:n-1]
+					p.closeTo(p.last[kCase], base)
 				}
 				continue
 			}
@@ -163,19 +206,28 @@ func (p *parser) list(term string) {
 				case "case":
 					p.funcNext = false
 					cases = append(cases, caseHead)
+					p.push(kCase)
 					continue
 				case "esac":
 					if n > 0 {
 						cases = cases[:n-1]
 					}
+					p.closeTo(p.last[kCase], base)
 					continue
 				case "function":
 					p.funcNext, fnName = true, true
 					continue
 				case "{":
-					if p.funcNext {
+					switch {
+					case p.funcNext:
 						p.bodies = append(p.bodies, body{p.braces, p.dir, p.dirOK})
 						p.funcNext = false
+						p.push(kBody)
+					case p.forNext:
+						p.forNext = false
+						p.push(kBody)
+					default:
+						p.push(kGroup)
 					}
 					p.braces++
 					continue
@@ -185,6 +237,7 @@ func (p *parser) list(term string) {
 						p.dir, p.dirOK = p.bodies[b-1].dir, p.bodies[b-1].dirOK
 						p.bodies = p.bodies[:b-1]
 					}
+					p.closeTo(max(p.last[kGroup], p.last[kBody]), base)
 					continue
 				case "[[":
 					p.funcNext = false
@@ -192,8 +245,26 @@ func (p *parser) list(term string) {
 					continue
 				}
 				if keywords[t.w.text] {
-					if t.w.text == "time" {
+					switch t.w.text {
+					case "time":
 						p.skipTimeOptions()
+					case "if":
+						p.push(kIf)
+					case "while", "until":
+						p.push(kLoop)
+						p.frames[len(p.frames)-1].head = true
+					case "do":
+						if l := len(p.frames); l > base && p.frames[l-1].kind == kLoop && p.frames[l-1].head {
+							p.frames[l-1].head = false
+						} else {
+							p.push(kLoop) // for, select
+						}
+					case "done":
+						p.closeTo(p.last[kLoop], base)
+					case "fi":
+						p.closeTo(p.last[kIf], base)
+					case "else", "elif":
+						p.branch(p.last[kIf], base)
 					}
 					continue
 				}
@@ -215,6 +286,7 @@ func (p *parser) list(term string) {
 					p.finish(&c, prevPipe)
 					prevPipe = false
 					cases[n-1] = casePattern
+					p.branch(p.last[kCase], base)
 					continue
 				case st == caseHead:
 					continue
@@ -246,7 +318,9 @@ func (p *parser) list(term string) {
 					p.funcNext = false
 				}
 				dir, ok := p.dir, p.dirOK
+				p.push(kSub)
 				p.list(")")
+				p.pop()
 				p.dir, p.dirOK = dir, ok // a subshell's cd stays in it
 			case "((":
 				p.funcNext = false
@@ -261,6 +335,18 @@ func (p *parser) list(term string) {
 				pipe := t.op == "|" || t.op == "|&"
 				p.finish(&c, prevPipe || pipe || t.op == "&")
 				prevPipe = pipe
+				l := len(p.frames)
+				top := l > base && p.frames[l-1].kind == kAndOr
+				switch {
+				case t.op == "&&" || t.op == "||":
+					if !top {
+						p.push(kAndOr)
+					}
+					andOr = true
+				case top && (t.op == ";" || t.op == "&" || t.op == "\n" && !andOr):
+					// The list ends: a newline right after && or || does not.
+					p.pop()
+				}
 			}
 		}
 	}
@@ -746,7 +832,9 @@ func (p *parser) ansiC(b *strings.Builder) {
 // They run in a subshell, so their cd does not change this directory.
 func (p *parser) sub() {
 	dir, ok := p.dir, p.dirOK
+	p.push(kSub)
 	p.list(")")
+	p.pop()
 	p.dir, p.dirOK = dir, ok
 }
 
@@ -767,7 +855,9 @@ func (p *parser) backtick(w *word) {
 			p.i = j + 1
 			w.dynamic = true
 			q := &parser{src: inner.String(), res: p.res, vars: p.vars, dyn: p.dyn, fold: p.fold, dir: p.dir, dirOK: p.dirOK, depth: p.depth}
+			q.push(kSub)
 			q.list("")
+			q.pop()
 			if q.err {
 				p.err = true
 			}
@@ -784,6 +874,8 @@ func (p *parser) backtick(w *word) {
 // pipeline or in the background, whose cd changes nothing here.
 func (p *parser) finish(c *command, inPipe bool) {
 	defer c.reset()
+	p.piped = inPipe
+	defer func() { p.piped = false }()
 	for _, r := range c.redirs {
 		if !r.hasWord {
 			continue
@@ -832,6 +924,7 @@ func (p *parser) finish(c *command, inPipe bool) {
 			p.forgetWord(args[1])
 		}
 	case "for", "select":
+		p.forNext = true // for X in …; { …; } may run its body no time
 		// for X in …: X is each word in turn, and the last one after.
 		if len(args) > 0 {
 			p.forgetWord(args[0])
@@ -992,7 +1085,9 @@ func (p *parser) eval(args []word, inPipe bool) {
 	}
 	q := &parser{src: b.String(), res: p.res, vars: p.vars, dyn: p.dyn, fold: p.fold, dir: p.dir, dirOK: p.dirOK, depth: p.depth}
 	if !inPipe {
-		defer func() { p.dir, p.dirOK = q.dir, q.dirOK }()
+		// What it assigns in a body here is unknown at the body's end.
+		q.frames, q.last = p.frames, p.last
+		defer func() { p.dir, p.dirOK, p.frames = q.dir, q.dirOK, q.frames }()
 	} else {
 		// A pipeline's commands run in subshells: what eval sets stays there.
 		q.vars, q.dyn = maps.Clone(p.vars), maps.Clone(p.dyn)
@@ -1006,6 +1101,7 @@ func (p *parser) eval(args []word, inPipe bool) {
 // unwrap drops what stands before the command's name: assignments, which it
 // records, and wrappers such as sudo or env with their options.
 func (p *parser) unwrap(words []word) []word {
+	all := words
 	for len(words) > 0 {
 		w := words[0]
 		switch {
@@ -1030,6 +1126,12 @@ func (p *parser) unwrap(words []word) []word {
 				words = words[n:]
 			}
 		default:
+			// X=v cmd: X is v for cmd only.
+			for _, a := range all[:len(all)-len(words)] {
+				if a.assign != "" {
+					p.forget(a.assign)
+				}
+			}
 			return words
 		}
 	}
@@ -1068,14 +1170,76 @@ func name(w word) string {
 	return n
 }
 
-// assign records NAME=value for the expansions after it.
+// assign records NAME=value for the expansions after it. In a pipeline or
+// the background it is made in a subshell: unknown here.
 func (p *parser) assign(w word) {
-	if w.dynamic || w.partial || p.dyn[sticky+w.assign] || p.dyn[nameref+w.assign] {
+	if w.dynamic || w.partial || p.piped || p.dyn[sticky+w.assign] || p.dyn[nameref+w.assign] {
 		p.forget(w.assign)
 		return
 	}
 	p.vars[w.assign] = w.value
 	delete(p.dyn, w.assign)
+	if l := len(p.frames); l > 0 && p.frames[l-1].cond > 0 {
+		f := &p.frames[p.frames[l-1].cond-1]
+		f.names = append(f.names, w.assign)
+	}
+}
+
+// push opens a frame of kind k.
+func (p *parser) push(k int) {
+	p.res.frames++
+	l := len(p.frames)
+	f := frame{kind: k, cond: l + 1, prev: p.last[k]}
+	if k == kGroup {
+		f.cond = 0
+		if l > 0 {
+			f.cond = p.frames[l-1].cond
+		}
+	}
+	p.frames = append(p.frames, f)
+	p.last[k] = l + 1
+}
+
+// pop closes the innermost frame: what it assigned is unknown from here on.
+func (p *parser) pop() {
+	p.res.frames++
+	l := len(p.frames) - 1
+	f := p.frames[l]
+	p.frames = p.frames[:l]
+	p.last[f.kind] = f.prev
+	p.res.frames += len(f.names)
+	for _, n := range f.names {
+		p.forget(n)
+	}
+}
+
+// closeTo closes frame at, an index plus one, and those inside it, when it
+// is one this list opened, above base. Each frame closes once, so the work
+// is linear.
+func (p *parser) closeTo(at, base int) {
+	if at <= base {
+		return // fi with no if, or the like: nothing to close
+	}
+	for len(p.frames) >= at {
+		p.pop()
+	}
+}
+
+// branch starts another branch of frame at, at else, elif or ;;: what the
+// branch before assigned is unknown in it.
+func (p *parser) branch(at, base int) {
+	if at <= base {
+		return
+	}
+	for len(p.frames) > at {
+		p.pop()
+	}
+	f := &p.frames[at-1]
+	for _, n := range f.names {
+		p.res.frames++
+		p.forget(n)
+	}
+	f.names = f.names[:0]
 }
 
 // Keys of parser.dyn that are not variable names (#189).

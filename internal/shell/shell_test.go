@@ -565,6 +565,134 @@ func TestTargetsVarsSetByCommand(t *testing.T) {
 	}
 }
 
+// A variable set in an if, case or loop body, a function body, a subshell, a
+// pipeline or after && or || may not be set after it: unknown from the end of
+// that body on, never the value set in it (#193).
+func TestTargetsVarsSetConditionally(t *testing.T) {
+	env(t, map[string]string{"HOME": filepath.Join(cwd, "home"), "E": "env"})
+	R := Redirect
+	tests := []struct {
+		command string
+		want    []Target
+		unknown int
+	}{
+		// if: either branch, or neither, may have run.
+		{command: "if [ -d b ]; then F=a.go; else F=b.go; fi; echo > $F", unknown: 1},
+		{command: "if false; then X=b; fi; echo > $X/a", unknown: 1},
+		{command: "X=a; if c; then X=b; fi; echo > $X/f", unknown: 1},
+		{command: "X=a; if c; then :; else X=b; fi; echo > $X/f", unknown: 1},
+		{command: "X=a; if c; then :; elif d; then X=b; fi; echo > $X/f", unknown: 1},
+		{command: "if c\nthen\n  X=b\nfi\necho > $X/f", unknown: 1},
+		{command: "E=a; if c; then E=b; fi; echo > $E/f", unknown: 1},
+		{command: "X=a; if c; then export X=b; fi; echo > $X/f", unknown: 1},
+		{command: "X=a; if c; then declare X=b; fi; echo > $X/f", unknown: 1},
+		{command: "X=a; if c; then if d; then X=b; fi; echo > $X/f; fi", unknown: 1},
+		{command: "X=a; if c; then if d; then X=b; fi; fi; echo > $X/f", unknown: 1},
+		{command: "X=a; if c; then { X=b; }; fi; echo > $X/f", unknown: 1},
+		// Within the branch that set it, X is known; in another branch it is
+		// unknown, never the value the first one set.
+		{command: "if c; then X=b; echo > $X/f; fi", want: []Target{at("b/f", R)}},
+		{command: "X=a; if c; then X=b; else echo > $X/f; fi", unknown: 1},
+		{command: "X=a; if c; then X=b; elif d; then echo > $X/f; fi", unknown: 1},
+		{command: "X=a; if c; then Y=b; fi; echo > $X/f", want: []Target{at("a/f", R)}},
+		{command: "if c; then X=b; fi; X=d; echo > $X/f", want: []Target{at("d/f", R)}},
+		// case
+		{command: "case $v in a) X=b;; esac; echo > $X/f", unknown: 1},
+		{command: "X=a; case $v in a) X=b;; *) X=c;; esac; echo > $X/f", unknown: 1},
+		{command: "X=a; case $v in a) X=b;& *) echo > $X/f;; esac", unknown: 1},
+		{command: "X=a; case $v in a) X=b;; *) echo > $X/f;; esac", unknown: 1},
+		{command: "case $v in a) X=b; echo > $X/f;; esac", want: []Target{at("b/f", R)}},
+		// Loops may run their body no time at all.
+		{command: "X=a; while c; do X=b; done; echo > $X/f", unknown: 1},
+		{command: "X=a; until c; do X=b; done; echo > $X/f", unknown: 1},
+		{command: "X=a; for i in 1; do X=b; done; echo > $X/f", unknown: 1},
+		{command: "X=a; for i in $l; do X=b; done; echo > $X/f", unknown: 1},
+		{command: "X=a; select i in 1; do X=b; done; echo > $X/f", unknown: 1},
+		{command: "X=a; for ((i=0; i<n; i++)); do X=b; done; echo > $X/f", unknown: 1},
+		{command: "X=a; for i in $l; { X=b; }; echo > $X/f", unknown: 1},
+		{command: "X=a; while c; do for i in 1; do :; done; X=b; done; echo > $X/f", unknown: 1},
+		{command: "while c; do X=b; echo > $X/f; done", want: []Target{at("b/f", R)}},
+		{command: "X=a; while c; do Y=b; done; echo > $X/f", want: []Target{at("a/f", R)}},
+		// A function body runs only when the function is called.
+		{command: "X=a; f() { X=b; }; echo > $X/f", unknown: 1},
+		{command: "X=a; function f { X=b; }; echo > $X/f", unknown: 1},
+		{command: "X=a; function f() { X=b; }; echo > $X/f", unknown: 1},
+		{command: "X=a; f() { local X=b; }; echo > $X/f", unknown: 1},
+		{command: "X=a; f() ( X=b ); echo > $X/f", unknown: 1},
+		{command: "X=a; f() if c; then X=b; fi; echo > $X/f", unknown: 1},
+		{command: "f() { X=b; echo > $X/f; }", want: []Target{at("b/f", R)}},
+		// A subshell's assignments stay in it.
+		{command: "X=a; ( X=b ); echo > $X/f", unknown: 1},
+		{command: "X=a; Y=$(X=b); echo > $X/f", unknown: 1},
+		{command: "X=a; Y=`X=b`; echo > $X/f", unknown: 1},
+		{command: "( X=b; echo > $X/f )", want: []Target{at("b/f", R)}},
+		// So do a pipeline's and a background command's.
+		{command: "X=a; echo | X=b; echo > $X/f", unknown: 1},
+		{command: "X=a; X=b | cat; echo > $X/f", unknown: 1},
+		{command: "X=a; X=b & echo > $X/f", unknown: 1},
+		// An assignment before a command is for that command only.
+		{command: "X=a; X=b true; echo > $X/f", unknown: 1},
+		{command: "X=a; X=b env Y=c true; echo > $Y/f", unknown: 1},
+		// After && or ||, a command may not run.
+		{command: "true || X=b; echo > $X/f", unknown: 1},
+		{command: "X=a; c && X=b; echo > $X/f", unknown: 1},
+		{command: "X=a; c || X=b\necho > $X/f", unknown: 1},
+		{command: "X=a; c &&\n\n  X=b; echo > $X/f", unknown: 1},
+		{command: "X=a; c && { true; X=b; }; echo > $X/f", unknown: 1},
+		{command: "X=a; c && if d; then X=b; fi; echo > $X/f", unknown: 1},
+		{command: "X=a; case $v in a) c && X=b;; esac; echo > $X/f", unknown: 1},
+		{command: "X=a; ( c && X=b; echo > $X/f )", unknown: 1},
+		{command: "X=b && echo > $X/f", want: []Target{at("b/f", R)}},
+		{command: "X=b || c; echo > $X/f", want: []Target{at("b/f", R)}},
+		{command: "c && X=b && echo > $X/f", want: []Target{at("b/f", R)}},
+		// A { } group runs, as does what follows the body.
+		{command: "{ X=b; }; echo > $X/f", want: []Target{at("b/f", R)}},
+		{command: "{ { X=b; }; }; echo > $X/f", want: []Target{at("b/f", R)}},
+		{command: "if c; then :; fi; X=b; echo > $X/f", want: []Target{at("b/f", R)}},
+		// eval in a body sets what it sets there.
+		{command: "X=a; if c; then eval 'X=b'; fi; echo > $X/f", unknown: 1},
+		{command: "X=a; c && eval 'X=b'; echo > $X/f", unknown: 1},
+		{command: "X=a; eval 'if c; then X=b; fi'; echo > $X/f", unknown: 1},
+		{command: "X=a; eval 'X=b'; echo > $X/f", want: []Target{at("b/f", R)}},
+		{command: "X=a; if c; then Y=`X=b`; fi; echo > $X/f", unknown: 1},
+	}
+	for _, tt := range tests {
+		got, unknown := Targets(tt.command, cwd)
+		if diff := cmp.Diff(tt.want, got); diff != "" {
+			t.Errorf("Targets(%q) (-want +got):\n%s", tt.command, diff)
+		}
+		if unknown != tt.unknown {
+			t.Errorf("Targets(%q): unknown = %d, want %d", tt.command, unknown, tt.unknown)
+		}
+	}
+}
+
+// Bodies cost a few steps each, opened and closed, however they nest or fail
+// to close: no closing keyword walks the bodies open (#193). The steps are
+// counted, not timed.
+func TestTargetsFramesLinear(t *testing.T) {
+	const n = 20 << 10
+	for _, command := range []string{
+		strings.Repeat("{ ", n) + strings.Repeat("fi; done; esac; ", n),
+		"if c; then " + strings.Repeat("{ ", n) + strings.Repeat("X=b; ", n) + "fi",
+		strings.Repeat("if c; then X=b; else ", n) + strings.Repeat("fi; ", n),
+		"if c; then " + strings.Repeat("X=b; elif d; then ", n) + "fi",
+		strings.Repeat("c && ", n) + "X=b",
+		strings.Repeat("c && X=b; ", n),
+		"case $v in " + strings.Repeat("a) X=b;; ", n) + "esac",
+		strings.Repeat("while c; do ", n) + strings.Repeat("X=b; done; ", n),
+		strings.Repeat("f() { X=b; }; ", n),
+		strings.Repeat("for i in 1; { X=b; }; ", n),
+		strings.Repeat("( X=b ); ", n),
+		strings.Repeat("eval 'if c; then X=b; fi'; ", n),
+	} {
+		r := globRun(command, cwd)
+		if r.frames > len(command) {
+			t.Errorf("%.20s… (%d bytes): %d steps", command, len(command), r.frames)
+		}
+	}
+}
+
 // Looking for assignments in arithmetic costs a few reads of each byte, not a
 // read of the rest at each one: a long run such as 1aaa… took 30 s (#191).
 // The bytes scanned are counted, not timed.

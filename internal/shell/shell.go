@@ -91,6 +91,7 @@ type results struct {
 	nested  int // bytes of nested scripts read, each read counted readCost more
 	grown   int // bytes variables expanded to; maxExpand+1 once spent
 	arith   int // bytes arithmetic was scanned for assignments, a cost tests bound
+	frames  int // bodies opened and closed, and their assignments forgotten: a cost tests bound
 	envs    map[string]string
 }
 
